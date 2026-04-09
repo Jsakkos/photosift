@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import { FixedSizeList as List } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
@@ -6,6 +6,44 @@ import { thumbUrl } from "../hooks/useImageLoader";
 const THUMB_WIDTH = 100;
 const THUMB_HEIGHT = 80;
 const FILMSTRIP_HEIGHT = THUMB_HEIGHT + 8;
+
+// Thumbnail with retry — background thread may not have generated it yet
+function Thumbnail({ imageId, filename }: { imageId: number; filename: string }) {
+  const [retryCount, setRetryCount] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  // Retry loading every 3 seconds if not loaded (background thread is generating)
+  useEffect(() => {
+    if (loaded) return;
+    const timer = setInterval(() => {
+      setRetryCount((c) => c + 1);
+    }, 3000);
+    // Stop retrying after 30 seconds
+    const stop = setTimeout(() => clearInterval(timer), 30000);
+    return () => { clearInterval(timer); clearTimeout(stop); };
+  }, [loaded]);
+
+  const src = `${thumbUrl(imageId)}${retryCount > 0 ? `?r=${retryCount}` : ""}`;
+
+  return (
+    <img
+      ref={imgRef}
+      src={src}
+      alt={filename}
+      className={`w-full h-full object-cover ${loaded ? "opacity-100" : "opacity-30"}`}
+      loading="lazy"
+      draggable={false}
+      onLoad={(e) => {
+        // Check if it's a real thumbnail (not the 1x1 placeholder)
+        const img = e.currentTarget;
+        if (img.naturalWidth > 1) {
+          setLoaded(true);
+        }
+      }}
+    />
+  );
+}
 
 export function Filmstrip() {
   const { images, currentIndex, setCurrentIndex } = useProjectStore();
@@ -38,13 +76,7 @@ export function Filmstrip() {
             }`}
             style={{ width: THUMB_WIDTH - 8, height: THUMB_HEIGHT - 8 }}
           >
-            <img
-              src={thumbUrl(image.id)}
-              alt={image.filename}
-              className="w-full h-full object-cover"
-              loading="lazy"
-              draggable={false}
-            />
+            <Thumbnail imageId={image.id} filename={image.filename} />
             {image.starRating > 0 && (
               <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-0.5 bg-gradient-to-t from-black/60 to-transparent">
                 {Array.from({ length: image.starRating }, (_, i) => (
@@ -76,7 +108,7 @@ export function Filmstrip() {
         itemCount={images.length}
         itemSize={THUMB_WIDTH}
         layout="horizontal"
-        overscanCount={10}
+        overscanCount={5}
       >
         {ThumbnailItem}
       </List>
