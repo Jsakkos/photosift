@@ -14,7 +14,18 @@
       "Bash(rustup toolchain:*)",
       "Bash(rustup default:*)",
       "Bash(git -C /c/Github/photosift status)",
-      "Bash(export PATH=\"$PATH:$HOME/.cargo/bin\")"
+      "Bash(export PATH=\"$PATH:$HOME/.cargo/bin\")",
+      "Bash(cargo test:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(npx tauri:*)",
+      "Bash(npm run:*)",
+      "Bash(tasklist)",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_take_screenshot",
+      "mcp__plugin_playwright_playwright__browser_snapshot",
+      "Bash(taskkill //F //IM photosift.exe)"
     ]
   }
 }

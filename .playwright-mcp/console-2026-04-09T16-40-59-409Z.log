@@ -1,0 +1,7 @@
+[     103ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:1420/node_modules/.vite/deps/react-dom_client.js?v=31558522:20102
+[    9264ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:1420/node_modules/.vite/deps/react-dom_client.js?v=31558522:20102
+[   22867ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:1420/node_modules/.vite/deps/react-dom_client.js?v=31558522:20102
+[   31679ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://localhost:1420/node_modules/.vite/deps/react-dom_client.js?v=31558522:20102
+[   32669ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:1420/@vite/client:963
+[   35020ms] [ERROR] WebSocket connection to 'ws://localhost:1420/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:1420/@vite/client:1034
+[   38380ms] [ERROR] WebSocket connection to 'ws://localhost:1420/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED @ http://localhost:1420/@vite/client:1034
