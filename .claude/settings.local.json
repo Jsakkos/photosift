@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "WebFetch(domain:docs.rs)",
+      "mcp__plugin_context7_context7__query-docs",
+      "Bash(npm install:*)",
+      "Bash(cargo check:*)",
+      "Bash(where cargo:*)",
+      "Bash(cmd.exe /c \"where cargo\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
+      "Bash(rustup toolchain:*)",
+      "Bash(rustup default:*)",
+      "Bash(git -C /c/Github/photosift status)",
+      "Bash(export PATH=\"$PATH:$HOME/.cargo/bin\")"
+    ]
+  }
+}
