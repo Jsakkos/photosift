@@ -13,14 +13,14 @@ function Thumbnail({ imageId, filename }: { imageId: number; filename: string })
   const [loaded, setLoaded] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
 
-  // Retry loading every 3 seconds if not loaded (background thread is generating)
+  // Retry loading every 2 seconds if not loaded (background thread is generating)
   useEffect(() => {
     if (loaded) return;
     const timer = setInterval(() => {
       setRetryCount((c) => c + 1);
-    }, 3000);
-    // Stop retrying after 30 seconds
-    const stop = setTimeout(() => clearInterval(timer), 30000);
+    }, 2000);
+    // Stop retrying after 3 minutes
+    const stop = setTimeout(() => clearInterval(timer), 180000);
     return () => { clearInterval(timer); clearTimeout(stop); };
   }, [loaded]);
 

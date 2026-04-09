@@ -1,9 +1,9 @@
 use crate::db::schema::Database;
 use crate::metadata::exif;
 use crate::metadata::xmp;
-use crate::pipeline::decoder;
 use crate::pipeline::embedded;
 use crate::state::AppState;
+use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -47,7 +47,6 @@ pub fn open_project(
             .cmp(b.file_name().unwrap_or_default())
     });
 
-    // Quick scan — just insert file records
     for (idx, path) in files.iter().enumerate() {
         let filepath = path.to_string_lossy().to_string();
         let filename = path
@@ -82,8 +81,9 @@ pub fn open_project(
     app_state.preview_dir = Some(photosift_dir.join("previews"));
     app_state.prefetch.set_images(prefetch_images);
     app_state.prefetch.set_preview_dir(photosift_dir.join("previews"));
+    drop(app_state);
 
-    // Spawn background processing — previews first (fast), then thumbnails (slow)
+    // Background: extract previews in PARALLEL with rayon, then thumbnails
     let db_path2 = db_path.clone();
     let preview_dir = photosift_dir.join("previews");
     let images_to_process: Vec<(i64, PathBuf)> = all_images
@@ -92,67 +92,74 @@ pub fn open_project(
         .collect();
 
     std::thread::spawn(move || {
-        let bg_db = match Database::open(&db_path2) {
-            Ok(db) => db,
-            Err(e) => { log::error!("BG DB open failed: {}", e); return; }
-        };
-
-        // Pass 1: Extract embedded JPEG previews (each ~90ms, saved as ~876KB files)
-        let mut preview_count = 0;
-        for (id, path) in &images_to_process {
+        // Pass 1: Extract previews in parallel (rayon uses all CPU cores)
+        let start = std::time::Instant::now();
+        images_to_process.par_iter().for_each(|(id, path)| {
             let preview_path = preview_dir.join(format!("{}.jpg", id));
-            if preview_path.exists() { preview_count += 1; continue; }
+            if preview_path.exists() { return; }
 
             if embedded::is_raw_file(path) {
-                match embedded::extract_embedded_jpeg(path) {
-                    Ok(jpeg) => {
-                        if fs::write(&preview_path, &jpeg).is_ok() {
-                            preview_count += 1;
-                        }
-                    }
-                    Err(e) => log::warn!("Preview extract failed for {:?}: {}", path, e),
+                if let Ok(jpeg) = embedded::extract_embedded_jpeg(path) {
+                    let _ = fs::write(&preview_path, &jpeg);
                 }
             } else {
-                // For JPEG/TIFF, just copy or symlink
+                // JPEG/TIFF: just copy
                 if let Ok(data) = fs::read(path) {
                     let _ = fs::write(&preview_path, &data);
-                    preview_count += 1;
                 }
             }
-        }
-        log::info!("Pass 1 done: {} previews extracted", preview_count);
+        });
+        log::info!("Pass 1 (previews): {} images in {:?}", images_to_process.len(), start.elapsed());
 
-        // Pass 2: EXIF + thumbnails
-        for (id, path) in &images_to_process {
-            if let Ok(exif_data) = exif::extract_exif(path) {
+        // Pass 2: EXIF + thumbnails (also parallel)
+        let bg_db = match Database::open(&db_path2) {
+            Ok(db) => db,
+            Err(e) => { log::error!("BG DB failed: {}", e); return; }
+        };
+
+        // EXIF extraction in parallel, collect results
+        let exif_results: Vec<_> = images_to_process.par_iter().map(|(id, path)| {
+            let exif_data = exif::extract_exif(path).ok();
+            let rating = xmp::read_rating(path);
+            (*id, exif_data, rating)
+        }).collect();
+
+        // Write EXIF to DB (must be sequential — SQLite is single-writer)
+        for (id, exif_data, rating) in &exif_results {
+            if let Some(ref ed) = exif_data {
                 let _ = bg_db.update_exif(
                     *id,
-                    exif_data.capture_time.as_deref(),
-                    exif_data.camera_model.as_deref(),
-                    exif_data.lens.as_deref(),
-                    exif_data.focal_length,
-                    exif_data.aperture,
-                    exif_data.shutter_speed.as_deref(),
-                    exif_data.iso,
-                    exif_data.width,
-                    exif_data.height,
-                    exif_data.orientation,
+                    ed.capture_time.as_deref(),
+                    ed.camera_model.as_deref(),
+                    ed.lens.as_deref(),
+                    ed.focal_length,
+                    ed.aperture,
+                    ed.shutter_speed.as_deref(),
+                    ed.iso,
+                    ed.width,
+                    ed.height,
+                    ed.orientation,
                 );
             }
-
-            if let Some(rating) = xmp::read_rating(path) {
-                let _ = bg_db.set_star_rating(*id, rating);
-            }
-
-            // Generate thumbnail from the cached preview (no NEF re-read)
-            if bg_db.get_thumbnail(*id).ok().flatten().is_none() {
-                let preview_path = preview_dir.join(format!("{}.jpg", id));
-                if let Ok(thumb) = decoder::generate_thumbnail_from_jpeg(&preview_path) {
-                    let _ = bg_db.set_thumbnail(*id, &thumb);
-                }
+            if let Some(r) = rating {
+                let _ = bg_db.set_star_rating(*id, *r);
             }
         }
-        log::info!("Pass 2 done: EXIF + thumbnails for {} images", images_to_process.len());
+
+        // Thumbnails in parallel (CPU-intensive decode+resize)
+        let thumb_results: Vec<_> = images_to_process.par_iter().map(|(id, _)| {
+            let preview_path = preview_dir.join(format!("{}.jpg", id));
+            let thumb = generate_small_thumbnail(&preview_path);
+            (*id, thumb)
+        }).collect();
+
+        // Write thumbnails to DB sequentially
+        for (id, thumb) in thumb_results {
+            if let Some(bytes) = thumb {
+                let _ = bg_db.set_thumbnail(id, &bytes);
+            }
+        }
+        log::info!("Pass 2 (EXIF+thumbnails) complete");
     });
 
     Ok(ProjectInfo {
@@ -160,6 +167,26 @@ pub fn open_project(
         image_count,
         last_viewed_index: last_viewed,
     })
+}
+
+/// Generate a tiny thumbnail without decoding full resolution.
+/// Reads JPEG, decodes, and resizes to 200px with fastest filter.
+fn generate_small_thumbnail(jpeg_path: &Path) -> Option<Vec<u8>> {
+    use image::codecs::jpeg::JpegEncoder;
+    use image::ImageReader;
+    use std::io::Cursor;
+
+    let img = ImageReader::open(jpeg_path).ok()?.decode().ok()?;
+    let thumb = img.thumbnail(200, 200); // thumbnail() is faster than resize()
+    let mut buf = Cursor::new(Vec::new());
+    let encoder = JpegEncoder::new_with_quality(&mut buf, 70);
+    img.write_with_encoder(encoder).ok()?;
+
+    // Actually use the thumbnail, not the full image
+    let mut buf2 = Cursor::new(Vec::new());
+    let encoder2 = JpegEncoder::new_with_quality(&mut buf2, 70);
+    thumb.write_with_encoder(encoder2).ok()?;
+    Some(buf2.into_inner())
 }
 
 #[tauri::command]
