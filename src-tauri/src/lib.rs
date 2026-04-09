@@ -4,6 +4,7 @@ mod metadata;
 mod pipeline;
 mod state;
 
+use pipeline::protocol;
 use state::AppState;
 use std::sync::Mutex;
 
@@ -13,7 +14,7 @@ pub fn run() {
 
     let app_state = AppState::new();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(Mutex::new(app_state))
@@ -23,7 +24,11 @@ pub fn run() {
             commands::image::get_image_list,
             commands::image::get_image_metadata,
             commands::rating::set_rating,
-        ])
+        ]);
+
+    let builder = protocol::register_protocol(builder);
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
