@@ -3,7 +3,6 @@ use crate::state::AppState;
 use std::sync::Mutex;
 use tauri::Manager;
 
-/// Register the `photosift://` custom protocol for serving images and thumbnails.
 pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.register_uri_scheme_protocol("photosift", move |ctx, request| {
         let uri = request.uri().to_string();
@@ -15,60 +14,22 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
 
         let app_handle = ctx.app_handle();
         let state = app_handle.state::<Mutex<AppState>>();
-        let app_state = match state.lock() {
-            Ok(s) => s,
-            Err(_) => {
-                return http::Response::builder()
-                    .status(500)
-                    .body(b"State lock failed".to_vec())
-                    .unwrap();
-            }
-        };
 
-        let db: &crate::db::schema::Database = match &app_state.db {
-            Some(db) => db,
-            None => {
-                return http::Response::builder()
-                    .status(404)
-                    .body(b"No project open".to_vec())
-                    .unwrap();
-            }
-        };
-
-        // Route: /thumb/{id}
+        // Route: /thumb/{id} — return cached thumbnail or placeholder (NEVER generate on-the-fly)
         if let Some(id_str) = path.strip_prefix("/thumb/") {
             let id_str = id_str.split('?').next().unwrap_or(id_str);
             if let Ok(image_id) = id_str.parse::<i64>() {
-                // Try cached thumbnail from SQLite
-                if let Ok(Some(thumb)) = db.get_thumbnail(image_id) {
-                    return http::Response::builder()
-                        .status(200)
-                        .header("Content-Type", "image/jpeg")
-                        .header("Cache-Control", "max-age=3600")
-                        .body(thumb)
-                        .unwrap();
-                }
-                // Thumbnail not generated yet — generate on-the-fly
-                if let Ok(img) = db.get_image_by_id(image_id) {
-                    let filepath = std::path::Path::new(&img.filepath);
-                    if let Ok(thumb) = crate::pipeline::decoder::generate_thumbnail(filepath) {
-                        // Cache it for next time
-                        let _ = db.set_thumbnail(image_id, &thumb);
-                        return http::Response::builder()
-                            .status(200)
-                            .header("Content-Type", "image/jpeg")
-                            .header("Cache-Control", "max-age=3600")
-                            .body(thumb)
-                            .unwrap();
+                // Quick lock — just read from SQLite cache
+                if let Ok(app_state) = state.lock() {
+                    if let Some(ref db) = app_state.db {
+                        if let Ok(Some(thumb)) = db.get_thumbnail(image_id) {
+                            return jpeg_response(thumb);
+                        }
                     }
                 }
             }
-            // Return a 1x1 transparent pixel as fallback
-            return http::Response::builder()
-                .status(200)
-                .header("Content-Type", "image/jpeg")
-                .body(PLACEHOLDER_JPEG.to_vec())
-                .unwrap();
+            // Thumbnail not ready yet — return placeholder (background thread will generate it)
+            return jpeg_response(PLACEHOLDER_JPEG.to_vec());
         }
 
         // Route: /image/{id}?tier=...
@@ -78,83 +39,92 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
                 .split("tier=")
                 .nth(1)
                 .and_then(|s| s.split('&').next())
-                .unwrap_or("preview");
+                .unwrap_or("embedded");
 
             let tier = match tier_str {
-                "embedded" => DecodeTier::Embedded,
                 "full" => DecodeTier::Full,
-                _ => DecodeTier::Preview,
+                "preview" => DecodeTier::Preview,
+                _ => DecodeTier::Embedded,
             };
 
             if let Ok(image_id) = id_str.parse::<i64>() {
-                // Check LRU cache for preview tier
-                if tier == DecodeTier::Preview {
+                // Check LRU cache first (no file I/O needed)
+                if let Ok(app_state) = state.lock() {
                     if let Some(cached) = app_state.cache.get(image_id) {
-                        return http::Response::builder()
-                            .status(200)
-                            .header("Content-Type", "image/jpeg")
-                            .header("Content-Length", cached.len().to_string())
-                            .body(cached)
-                            .unwrap();
+                        return jpeg_response(cached);
                     }
                 }
 
-                // Trigger prefetch for nearby images
-                if tier == DecodeTier::Preview || tier == DecodeTier::Embedded {
-                    let idx = app_state.image_ids.iter().position(|&id| id == image_id).unwrap_or(0);
-                    let direction = if idx >= app_state.current_index { 1 } else { -1 };
-                    app_state.prefetch.prefetch_around(idx, direction);
-                }
-
-                if let Ok(img) = db.get_image_by_id(image_id) {
-                    let filepath = std::path::Path::new(&img.filepath);
-                    let quality = match tier {
-                        DecodeTier::Embedded => 85,
-                        DecodeTier::Preview => 90,
-                        DecodeTier::Full => 95,
+                // Get the filepath — short lock
+                let filepath = {
+                    let app_state = match state.lock() {
+                        Ok(s) => s,
+                        Err(_) => return error_response(500, "Lock failed"),
                     };
+                    let db = match &app_state.db {
+                        Some(db) => db,
+                        None => return error_response(404, "No project"),
+                    };
+                    match db.get_image_by_id(image_id) {
+                        Ok(img) => img.filepath.clone(),
+                        Err(_) => return error_response(404, "Image not found"),
+                    }
+                };
+                // Lock is dropped here — file I/O happens without holding the mutex
 
-                    let start = std::time::Instant::now();
-                    match decode_to_jpeg(filepath, tier, quality) {
-                        Ok(jpeg_bytes) => {
-                            let elapsed = start.elapsed();
-                            if elapsed.as_millis() > 100 {
-                                log::info!("Decode {:?} for {} took {:?}", tier, img.filename, elapsed);
-                            }
+                let file_path = std::path::Path::new(&filepath);
+                let quality = match tier {
+                    DecodeTier::Embedded => 85,
+                    DecodeTier::Preview => 90,
+                    DecodeTier::Full => 95,
+                };
 
-                            // Cache preview tier results
-                            if tier == DecodeTier::Preview {
+                match decode_to_jpeg(file_path, tier, quality) {
+                    Ok(jpeg_bytes) => {
+                        // Cache preview results
+                        if tier == DecodeTier::Preview || tier == DecodeTier::Embedded {
+                            if let Ok(app_state) = state.lock() {
                                 app_state.cache.put(image_id, jpeg_bytes.clone());
-                            }
 
-                            return http::Response::builder()
-                                .status(200)
-                                .header("Content-Type", "image/jpeg")
-                                .header("Content-Length", jpeg_bytes.len().to_string())
-                                .body(jpeg_bytes)
-                                .unwrap();
+                                // Trigger prefetch
+                                let idx = app_state.image_ids.iter()
+                                    .position(|&id| id == image_id).unwrap_or(0);
+                                app_state.prefetch.prefetch_around(idx, 1);
+                            }
                         }
-                        Err(e) => {
-                            log::error!("Decode failed for {}: {}", img.filepath, e);
-                        }
+                        return jpeg_response(jpeg_bytes);
+                    }
+                    Err(e) => {
+                        log::error!("Decode failed for {}: {}", filepath, e);
+                        return error_response(500, "Decode failed");
                     }
                 }
             }
-
-            return http::Response::builder()
-                .status(404)
-                .body(b"Image not found".to_vec())
-                .unwrap();
+            return error_response(404, "Invalid image ID");
         }
 
-        http::Response::builder()
-            .status(404)
-            .body(b"Unknown route".to_vec())
-            .unwrap()
+        error_response(404, "Unknown route")
     })
 }
 
-// Minimal valid JPEG (1x1 grey pixel) used as placeholder when thumbnails aren't ready
+fn jpeg_response(data: Vec<u8>) -> http::Response<Vec<u8>> {
+    http::Response::builder()
+        .status(200)
+        .header("Content-Type", "image/jpeg")
+        .header("Content-Length", data.len().to_string())
+        .header("Cache-Control", "max-age=300")
+        .body(data)
+        .unwrap()
+}
+
+fn error_response(status: u16, msg: &str) -> http::Response<Vec<u8>> {
+    http::Response::builder()
+        .status(status)
+        .body(msg.as_bytes().to_vec())
+        .unwrap()
+}
+
+// 1x1 grey JPEG placeholder
 static PLACEHOLDER_JPEG: &[u8] = &[
     0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
     0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,

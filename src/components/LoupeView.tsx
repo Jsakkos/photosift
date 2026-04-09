@@ -5,7 +5,7 @@ import { useImageLoader } from "../hooks/useImageLoader";
 export function LoupeView() {
   const { images, currentIndex, isZoomed, toggleZoom } = useProjectStore();
   const currentImage = images[currentIndex] ?? null;
-  const { displayUrl, isUpgrading } = useImageLoader(currentImage?.id ?? null);
+  const { displayUrl } = useImageLoader(currentImage?.id ?? null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
@@ -80,11 +80,6 @@ export function LoupeView() {
         style={imgStyle}
         draggable={false}
       />
-      {isUpgrading && (
-        <div className="absolute top-2 left-2 px-2 py-1 rounded bg-black/50 text-xs text-white/60">
-          Loading...
-        </div>
-      )}
     </div>
   );
 }
