@@ -169,24 +169,18 @@ pub fn open_project(
     })
 }
 
-/// Generate a tiny thumbnail without decoding full resolution.
-/// Reads JPEG, decodes, and resizes to 200px with fastest filter.
+/// Generate a tiny thumbnail from a cached preview JPEG.
 fn generate_small_thumbnail(jpeg_path: &Path) -> Option<Vec<u8>> {
     use image::codecs::jpeg::JpegEncoder;
     use image::ImageReader;
     use std::io::Cursor;
 
     let img = ImageReader::open(jpeg_path).ok()?.decode().ok()?;
-    let thumb = img.thumbnail(200, 200); // thumbnail() is faster than resize()
+    let thumb = img.thumbnail(200, 200);
     let mut buf = Cursor::new(Vec::new());
     let encoder = JpegEncoder::new_with_quality(&mut buf, 70);
-    img.write_with_encoder(encoder).ok()?;
-
-    // Actually use the thumbnail, not the full image
-    let mut buf2 = Cursor::new(Vec::new());
-    let encoder2 = JpegEncoder::new_with_quality(&mut buf2, 70);
-    thumb.write_with_encoder(encoder2).ok()?;
-    Some(buf2.into_inner())
+    thumb.write_with_encoder(encoder).ok()?;
+    Some(buf.into_inner())
 }
 
 #[tauri::command]
