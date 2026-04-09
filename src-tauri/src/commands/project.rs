@@ -4,7 +4,6 @@ use crate::metadata::xmp;
 use crate::pipeline::decoder;
 use crate::pipeline::embedded;
 use crate::state::AppState;
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -30,6 +29,7 @@ pub fn open_project(
 
     let photosift_dir = folder.join(".photosift");
     fs::create_dir_all(&photosift_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(photosift_dir.join("previews")).map_err(|e| e.to_string())?;
 
     let db_path = photosift_dir.join("cache.sqlite");
     let db = Database::open(&db_path).map_err(|e| e.to_string())?;
@@ -47,7 +47,7 @@ pub fn open_project(
             .cmp(b.file_name().unwrap_or_default())
     });
 
-    // Phase 1: Quick scan — just insert file records (fast, no I/O per file beyond readdir)
+    // Quick scan — just insert file records
     for (idx, path) in files.iter().enumerate() {
         let filepath = path.to_string_lossy().to_string();
         let filename = path
@@ -64,37 +64,66 @@ pub fn open_project(
         let _ = db.insert_image(&filepath, &filename, "", file_size, idx as i32);
     }
 
-    let image_ids: Vec<i64> = db
-        .get_all_images()
-        .map_err(|e| e.to_string())?
-        .iter()
-        .map(|img| img.id)
-        .collect();
-
+    let all_images = db.get_all_images().map_err(|e| e.to_string())?;
+    let image_ids: Vec<i64> = all_images.iter().map(|img| img.id).collect();
     let image_count = image_ids.len();
     let last_viewed = read_last_viewed(&photosift_dir.join("project.json")).unwrap_or(0);
 
-    // Phase 2: Spawn background thread for EXIF + thumbnail generation
-    let db_path_clone = db_path.clone();
-    let files_clone: Vec<(i64, PathBuf)> = {
-        let all = db.get_all_images().unwrap_or_default();
-        all.into_iter()
-            .filter(|img| img.camera_model.is_none()) // Only process unprocessed images
-            .map(|img| (img.id, PathBuf::from(&img.filepath)))
-            .collect()
-    };
+    let prefetch_images: Vec<(i64, PathBuf)> = all_images
+        .iter()
+        .map(|img| (img.id, PathBuf::from(&img.filepath)))
+        .collect();
+
+    let mut app_state = state.lock().map_err(|e| e.to_string())?;
+    app_state.db = Some(db);
+    app_state.project_folder = Some(folder);
+    app_state.image_ids = image_ids.clone();
+    app_state.current_index = last_viewed;
+    app_state.preview_dir = Some(photosift_dir.join("previews"));
+    app_state.prefetch.set_images(prefetch_images);
+    app_state.prefetch.set_preview_dir(photosift_dir.join("previews"));
+
+    // Spawn background processing — previews first (fast), then thumbnails (slow)
+    let db_path2 = db_path.clone();
+    let preview_dir = photosift_dir.join("previews");
+    let images_to_process: Vec<(i64, PathBuf)> = all_images
+        .into_iter()
+        .map(|img| (img.id, PathBuf::from(img.filepath)))
+        .collect();
 
     std::thread::spawn(move || {
-        let bg_db = match Database::open(&db_path_clone) {
+        let bg_db = match Database::open(&db_path2) {
             Ok(db) => db,
-            Err(e) => {
-                log::error!("Background DB open failed: {}", e);
-                return;
-            }
+            Err(e) => { log::error!("BG DB open failed: {}", e); return; }
         };
 
-        for (id, path) in &files_clone {
-            // Extract EXIF
+        // Pass 1: Extract embedded JPEG previews (each ~90ms, saved as ~876KB files)
+        let mut preview_count = 0;
+        for (id, path) in &images_to_process {
+            let preview_path = preview_dir.join(format!("{}.jpg", id));
+            if preview_path.exists() { preview_count += 1; continue; }
+
+            if embedded::is_raw_file(path) {
+                match embedded::extract_embedded_jpeg(path) {
+                    Ok(jpeg) => {
+                        if fs::write(&preview_path, &jpeg).is_ok() {
+                            preview_count += 1;
+                        }
+                    }
+                    Err(e) => log::warn!("Preview extract failed for {:?}: {}", path, e),
+                }
+            } else {
+                // For JPEG/TIFF, just copy or symlink
+                if let Ok(data) = fs::read(path) {
+                    let _ = fs::write(&preview_path, &data);
+                    preview_count += 1;
+                }
+            }
+        }
+        log::info!("Pass 1 done: {} previews extracted", preview_count);
+
+        // Pass 2: EXIF + thumbnails
+        for (id, path) in &images_to_process {
             if let Ok(exif_data) = exif::extract_exif(path) {
                 let _ = bg_db.update_exif(
                     *id,
@@ -111,32 +140,20 @@ pub fn open_project(
                 );
             }
 
-            // Import XMP ratings
             if let Some(rating) = xmp::read_rating(path) {
                 let _ = bg_db.set_star_rating(*id, rating);
             }
 
-            // Generate thumbnail
-            if let Ok(thumb_bytes) = decoder::generate_thumbnail(path) {
-                let _ = bg_db.set_thumbnail(*id, &thumb_bytes);
+            // Generate thumbnail from the cached preview (no NEF re-read)
+            if bg_db.get_thumbnail(*id).ok().flatten().is_none() {
+                let preview_path = preview_dir.join(format!("{}.jpg", id));
+                if let Ok(thumb) = decoder::generate_thumbnail_from_jpeg(&preview_path) {
+                    let _ = bg_db.set_thumbnail(*id, &thumb);
+                }
             }
         }
-        log::info!("Background processing complete for {} images", files_clone.len());
+        log::info!("Pass 2 done: EXIF + thumbnails for {} images", images_to_process.len());
     });
-
-    let mut app_state = state.lock().map_err(|e| e.to_string())?;
-    app_state.db = Some(db);
-    app_state.project_folder = Some(folder);
-    app_state.image_ids = image_ids.clone();
-    app_state.current_index = last_viewed;
-
-    // Initialize prefetch manager
-    let prefetch_images: Vec<(i64, PathBuf)> = files
-        .iter()
-        .zip(image_ids.iter())
-        .map(|(path, &id)| (id, path.clone()))
-        .collect();
-    app_state.prefetch.set_images(prefetch_images);
 
     Ok(ProjectInfo {
         folder_path,

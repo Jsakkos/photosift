@@ -1,4 +1,3 @@
-use crate::pipeline::decoder::{decode_to_jpeg, DecodeTier};
 use crate::state::AppState;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -15,11 +14,10 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         let app_handle = ctx.app_handle();
         let state = app_handle.state::<Mutex<AppState>>();
 
-        // Route: /thumb/{id} — return cached thumbnail or placeholder (NEVER generate on-the-fly)
+        // Route: /thumb/{id}
         if let Some(id_str) = path.strip_prefix("/thumb/") {
             let id_str = id_str.split('?').next().unwrap_or(id_str);
             if let Ok(image_id) = id_str.parse::<i64>() {
-                // Quick lock — just read from SQLite cache
                 if let Ok(app_state) = state.lock() {
                     if let Some(ref db) = app_state.db {
                         if let Ok(Some(thumb)) = db.get_thumbnail(image_id) {
@@ -28,79 +26,71 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
                     }
                 }
             }
-            // Thumbnail not ready yet — return placeholder (background thread will generate it)
             return jpeg_response(PLACEHOLDER_JPEG.to_vec());
         }
 
         // Route: /image/{id}?tier=...
         if let Some(rest) = path.strip_prefix("/image/") {
             let id_str = rest.split('?').next().unwrap_or(rest);
-            let tier_str = uri
-                .split("tier=")
-                .nth(1)
-                .and_then(|s| s.split('&').next())
-                .unwrap_or("embedded");
-
-            let tier = match tier_str {
-                "full" => DecodeTier::Full,
-                "preview" => DecodeTier::Preview,
-                _ => DecodeTier::Embedded,
-            };
 
             if let Ok(image_id) = id_str.parse::<i64>() {
-                // Check LRU cache first (no file I/O needed)
+                // 1. Check in-memory LRU cache (instant)
                 if let Ok(app_state) = state.lock() {
                     if let Some(cached) = app_state.cache.get(image_id) {
                         return jpeg_response(cached);
                     }
                 }
 
-                // Get the filepath — short lock
-                let filepath = {
+                // 2. Check preview file cache (~1ms for 876KB read)
+                let (preview_dir, filepath) = {
                     let app_state = match state.lock() {
                         Ok(s) => s,
                         Err(_) => return error_response(500, "Lock failed"),
                     };
-                    let db = match &app_state.db {
-                        Some(db) => db,
-                        None => return error_response(404, "No project"),
-                    };
-                    match db.get_image_by_id(image_id) {
-                        Ok(img) => img.filepath.clone(),
-                        Err(_) => return error_response(404, "Image not found"),
+                    let pdir = app_state.preview_dir.clone();
+                    let fpath = app_state.db.as_ref()
+                        .and_then(|db| db.get_image_by_id(image_id).ok())
+                        .map(|img| img.filepath.clone());
+                    (pdir, fpath)
+                };
+                // Mutex released — all file I/O below is lock-free
+
+                if let Some(ref pdir) = preview_dir {
+                    let preview_path = pdir.join(format!("{}.jpg", image_id));
+                    if let Ok(data) = std::fs::read(&preview_path) {
+                        // Cache in LRU for next request
+                        if let Ok(app_state) = state.lock() {
+                            app_state.cache.put(image_id, data.clone());
+                            // Trigger prefetch for nearby images
+                            let idx = app_state.image_ids.iter()
+                                .position(|&id| id == image_id).unwrap_or(0);
+                            app_state.prefetch.prefetch_around(idx, 1);
+                        }
+                        return jpeg_response(data);
                     }
-                };
-                // Lock is dropped here — file I/O happens without holding the mutex
+                }
 
-                let file_path = std::path::Path::new(&filepath);
-                let quality = match tier {
-                    DecodeTier::Embedded => 85,
-                    DecodeTier::Preview => 90,
-                    DecodeTier::Full => 95,
-                };
-
-                match decode_to_jpeg(file_path, tier, quality) {
-                    Ok(jpeg_bytes) => {
-                        // Cache preview results
-                        if tier == DecodeTier::Preview || tier == DecodeTier::Embedded {
+                // 3. Fallback: read from original file (slow, ~90ms for NEF)
+                if let Some(filepath) = filepath {
+                    let file_path = std::path::Path::new(&filepath);
+                    match crate::pipeline::decoder::decode_to_jpeg(
+                        file_path,
+                        crate::pipeline::decoder::DecodeTier::Embedded,
+                        85,
+                    ) {
+                        Ok(jpeg_bytes) => {
                             if let Ok(app_state) = state.lock() {
                                 app_state.cache.put(image_id, jpeg_bytes.clone());
-
-                                // Trigger prefetch
-                                let idx = app_state.image_ids.iter()
-                                    .position(|&id| id == image_id).unwrap_or(0);
-                                app_state.prefetch.prefetch_around(idx, 1);
                             }
+                            return jpeg_response(jpeg_bytes);
                         }
-                        return jpeg_response(jpeg_bytes);
-                    }
-                    Err(e) => {
-                        log::error!("Decode failed for {}: {}", filepath, e);
-                        return error_response(500, "Decode failed");
+                        Err(e) => {
+                            log::error!("Decode failed for {}: {}", filepath, e);
+                        }
                     }
                 }
             }
-            return error_response(404, "Invalid image ID");
+            return error_response(404, "Image not found");
         }
 
         error_response(404, "Unknown route")
@@ -112,7 +102,6 @@ fn jpeg_response(data: Vec<u8>) -> http::Response<Vec<u8>> {
         .status(200)
         .header("Content-Type", "image/jpeg")
         .header("Content-Length", data.len().to_string())
-        .header("Cache-Control", "max-age=300")
         .body(data)
         .unwrap()
 }
@@ -124,7 +113,6 @@ fn error_response(status: u16, msg: &str) -> http::Response<Vec<u8>> {
         .unwrap()
 }
 
-// 1x1 grey JPEG placeholder
 static PLACEHOLDER_JPEG: &[u8] = &[
     0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
     0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,

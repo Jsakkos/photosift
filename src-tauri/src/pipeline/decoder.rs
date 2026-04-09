@@ -70,18 +70,9 @@ fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, DecodeError> 
     Ok(buf.into_inner())
 }
 
-/// Generate a small thumbnail (200px long edge) from any supported image.
-pub fn generate_thumbnail(path: &Path) -> Result<Vec<u8>, DecodeError> {
-    let source = if embedded::is_raw_file(path) {
-        let jpeg_bytes = embedded::extract_embedded_jpeg(path)
-            .map_err(|e| DecodeError::Raw(e.to_string()))?;
-        let reader = ImageReader::with_format(Cursor::new(jpeg_bytes), ImageFormat::Jpeg);
-        reader.decode()?
-    } else {
-        ImageReader::open(path)?.decode()?
-    };
-
-    // Use Nearest filter for speed — thumbnails are tiny (200px), quality doesn't matter much
+/// Generate a small thumbnail from a JPEG file (the cached preview).
+pub fn generate_thumbnail_from_jpeg(jpeg_path: &Path) -> Result<Vec<u8>, DecodeError> {
+    let source = ImageReader::open(jpeg_path)?.decode()?;
     let thumb = source.resize(200, 200, image::imageops::FilterType::Nearest);
     encode_jpeg(&thumb, 75)
 }
