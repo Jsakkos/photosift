@@ -39,12 +39,15 @@ pub fn extract_embedded_jpeg(path: &Path) -> Result<Vec<u8>, EmbeddedError> {
         if data[i] == 0xFF && data[i + 1] == 0xD8 {
             if let Some(end) = find_jpeg_end(&data, i) {
                 let jpeg_data = &data[i..=end];
-                let is_larger = best_jpeg
-                    .as_ref()
-                    .map(|b| jpeg_data.len() > b.len())
-                    .unwrap_or(true);
-                if is_larger {
-                    best_jpeg = Some(jpeg_data.to_vec());
+                // Only consider blobs > 10KB (skip tiny EXIF thumbnails)
+                if jpeg_data.len() > 10_000 {
+                    let is_larger = best_jpeg
+                        .as_ref()
+                        .map(|b| jpeg_data.len() > b.len())
+                        .unwrap_or(true);
+                    if is_larger {
+                        best_jpeg = Some(jpeg_data.to_vec());
+                    }
                 }
                 i = end + 1;
                 continue;

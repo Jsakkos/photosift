@@ -1,5 +1,6 @@
 use image::codecs::jpeg::JpegEncoder;
-use image::{DynamicImage, ImageReader};
+use image::io::Reader as ImageReader2;
+use image::{DynamicImage, ImageFormat, ImageReader};
 use std::io::Cursor;
 use std::path::Path;
 use thiserror::Error;
@@ -45,7 +46,7 @@ fn decode_raw_to_jpeg(path: &Path, tier: DecodeTier, quality: u8) -> Result<Vec<
             // Full rawler pixel-level decode will be added when wgpu compute is integrated.
             let jpeg_bytes = embedded::extract_embedded_jpeg(path)
                 .map_err(|e| DecodeError::Raw(e.to_string()))?;
-            let img = image::load_from_memory(&jpeg_bytes)?;
+            let img = load_jpeg_from_memory(&jpeg_bytes)?;
 
             let img = if tier == DecodeTier::Preview {
                 let long_edge = img.width().max(img.height());
@@ -82,6 +83,23 @@ fn decode_standard_to_jpeg(path: &Path, tier: DecodeTier, quality: u8) -> Result
     encode_jpeg(&img, quality)
 }
 
+/// Load JPEG bytes with explicit format hint (avoids format detection failures
+/// on embedded JPEG blobs extracted from NEF files).
+fn load_jpeg_from_memory(bytes: &[u8]) -> Result<DynamicImage, DecodeError> {
+    // Try with explicit JPEG hint first
+    let reader = ImageReader2::with_format(Cursor::new(bytes), ImageFormat::Jpeg);
+    match reader.decode() {
+        Ok(img) => Ok(img),
+        Err(_) => {
+            // Fallback: try with format guessing (handles TIFF thumbnails etc.)
+            let reader = ImageReader2::new(Cursor::new(bytes))
+                .with_guessed_format()
+                .map_err(|e| DecodeError::Io(e))?;
+            Ok(reader.decode()?)
+        }
+    }
+}
+
 fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, DecodeError> {
     let mut buf = Cursor::new(Vec::new());
     let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
@@ -94,7 +112,7 @@ pub fn generate_thumbnail(path: &Path) -> Result<Vec<u8>, DecodeError> {
     let source = if embedded::is_raw_file(path) {
         let jpeg_bytes = embedded::extract_embedded_jpeg(path)
             .map_err(|e| DecodeError::Raw(e.to_string()))?;
-        image::load_from_memory(&jpeg_bytes)?
+        load_jpeg_from_memory(&jpeg_bytes)?
     } else {
         ImageReader::open(path)?.decode()?
     };
