@@ -107,6 +107,17 @@ pub fn open_project(
     app_state.image_ids = image_ids;
     app_state.current_index = last_viewed;
 
+    // Initialize prefetch manager with image paths
+    if let Some(ref db) = app_state.db {
+        let prefetch_images: Vec<(i64, std::path::PathBuf)> = db
+            .get_all_images()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|img| (img.id, std::path::PathBuf::from(&img.filepath)))
+            .collect();
+        app_state.prefetch.set_images(prefetch_images);
+    }
+
     Ok(ProjectInfo {
         folder_path,
         image_count,

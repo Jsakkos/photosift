@@ -83,6 +83,13 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
                     }
                 }
 
+                // Trigger prefetch on cache hit
+                if tier == DecodeTier::Preview {
+                    let idx = app_state.image_ids.iter().position(|&id| id == image_id).unwrap_or(0);
+                    let direction = if idx >= app_state.current_index { 1 } else { -1 };
+                    app_state.prefetch.prefetch_around(idx, direction);
+                }
+
                 if let Ok(img) = db.get_image_by_id(image_id) {
                     let filepath = std::path::Path::new(&img.filepath);
                     let quality = match tier {
