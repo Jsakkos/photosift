@@ -35,8 +35,9 @@ pub fn extract_embedded_jpeg(path: &Path) -> Result<Vec<u8>, EmbeddedError> {
     let mut best_jpeg: Option<Vec<u8>> = None;
     let mut i = 0;
 
-    while i < data.len().saturating_sub(1) {
-        if data[i] == 0xFF && data[i + 1] == 0xD8 {
+    while i < data.len().saturating_sub(3) {
+        // Real JPEG: FF D8 FF (SOI followed by a marker)
+        if data[i] == 0xFF && data[i + 1] == 0xD8 && data[i + 2] == 0xFF {
             if let Some(end) = find_jpeg_end(&data, i) {
                 let jpeg_data = &data[i..=end];
                 // Only consider blobs > 10KB (skip tiny EXIF thumbnails)
