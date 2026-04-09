@@ -25,7 +25,8 @@
       "mcp__plugin_playwright_playwright__browser_navigate",
       "mcp__plugin_playwright_playwright__browser_take_screenshot",
       "mcp__plugin_playwright_playwright__browser_snapshot",
-      "Bash(taskkill //F //IM photosift.exe)"
+      "Bash(taskkill //F //IM photosift.exe)",
+      "Bash(PID=$! sleep 50 echo \"=== RUNTIME ERRORS ===\" cat /tmp/photosift_stderr.log)"
     ]
   }
 }

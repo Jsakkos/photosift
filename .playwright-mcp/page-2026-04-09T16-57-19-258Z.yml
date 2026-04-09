@@ -1,0 +1,5 @@
+- generic [ref=e3]:
+  - heading "PhotoSift" [level=1] [ref=e4]
+  - paragraph [ref=e5]: Fast photo culling for photographers
+  - button "Open Folder" [ref=e6]
+  - paragraph [ref=e7]: or press Ctrl+O

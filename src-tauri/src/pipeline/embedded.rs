@@ -110,6 +110,45 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn perf_nef_decode() {
+        use crate::pipeline::decoder::{decode_to_jpeg, generate_thumbnail, DecodeTier};
+        use std::path::PathBuf;
+        let nef_dir = Path::new(r"E:\photos\DSLR\2026\2026-02_Bend-Weekend\RAW");
+        if !nef_dir.exists() { return; }
+
+        let first_nef: PathBuf = std::fs::read_dir(nef_dir).unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| is_raw_file(p))
+            .expect("no NEF found");
+
+        println!("Testing: {:?}", first_nef);
+        let file_size = std::fs::metadata(&first_nef).unwrap().len();
+        println!("File size: {:.1} MB", file_size as f64 / 1_048_576.0);
+
+        // Test embedded JPEG extraction
+        let t = std::time::Instant::now();
+        let embedded = extract_embedded_jpeg(&first_nef).unwrap();
+        println!("Embedded JPEG extraction: {:?} ({} bytes)", t.elapsed(), embedded.len());
+
+        // Test embedded tier decode (should just return the extracted bytes)
+        let t = std::time::Instant::now();
+        let _ = decode_to_jpeg(&first_nef, DecodeTier::Embedded, 85).unwrap();
+        println!("Decode Embedded tier: {:?}", t.elapsed());
+
+        // Test preview tier decode
+        let t = std::time::Instant::now();
+        let preview = decode_to_jpeg(&first_nef, DecodeTier::Preview, 90).unwrap();
+        println!("Decode Preview tier: {:?} ({} bytes)", t.elapsed(), preview.len());
+
+        // Test thumbnail generation
+        let t = std::time::Instant::now();
+        let thumb = generate_thumbnail(&first_nef).unwrap();
+        println!("Thumbnail generation: {:?} ({} bytes)", t.elapsed(), thumb.len());
+    }
+
+    #[test]
     fn test_is_supported_image() {
         assert!(is_supported_image(Path::new("a.nef")));
         assert!(is_supported_image(Path::new("a.jpg")));

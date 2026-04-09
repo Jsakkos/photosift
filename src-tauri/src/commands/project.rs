@@ -38,7 +38,7 @@ pub fn open_project(
         .map_err(|e| e.to_string())?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
-        .filter(|path| embedded::is_supported_image(path))
+        .filter(|path| path.is_file() && embedded::is_supported_image(path))
         .collect();
 
     files.sort_by(|a, b| {
@@ -47,6 +47,7 @@ pub fn open_project(
             .cmp(b.file_name().unwrap_or_default())
     });
 
+    // Phase 1: Quick scan — just insert file records (fast, no I/O per file beyond readdir)
     for (idx, path) in files.iter().enumerate() {
         let filepath = path.to_string_lossy().to_string();
         let filename = path
@@ -59,36 +60,8 @@ pub fn open_project(
             continue;
         }
 
-        let file_hash = hash_file_header(path).unwrap_or_default();
         let file_size = fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
-
-        let id = db
-            .insert_image(&filepath, &filename, &file_hash, file_size, idx as i32)
-            .map_err(|e| e.to_string())?;
-
-        if let Ok(exif_data) = exif::extract_exif(path) {
-            let _ = db.update_exif(
-                id,
-                exif_data.capture_time.as_deref(),
-                exif_data.camera_model.as_deref(),
-                exif_data.lens.as_deref(),
-                exif_data.focal_length,
-                exif_data.aperture,
-                exif_data.shutter_speed.as_deref(),
-                exif_data.iso,
-                exif_data.width,
-                exif_data.height,
-                exif_data.orientation,
-            );
-        }
-
-        if let Some(rating) = xmp::read_rating(path) {
-            let _ = db.set_star_rating(id, rating);
-        }
-
-        if let Ok(thumb_bytes) = decoder::generate_thumbnail(path) {
-            let _ = db.set_thumbnail(id, &thumb_bytes);
-        }
+        let _ = db.insert_image(&filepath, &filename, "", file_size, idx as i32);
     }
 
     let image_ids: Vec<i64> = db
@@ -101,22 +74,69 @@ pub fn open_project(
     let image_count = image_ids.len();
     let last_viewed = read_last_viewed(&photosift_dir.join("project.json")).unwrap_or(0);
 
+    // Phase 2: Spawn background thread for EXIF + thumbnail generation
+    let db_path_clone = db_path.clone();
+    let files_clone: Vec<(i64, PathBuf)> = {
+        let all = db.get_all_images().unwrap_or_default();
+        all.into_iter()
+            .filter(|img| img.camera_model.is_none()) // Only process unprocessed images
+            .map(|img| (img.id, PathBuf::from(&img.filepath)))
+            .collect()
+    };
+
+    std::thread::spawn(move || {
+        let bg_db = match Database::open(&db_path_clone) {
+            Ok(db) => db,
+            Err(e) => {
+                log::error!("Background DB open failed: {}", e);
+                return;
+            }
+        };
+
+        for (id, path) in &files_clone {
+            // Extract EXIF
+            if let Ok(exif_data) = exif::extract_exif(path) {
+                let _ = bg_db.update_exif(
+                    *id,
+                    exif_data.capture_time.as_deref(),
+                    exif_data.camera_model.as_deref(),
+                    exif_data.lens.as_deref(),
+                    exif_data.focal_length,
+                    exif_data.aperture,
+                    exif_data.shutter_speed.as_deref(),
+                    exif_data.iso,
+                    exif_data.width,
+                    exif_data.height,
+                    exif_data.orientation,
+                );
+            }
+
+            // Import XMP ratings
+            if let Some(rating) = xmp::read_rating(path) {
+                let _ = bg_db.set_star_rating(*id, rating);
+            }
+
+            // Generate thumbnail
+            if let Ok(thumb_bytes) = decoder::generate_thumbnail(path) {
+                let _ = bg_db.set_thumbnail(*id, &thumb_bytes);
+            }
+        }
+        log::info!("Background processing complete for {} images", files_clone.len());
+    });
+
     let mut app_state = state.lock().map_err(|e| e.to_string())?;
     app_state.db = Some(db);
     app_state.project_folder = Some(folder);
-    app_state.image_ids = image_ids;
+    app_state.image_ids = image_ids.clone();
     app_state.current_index = last_viewed;
 
-    // Initialize prefetch manager with image paths
-    if let Some(ref db) = app_state.db {
-        let prefetch_images: Vec<(i64, std::path::PathBuf)> = db
-            .get_all_images()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|img| (img.id, std::path::PathBuf::from(&img.filepath)))
-            .collect();
-        app_state.prefetch.set_images(prefetch_images);
-    }
+    // Initialize prefetch manager
+    let prefetch_images: Vec<(i64, PathBuf)> = files
+        .iter()
+        .zip(image_ids.iter())
+        .map(|(path, &id)| (id, path.clone()))
+        .collect();
+    app_state.prefetch.set_images(prefetch_images);
 
     Ok(ProjectInfo {
         folder_path,
@@ -138,24 +158,8 @@ pub fn get_project_info(state: State<'_, Mutex<AppState>>) -> Result<Option<Proj
     }
 }
 
-fn hash_file_header(path: &Path) -> Result<String, std::io::Error> {
-    let mut file = fs::File::open(path)?;
-    let mut buffer = vec![0u8; 65536];
-    let bytes_read = std::io::Read::read(&mut file, &mut buffer)?;
-    buffer.truncate(bytes_read);
-    let mut hasher = Sha256::new();
-    hasher.update(&buffer);
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
 fn read_last_viewed(project_json_path: &Path) -> Option<usize> {
     let content = fs::read_to_string(project_json_path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     json.get("last_viewed_index")?.as_u64().map(|v| v as usize)
-}
-
-pub fn save_last_viewed(project_folder: &Path, index: usize) {
-    let project_json = project_folder.join(".photosift").join("project.json");
-    let json = serde_json::json!({ "last_viewed_index": index });
-    let _ = fs::write(&project_json, serde_json::to_string_pretty(&json).unwrap_or_default());
 }

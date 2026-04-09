@@ -1,5 +1,4 @@
 use image::codecs::jpeg::JpegEncoder;
-use image::io::Reader as ImageReader2;
 use image::{DynamicImage, ImageFormat, ImageReader};
 use std::io::Cursor;
 use std::path::Path;
@@ -15,8 +14,6 @@ pub enum DecodeError {
     Image(#[from] image::ImageError),
     #[error("RAW decode error: {0}")]
     Raw(String),
-    #[error("Unsupported format: {0}")]
-    Unsupported(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -35,67 +32,33 @@ pub fn decode_to_jpeg(path: &Path, tier: DecodeTier, quality: u8) -> Result<Vec<
     }
 }
 
-fn decode_raw_to_jpeg(path: &Path, tier: DecodeTier, quality: u8) -> Result<Vec<u8>, DecodeError> {
-    match tier {
-        DecodeTier::Embedded => {
-            // Extract embedded JPEG from RAW — no further processing
-            embedded::extract_embedded_jpeg(path).map_err(|e| DecodeError::Raw(e.to_string()))
-        }
-        DecodeTier::Preview | DecodeTier::Full => {
-            // For Phase 1, use the embedded JPEG as the source and resize.
-            // Full rawler pixel-level decode will be added when wgpu compute is integrated.
-            let jpeg_bytes = embedded::extract_embedded_jpeg(path)
-                .map_err(|e| DecodeError::Raw(e.to_string()))?;
-            let img = load_jpeg_from_memory(&jpeg_bytes)?;
-
-            let img = if tier == DecodeTier::Preview {
-                let long_edge = img.width().max(img.height());
-                if long_edge > 3000 {
-                    img.resize(3000, 3000, image::imageops::FilterType::Lanczos3)
-                } else {
-                    img
-                }
-            } else {
-                img
-            };
-
-            encode_jpeg(&img, quality)
-        }
-    }
+fn decode_raw_to_jpeg(path: &Path, _tier: DecodeTier, _quality: u8) -> Result<Vec<u8>, DecodeError> {
+    // For RAW files, all tiers return the embedded JPEG preview directly.
+    // It's already a high-quality JPEG (D750: 6016x4016, ~876KB).
+    // No decode/resize/re-encode needed — this is the fast path.
+    embedded::extract_embedded_jpeg(path).map_err(|e| DecodeError::Raw(e.to_string()))
 }
 
 fn decode_standard_to_jpeg(path: &Path, tier: DecodeTier, quality: u8) -> Result<Vec<u8>, DecodeError> {
-    let img = ImageReader::open(path)?.decode()?;
-
-    let img = match tier {
-        DecodeTier::Embedded | DecodeTier::Preview => {
+    // For JPEG/TIFF source files
+    match tier {
+        DecodeTier::Embedded => {
+            // Just read and return the file as-is (it's already JPEG)
+            Ok(std::fs::read(path)?)
+        }
+        DecodeTier::Preview => {
+            let img = ImageReader::open(path)?.decode()?;
             let long_edge = img.width().max(img.height());
-            let target = if tier == DecodeTier::Embedded { 1600 } else { 3000 };
-            if long_edge > target {
-                img.resize(target, target, image::imageops::FilterType::Lanczos3)
+            if long_edge > 3000 {
+                let resized = img.resize(3000, 3000, image::imageops::FilterType::Triangle);
+                encode_jpeg(&resized, quality)
             } else {
-                img
+                // Already small enough, return original bytes
+                Ok(std::fs::read(path)?)
             }
         }
-        DecodeTier::Full => img,
-    };
-
-    encode_jpeg(&img, quality)
-}
-
-/// Load JPEG bytes with explicit format hint (avoids format detection failures
-/// on embedded JPEG blobs extracted from NEF files).
-fn load_jpeg_from_memory(bytes: &[u8]) -> Result<DynamicImage, DecodeError> {
-    // Try with explicit JPEG hint first
-    let reader = ImageReader2::with_format(Cursor::new(bytes), ImageFormat::Jpeg);
-    match reader.decode() {
-        Ok(img) => Ok(img),
-        Err(_) => {
-            // Fallback: try with format guessing (handles TIFF thumbnails etc.)
-            let reader = ImageReader2::new(Cursor::new(bytes))
-                .with_guessed_format()
-                .map_err(|e| DecodeError::Io(e))?;
-            Ok(reader.decode()?)
+        DecodeTier::Full => {
+            Ok(std::fs::read(path)?)
         }
     }
 }
@@ -112,11 +75,13 @@ pub fn generate_thumbnail(path: &Path) -> Result<Vec<u8>, DecodeError> {
     let source = if embedded::is_raw_file(path) {
         let jpeg_bytes = embedded::extract_embedded_jpeg(path)
             .map_err(|e| DecodeError::Raw(e.to_string()))?;
-        load_jpeg_from_memory(&jpeg_bytes)?
+        let reader = ImageReader::with_format(Cursor::new(jpeg_bytes), ImageFormat::Jpeg);
+        reader.decode()?
     } else {
         ImageReader::open(path)?.decode()?
     };
 
-    let thumb = source.resize(200, 200, image::imageops::FilterType::Triangle);
-    encode_jpeg(&thumb, 80)
+    // Use Nearest filter for speed — thumbnails are tiny (200px), quality doesn't matter much
+    let thumb = source.resize(200, 200, image::imageops::FilterType::Nearest);
+    encode_jpeg(&thumb, 75)
 }
