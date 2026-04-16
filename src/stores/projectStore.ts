@@ -17,7 +17,7 @@ interface UndoEntry {
   batchSize?: number;
 }
 
-function buildPhotoGroupMap(groups: Group[]): Map<number, Group> {
+export function buildPhotoGroupMap(groups: Group[]): Map<number, Group> {
   const map = new Map<number, Group>();
   for (const g of groups) {
     for (const m of g.members) {
@@ -27,12 +27,12 @@ function buildPhotoGroupMap(groups: Group[]): Map<number, Group> {
   return map;
 }
 
-function getGroupCover(group: Group): number {
+export function getGroupCover(group: Group): number {
   const cover = group.members.find((m) => m.isCover);
   return cover ? cover.photoId : group.members[0].photoId;
 }
 
-function computeDisplayItems(
+export function computeDisplayItems(
   images: ImageEntry[],
   currentView: CullView,
   groups: Group[],
