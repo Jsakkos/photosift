@@ -14,7 +14,11 @@ interface UndoEntry {
   field: "starRating" | "flag" | "destination";
   oldValue: string | number;
   newValue: string | number;
-  batchSize?: number;
+  batch?: {
+    imageId: number;
+    oldValue: string | number;
+    newValue: string | number;
+  }[];
 }
 
 export function buildPhotoGroupMap(groups: Group[]): Map<number, Group> {
@@ -363,14 +367,31 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           ? "rgba(239, 68, 68, 0.15)"
           : null;
 
-    const batchSize = affectedIds.length;
+    const undoEntry: UndoEntry = {
+      imageId: image.id,
+      field: "flag",
+      oldValue: oldFlag,
+      newValue: flag,
+    };
+    if (affectedIds.length > 1) {
+      if (item.groupId && currentView === "triage" && item.isGroupCover) {
+        undoEntry.batch = affectedIds.map((a) => ({
+          imageId: a.id,
+          oldValue: a.oldFlag,
+          newValue: flag,
+        }));
+      } else if (item.groupId && currentView === "select" && flag === "pick") {
+        undoEntry.batch = affectedIds.map((a) => ({
+          imageId: a.id,
+          oldValue: a.oldFlag,
+          newValue: a.id === image.id ? "pick" : "reject",
+        }));
+      }
+    }
     set({
       images: updatedImages,
       displayItems: newDisplayItems,
-      undoStack: [
-        ...undoStack.slice(-49),
-        { imageId: image.id, field: "flag", oldValue: oldFlag, newValue: flag, batchSize },
-      ],
+      undoStack: [...undoStack.slice(-49), undoEntry],
       redoStack: [],
       lastFlagAction: flashColor
         ? { color: flashColor, timestamp: Date.now() }
@@ -482,25 +503,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const entry = undoStack[undoStack.length - 1];
     if (!entry) return;
 
-    const idx = images.findIndex((img) => img.id === entry.imageId);
-    if (idx < 0) return;
-
     const updatedImages = [...images];
-    if (entry.field === "starRating") {
-      updatedImages[idx] = {
-        ...updatedImages[idx],
-        starRating: entry.oldValue as number,
-      };
-    } else if (entry.field === "flag") {
-      updatedImages[idx] = {
-        ...updatedImages[idx],
-        flag: entry.oldValue as string,
-      };
-    } else if (entry.field === "destination") {
-      updatedImages[idx] = {
-        ...updatedImages[idx],
-        destination: entry.oldValue as string,
-      };
+    const targets = entry.batch
+      ? entry.batch.map((b) => ({ imageId: b.imageId, value: b.oldValue }))
+      : [{ imageId: entry.imageId, value: entry.oldValue }];
+
+    for (const t of targets) {
+      const idx = updatedImages.findIndex((img) => img.id === t.imageId);
+      if (idx < 0) continue;
+      if (entry.field === "starRating") {
+        updatedImages[idx] = { ...updatedImages[idx], starRating: t.value as number };
+      } else if (entry.field === "flag") {
+        updatedImages[idx] = { ...updatedImages[idx], flag: t.value as string };
+      } else if (entry.field === "destination") {
+        updatedImages[idx] = { ...updatedImages[idx], destination: t.value as string };
+      }
     }
 
     const newDisplayItems = computeDisplayItems(
@@ -521,7 +538,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
 
     try {
-      await invoke("undo_last");
+      for (const t of targets) {
+        if (entry.field === "flag") {
+          await invoke("set_flag", { photoId: t.imageId, flag: t.value });
+        } else if (entry.field === "destination") {
+          await invoke("set_destination", { photoId: t.imageId, destination: t.value });
+        } else if (entry.field === "starRating") {
+          await invoke("set_rating", { imageId: t.imageId, rating: t.value });
+        }
+      }
     } catch (e) {
       console.error("Undo failed:", e);
     }
@@ -532,37 +557,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const entry = redoStack[redoStack.length - 1];
     if (!entry) return;
 
-    const idx = images.findIndex((img) => img.id === entry.imageId);
-    if (idx < 0) return;
-
     const updatedImages = [...images];
-    if (entry.field === "starRating") {
-      updatedImages[idx] = {
-        ...updatedImages[idx],
-        starRating: entry.newValue as number,
-      };
-      await invoke("set_rating", {
-        imageId: entry.imageId,
-        rating: entry.newValue,
-      }).catch(() => {});
-    } else if (entry.field === "flag") {
-      updatedImages[idx] = {
-        ...updatedImages[idx],
-        flag: entry.newValue as string,
-      };
-      await invoke("set_flag", {
-        photoId: entry.imageId,
-        flag: entry.newValue,
-      }).catch(() => {});
-    } else if (entry.field === "destination") {
-      updatedImages[idx] = {
-        ...updatedImages[idx],
-        destination: entry.newValue as string,
-      };
-      await invoke("set_destination", {
-        photoId: entry.imageId,
-        destination: entry.newValue,
-      }).catch(() => {});
+    const targets = entry.batch
+      ? entry.batch.map((b) => ({ imageId: b.imageId, value: b.newValue }))
+      : [{ imageId: entry.imageId, value: entry.newValue }];
+
+    for (const t of targets) {
+      const idx = updatedImages.findIndex((img) => img.id === t.imageId);
+      if (idx < 0) continue;
+      if (entry.field === "starRating") {
+        updatedImages[idx] = { ...updatedImages[idx], starRating: t.value as number };
+      } else if (entry.field === "flag") {
+        updatedImages[idx] = { ...updatedImages[idx], flag: t.value as string };
+      } else if (entry.field === "destination") {
+        updatedImages[idx] = { ...updatedImages[idx], destination: t.value as string };
+      }
     }
 
     const newDisplayItems = computeDisplayItems(
@@ -570,15 +579,31 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentView,
       groups,
     );
+    const displayIdx = newDisplayItems.findIndex(
+      (d) => d.image.id === entry.imageId,
+    );
 
     set({
       images: updatedImages,
       displayItems: newDisplayItems,
       redoStack: redoStack.slice(0, -1),
       undoStack: [...undoStack, entry],
-      currentIndex:
-        newDisplayItems.findIndex((d) => d.image.id === entry.imageId) || 0,
+      currentIndex: displayIdx >= 0 ? displayIdx : 0,
     });
+
+    try {
+      for (const t of targets) {
+        if (entry.field === "flag") {
+          await invoke("set_flag", { photoId: t.imageId, flag: t.value });
+        } else if (entry.field === "destination") {
+          await invoke("set_destination", { photoId: t.imageId, destination: t.value });
+        } else if (entry.field === "starRating") {
+          await invoke("set_rating", { imageId: t.imageId, rating: t.value });
+        }
+      }
+    } catch (e) {
+      console.error("Redo failed:", e);
+    }
   },
 
   setView: async (view: CullView) => {
@@ -788,6 +813,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (pickIdx < 0 || rejectIdx < 0) return;
 
     const oldPickFlag = updatedImages[pickIdx].flag;
+    const oldRejectFlag = updatedImages[rejectIdx].flag;
     updatedImages[pickIdx] = { ...updatedImages[pickIdx], flag: "pick" };
     updatedImages[rejectIdx] = { ...updatedImages[rejectIdx], flag: "reject" };
 
@@ -798,7 +824,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       displayItems: newDisplayItems,
       undoStack: [
         ...undoStack.slice(-49),
-        { imageId: pickId, field: "flag", oldValue: oldPickFlag, newValue: "pick", batchSize: 2 },
+        {
+          imageId: pickId,
+          field: "flag",
+          oldValue: oldPickFlag,
+          newValue: "pick",
+          batch: [
+            { imageId: pickId, oldValue: oldPickFlag, newValue: "pick" },
+            { imageId: rejectId, oldValue: oldRejectFlag, newValue: "reject" },
+          ],
+        },
       ],
       redoStack: [],
       lastFlagAction: { color: "rgba(34, 197, 94, 0.15)", timestamp: Date.now() },

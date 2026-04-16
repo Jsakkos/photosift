@@ -64,9 +64,14 @@ describe("setFlag", () => {
     expect(bulkArgs.photoIds).toHaveLength(2);
     expect(bulkArgs.flag).toBe("reject");
 
-    // Undo stack should have one entry with batchSize 3 (1 pick + 2 rejects)
+    // Undo stack should have one entry carrying all 3 members (1 pick + 2 rejects)
     expect(state.undoStack).toHaveLength(1);
-    expect(state.undoStack[0].batchSize).toBe(3);
+    const entry = state.undoStack[0];
+    expect(entry.batch).toHaveLength(3);
+    const byId = new Map(entry.batch!.map((b) => [b.imageId, b]));
+    expect(byId.get(1)).toMatchObject({ oldValue: "unreviewed", newValue: "pick" });
+    expect(byId.get(2)).toMatchObject({ oldValue: "unreviewed", newValue: "reject" });
+    expect(byId.get(3)).toMatchObject({ oldValue: "unreviewed", newValue: "reject" });
   });
 
   test("select view: Shift+P (setFlagNoAutoReject) keeps siblings", async () => {
@@ -159,10 +164,12 @@ describe("setFlag", () => {
     expect(bulkArgs.photoIds).toEqual(expect.arrayContaining([1, 2, 3]));
     expect(bulkArgs.flag).toBe("pick");
 
-    // Undo entry tracks batchSize = 3
+    // Undo entry carries all 3 members so undo can restore each one
     expect(state.undoStack).toHaveLength(1);
-    expect(state.undoStack[0].batchSize).toBe(3);
-    expect(state.undoStack[0].imageId).toBe(1); // cover image
+    expect(state.undoStack[0].batch).toHaveLength(3);
+    expect(state.undoStack[0].imageId).toBe(1); // cover image (primary)
+    const ids = state.undoStack[0].batch!.map((b) => b.imageId).sort();
+    expect(ids).toEqual([1, 2, 3]);
   });
 
   test("single ungrouped image flag", async () => {
@@ -216,6 +223,64 @@ describe("setFlag", () => {
     // No invoke calls should have been made (flag didn't change)
     expect(spy).not.toHaveBeenCalled();
     expect(useProjectStore.getState().undoStack).toHaveLength(0);
+  });
+
+  test("ungrouped flag: undo entry has no batch", async () => {
+    setupMockIpc({});
+
+    const img1 = makeImage({ id: 1, flag: "unreviewed" });
+    const images = [img1];
+    const displayItems = computeDisplayItems(images, "triage", []);
+
+    useProjectStore.setState({
+      images,
+      groups: [],
+      displayItems,
+      currentView: "triage",
+      currentIndex: 0,
+      autoAdvance: false,
+      undoStack: [],
+      redoStack: [],
+    });
+
+    await useProjectStore.getState().setFlag("pick");
+
+    const entry = useProjectStore.getState().undoStack[0];
+    expect(entry.batch).toBeUndefined();
+    expect(entry.imageId).toBe(1);
+    expect(entry.oldValue).toBe("unreviewed");
+    expect(entry.newValue).toBe("pick");
+  });
+
+  test("setFlagNoAutoReject on an already-picked image is a no-op", async () => {
+    const spy = vi.fn();
+    setupMockIpc({}, spy);
+
+    const img1 = makeImage({ id: 1, flag: "pick" });
+    const img2 = makeImage({ id: 2, flag: "unreviewed" });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+    ]);
+    const images = [img1, img2];
+    const groups = [group];
+
+    useProjectStore.setState({
+      images,
+      groups,
+      displayItems: computeDisplayItems(images, "select", groups),
+      currentView: "select",
+      currentIndex: 0,
+      autoAdvance: false,
+      undoStack: [],
+      redoStack: [],
+    });
+
+    await useProjectStore.getState().setFlagNoAutoReject("pick");
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().undoStack).toHaveLength(0);
+    expect(useProjectStore.getState().images.find((i) => i.id === 2)!.flag).toBe("unreviewed");
   });
 
   test("setFlag clears redoStack", async () => {

@@ -46,7 +46,7 @@ describe("undo", () => {
     expect(state.redoStack[0].newValue).toBe("pick");
   });
 
-  test("undo group flag in triage only reverts cover image (known bug)", async () => {
+  test("undo group flag in triage reverts ALL members", async () => {
     setupMockIpc({});
 
     const img1 = makeImage({ id: 1, flag: "unreviewed" });
@@ -73,25 +73,115 @@ describe("undo", () => {
       redoStack: [],
     });
 
-    // Flag group cover -- all 3 members get flagged
     await useProjectStore.getState().setFlag("pick");
     expect(useProjectStore.getState().images.every((i) => i.flag === "pick")).toBe(true);
 
-    // Undo -- the undo entry only stores imageId for the cover (id=1).
-    // Only the cover image's flag is reverted. Siblings stay "pick".
-    // This is a known limitation: batchSize is stored but undo only
-    // reverts the single entry.imageId.
     await useProjectStore.getState().undo();
 
     const state = useProjectStore.getState();
-    // Cover reverts to "unreviewed"
     expect(state.images.find((i) => i.id === 1)!.flag).toBe("unreviewed");
-    // Siblings remain "pick" -- undo doesn't know about them
-    expect(state.images.find((i) => i.id === 2)!.flag).toBe("pick");
-    expect(state.images.find((i) => i.id === 3)!.flag).toBe("pick");
+    expect(state.images.find((i) => i.id === 2)!.flag).toBe("unreviewed");
+    expect(state.images.find((i) => i.id === 3)!.flag).toBe("unreviewed");
 
     expect(state.undoStack).toHaveLength(0);
     expect(state.redoStack).toHaveLength(1);
+    expect(state.redoStack[0].batch).toHaveLength(3);
+  });
+
+  test("redo after group-flag undo re-applies to all members", async () => {
+    setupMockIpc({});
+
+    const img1 = makeImage({ id: 1, flag: "unreviewed" });
+    const img2 = makeImage({ id: 2, flag: "unreviewed" });
+    const img3 = makeImage({ id: 3, flag: "unreviewed" });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+      { photoId: 3 },
+    ]);
+
+    useProjectStore.setState({
+      images: [img1, img2, img3],
+      groups: [group],
+      displayItems: computeDisplayItems([img1, img2, img3], "triage", [group]),
+      currentView: "triage",
+      currentIndex: 0,
+      autoAdvance: false,
+      undoStack: [],
+      redoStack: [],
+    });
+
+    await useProjectStore.getState().setFlag("pick");
+    await useProjectStore.getState().undo();
+    await useProjectStore.getState().redo();
+
+    const state = useProjectStore.getState();
+    expect(state.images.every((i) => i.flag === "pick")).toBe(true);
+    expect(state.undoStack).toHaveLength(1);
+    expect(state.redoStack).toHaveLength(0);
+  });
+
+  test("undo of comparison quickPick restores BOTH images", async () => {
+    setupMockIpc({});
+
+    const img1 = makeImage({ id: 1, flag: "unreviewed" });
+    const img2 = makeImage({ id: 2, flag: "unreviewed" });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+    ]);
+
+    useProjectStore.setState({
+      images: [img1, img2],
+      groups: [group],
+      displayItems: computeDisplayItems([img1, img2], "select", [group]),
+      currentView: "select",
+      currentIndex: 0,
+      comparisonPinnedId: 1,
+      comparisonCyclingId: 2,
+      comparisonGroupMembers: [1, 2],
+      viewMode: "comparison",
+      undoStack: [],
+      redoStack: [],
+    });
+
+    await useProjectStore.getState().comparisonQuickPick("left");
+    expect(useProjectStore.getState().images.find((i) => i.id === 1)!.flag).toBe("pick");
+    expect(useProjectStore.getState().images.find((i) => i.id === 2)!.flag).toBe("reject");
+
+    await useProjectStore.getState().undo();
+
+    const state = useProjectStore.getState();
+    expect(state.images.find((i) => i.id === 1)!.flag).toBe("unreviewed");
+    expect(state.images.find((i) => i.id === 2)!.flag).toBe("unreviewed");
+  });
+
+  test("undo stack cap: each batch counts as one entry", async () => {
+    setupMockIpc({});
+
+    // 60 ungrouped single-flag actions should leave at most 50 entries.
+    const images = Array.from({ length: 60 }, (_, i) =>
+      makeImage({ id: i + 1, flag: "unreviewed" }),
+    );
+    useProjectStore.setState({
+      images,
+      groups: [],
+      displayItems: computeDisplayItems(images, "triage", []),
+      currentView: "triage",
+      currentIndex: 0,
+      autoAdvance: false,
+      undoStack: [],
+      redoStack: [],
+    });
+
+    for (let i = 0; i < 60; i++) {
+      useProjectStore.setState({ currentIndex: i });
+      await useProjectStore.getState().setFlag("pick");
+    }
+
+    // Cap keeps the 50 most recent entries (slice(-49) + the new one = 50).
+    expect(useProjectStore.getState().undoStack.length).toBeLessThanOrEqual(50);
+    expect(useProjectStore.getState().undoStack.length).toBeGreaterThan(0);
   });
 
   test("redo re-applies the flag", async () => {
