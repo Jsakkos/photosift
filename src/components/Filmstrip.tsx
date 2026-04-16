@@ -26,8 +26,16 @@ function Thumbnail({ imageId, filename }: { imageId: number; filename: string })
 }
 
 export function Filmstrip() {
-  const { displayItems, currentIndex, setCurrentIndex, currentView } = useProjectStore();
+  const { displayItems, currentIndex, setCurrentIndex, currentView, setViewMode } = useProjectStore();
   const listRef = useRef<List>(null);
+
+  const openLoupe = useCallback(
+    (index: number) => {
+      setCurrentIndex(index);
+      setViewMode("sequential");
+    },
+    [setCurrentIndex, setViewMode],
+  );
 
   useEffect(() => {
     if (listRef.current && displayItems.length > 0) {
@@ -49,6 +57,7 @@ export function Filmstrip() {
             style={style}
             className="flex items-center justify-center p-1"
             onClick={() => setCurrentIndex(index)}
+            onDoubleClick={() => openLoupe(index)}
           >
             <GroupStack
               imageId={image.id}
@@ -56,6 +65,7 @@ export function Filmstrip() {
               count={item.groupMemberCount}
               isCurrent={isCurrent}
               onClick={() => setCurrentIndex(index)}
+              onDoubleClick={() => openLoupe(index)}
             />
           </div>
         );
@@ -66,6 +76,7 @@ export function Filmstrip() {
           style={style}
           className="flex items-center justify-center p-1"
           onClick={() => setCurrentIndex(index)}
+          onDoubleClick={() => openLoupe(index)}
         >
           <div
             className={`relative cursor-pointer rounded overflow-hidden transition-all ${
@@ -99,7 +110,7 @@ export function Filmstrip() {
         </div>
       );
     },
-    [displayItems, currentIndex, setCurrentIndex, currentView],
+    [displayItems, currentIndex, setCurrentIndex, currentView, openLoupe],
   );
 
   if (displayItems.length === 0) return null;

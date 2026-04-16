@@ -3,7 +3,7 @@ import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 
 export function GroupStrip() {
-  const { displayItems, currentIndex, groups, currentView, images, setCurrentIndex } =
+  const { displayItems, currentIndex, groups, currentView, images, setCurrentIndex, setViewMode } =
     useProjectStore();
 
   const item = displayItems[currentIndex];
@@ -40,6 +40,15 @@ export function GroupStrip() {
                 );
                 if (idx >= 0) setCurrentIndex(idx);
               }}
+              onDoubleClick={() => {
+                const idx = displayItems.findIndex(
+                  (d) => d.image.id === member.photoId,
+                );
+                if (idx >= 0) {
+                  setCurrentIndex(idx);
+                  setViewMode("sequential");
+                }
+              }}
             />
           );
         })}
@@ -52,10 +61,12 @@ function GroupThumb({
   photoId,
   isActive,
   onClick,
+  onDoubleClick,
 }: {
   photoId: number;
   isActive: boolean;
   onClick: () => void;
+  onDoubleClick?: () => void;
 }) {
   const [loaded, setLoaded] = useState(false);
 
@@ -68,6 +79,7 @@ function GroupThumb({
       }`}
       style={{ width: 72, height: 54 }}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
     >
       <img
         src={thumbUrl(photoId)}

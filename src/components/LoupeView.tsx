@@ -50,7 +50,7 @@ export function LoupeView() {
 
   if (!currentImage || !displayUrl) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-[var(--bg-primary)]">
+      <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-primary)]">
         <p className="text-[var(--text-secondary)]">No image selected</p>
       </div>
     );
@@ -67,7 +67,7 @@ export function LoupeView() {
   return (
     <div
       ref={containerRef}
-      className="flex-1 relative overflow-hidden bg-[var(--bg-primary)]"
+      className="absolute inset-0 overflow-hidden bg-[var(--bg-primary)]"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}

@@ -7,9 +7,10 @@ interface GroupStackProps {
   count: number;
   isCurrent: boolean;
   onClick: () => void;
+  onDoubleClick?: () => void;
 }
 
-export function GroupStack({ imageId, filename, count, isCurrent, onClick }: GroupStackProps) {
+export function GroupStack({ imageId, filename, count, isCurrent, onClick, onDoubleClick }: GroupStackProps) {
   const [loaded, setLoaded] = useState(false);
 
   return (
@@ -17,6 +18,7 @@ export function GroupStack({ imageId, filename, count, isCurrent, onClick }: Gro
       className="relative cursor-pointer"
       style={{ width: 92, height: 72 }}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
     >
       {/* Shadow layers */}
       <div
