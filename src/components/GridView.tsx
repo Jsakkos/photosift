@@ -7,8 +7,15 @@ const SIZES = [100, 160, 240] as const;
 const CELL_GAP = 8;
 
 export function GridView() {
-  const { displayItems, setCurrentIndex, setFlag, setViewMode, currentView } =
-    useProjectStore();
+  const {
+    displayItems,
+    setCurrentIndex,
+    setFlag,
+    setViewMode,
+    currentView,
+    createGroupFromPhotos,
+    ungroupPhotos,
+  } = useProjectStore();
   const [colWidth, setColWidth] = useState<(typeof SIZES)[number]>(160);
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const [focusIndex, setFocusIndex] = useState(0);
@@ -119,6 +126,53 @@ export function GridView() {
     [selection, focusIndex, displayItems, setCurrentIndex, setFlag],
   );
 
+  const selectedPhotoIds = useMemo(
+    () =>
+      [...selection]
+        .map((idx) => displayItems[idx]?.image.id)
+        .filter((id): id is number => typeof id === "number"),
+    [selection, displayItems],
+  );
+
+  const anySelectedInGroup = useMemo(
+    () => [...selection].some((idx) => displayItems[idx]?.groupId !== undefined),
+    [selection, displayItems],
+  );
+
+  const handleGroup = useCallback(async () => {
+    if (selectedPhotoIds.length < 2) return;
+    await createGroupFromPhotos(selectedPhotoIds);
+    setSelection(new Set());
+  }, [selectedPhotoIds, createGroupFromPhotos]);
+
+  const handleUngroup = useCallback(async () => {
+    if (selectedPhotoIds.length === 0) return;
+    await ungroupPhotos(selectedPhotoIds);
+    setSelection(new Set());
+  }, [selectedPhotoIds, ungroupPhotos]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      )
+        return;
+      if (!e.ctrlKey) return;
+      if (e.key === "g" || e.key === "G") {
+        if (selectedPhotoIds.length === 0) return;
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleUngroup();
+        } else if (selectedPhotoIds.length >= 2) {
+          handleGroup();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedPhotoIds, handleGroup, handleUngroup]);
+
   const Cell = useMemo(
     () =>
       ({ columnIndex, rowIndex, style }: GridChildComponentProps) => {
@@ -224,6 +278,24 @@ export function GridView() {
             >
               U Reset
             </button>
+            {selection.size >= 2 && (
+              <button
+                onClick={handleGroup}
+                title="Group selected (Ctrl+G)"
+                className="px-3 py-1 rounded border border-[var(--accent)]/40 text-[var(--accent)] text-xs hover:bg-[var(--accent)]/10"
+              >
+                Group
+              </button>
+            )}
+            {anySelectedInGroup && (
+              <button
+                onClick={handleUngroup}
+                title="Ungroup selected (Ctrl+Shift+G)"
+                className="px-3 py-1 rounded border border-orange-400/40 text-orange-400 text-xs hover:bg-orange-400/10"
+              >
+                Ungroup
+              </button>
+            )}
             <button
               onClick={() => {
                 const idx = [...selection][0] ?? focusIndex;

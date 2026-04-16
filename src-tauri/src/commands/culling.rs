@@ -160,3 +160,33 @@ pub fn set_group_cover(
     db.set_group_cover(group_id, photo_id)
         .map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn create_group_from_photos(
+    shoot_id: i64,
+    photo_ids: Vec<i64>,
+    group_type: Option<String>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<i64, String> {
+    let gt = group_type.unwrap_or_else(|| "near_duplicate".into());
+    if gt != "near_duplicate" && gt != "related" {
+        return Err(format!("Invalid group_type: {gt}"));
+    }
+    let mut app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_mut().ok_or("Database not open")?;
+
+    db.create_group_with_members(shoot_id, &gt, &photo_ids)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn ungroup_photos(
+    photo_ids: Vec<i64>,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let mut app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_mut().ok_or("Database not open")?;
+
+    db.remove_photos_from_groups(&photo_ids)
+        .map_err(|e| e.to_string())
+}

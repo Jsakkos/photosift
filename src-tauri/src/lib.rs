@@ -50,6 +50,8 @@ pub fn run() {
             commands::culling::set_view_cursor,
             commands::culling::get_groups_for_shoot,
             commands::culling::set_group_cover,
+            commands::culling::create_group_from_photos,
+            commands::culling::ungroup_photos,
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::recluster_shoot,

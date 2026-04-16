@@ -38,6 +38,8 @@ export function setupMockIpc(
       case "undo_last":
       case "set_group_cover":
       case "update_settings":
+      case "create_group_from_photos":
+      case "ungroup_photos":
         return undefined;
       case "get_settings":
         return {

@@ -467,6 +467,41 @@ impl Database {
         Ok(())
     }
 
+    /// Create a new group from the given photo IDs. The first photo becomes
+    /// cover. Any listed photo that is already a member of another group is
+    /// removed from that group first; groups left with fewer than 2 members
+    /// are deleted. Returns the new group's id.
+    pub fn create_group_with_members(
+        &mut self,
+        shoot_id: i64,
+        group_type: &str,
+        photo_ids: &[i64],
+    ) -> Result<i64> {
+        if photo_ids.len() < 2 {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "need at least 2 photos to form a group".into(),
+            ));
+        }
+        // Detach from prior groups first so the new group is clean.
+        self.remove_photos_from_groups(photo_ids)?;
+
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO groups (shoot_id, group_type) VALUES (?1, ?2)",
+            params![shoot_id, group_type],
+        )?;
+        let group_id = tx.last_insert_rowid();
+        for (i, &pid) in photo_ids.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO group_members (group_id, photo_id, is_cover)
+                 VALUES (?1, ?2, ?3)",
+                params![group_id, pid, (i == 0) as i32],
+            )?;
+        }
+        tx.commit()?;
+        Ok(group_id)
+    }
+
     /// Remove one or more photos from any group they belong to. Any group
     /// left with fewer than 2 members is deleted.
     pub fn remove_photos_from_groups(&mut self, photo_ids: &[i64]) -> Result<()> {

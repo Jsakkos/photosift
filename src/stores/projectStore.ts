@@ -159,6 +159,8 @@ interface ProjectState {
   exitComparison: () => void;
   cycleComparison: (direction: 1 | -1) => void;
   comparisonQuickPick: (side: "left" | "right") => Promise<void>;
+  createGroupFromPhotos: (photoIds: number[]) => Promise<void>;
+  ungroupPhotos: (photoIds: number[]) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -864,6 +866,46 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     } else {
       const newCycling = available.find((id) => id !== rejectId) ?? available[0];
       set({ comparisonCyclingId: newCycling });
+    }
+  },
+
+  createGroupFromPhotos: async (photoIds: number[]) => {
+    const { currentShoot, images, currentView } = get();
+    if (!currentShoot || photoIds.length < 2) return;
+    try {
+      await invoke("create_group_from_photos", {
+        shootId: currentShoot.id,
+        photoIds,
+        groupType: "near_duplicate",
+      });
+      const groups = await invoke<Group[]>("get_groups_for_shoot", {
+        shootId: currentShoot.id,
+      });
+      set({
+        groups,
+        displayItems: computeDisplayItems(images, currentView, groups),
+      });
+    } catch (e) {
+      console.error("Create group failed:", e);
+      get().setToast(`Group failed: ${e}`, "error");
+    }
+  },
+
+  ungroupPhotos: async (photoIds: number[]) => {
+    const { currentShoot, images, currentView } = get();
+    if (!currentShoot || photoIds.length === 0) return;
+    try {
+      await invoke("ungroup_photos", { photoIds });
+      const groups = await invoke<Group[]>("get_groups_for_shoot", {
+        shootId: currentShoot.id,
+      });
+      set({
+        groups,
+        displayItems: computeDisplayItems(images, currentView, groups),
+      });
+    } catch (e) {
+      console.error("Ungroup failed:", e);
+      get().setToast(`Ungroup failed: ${e}`, "error");
     }
   },
 }));
