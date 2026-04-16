@@ -6,6 +6,8 @@ export function useKeyboardNav() {
     navigateNext,
     navigatePrev,
     setRating,
+    setFlag,
+    setDestination,
     undo,
     redo,
     toggleMetadata,
@@ -60,6 +62,13 @@ export function useKeyboardNav() {
         case "4": setRating(4); break;
         case "5": setRating(5); break;
         case "0": setRating(0); break;
+        case "p": case "P": setFlag("pick"); break;
+        case "x": case "X": setFlag("reject"); break;
+        case "u": case "U": setFlag("unreviewed"); break;
+        case "e":
+          if (!e.ctrlKey) setDestination("edit");
+          break;
+        case "d": case "D": setDestination("publish_direct"); break;
         case " ":
           e.preventDefault();
           toggleZoom();
@@ -77,7 +86,7 @@ export function useKeyboardNav() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
-    images.length, navigateNext, navigatePrev, setRating,
+    images.length, navigateNext, navigatePrev, setRating, setFlag, setDestination,
     undo, redo, toggleMetadata, toggleShortcutHints, toggleZoom,
   ]);
 }

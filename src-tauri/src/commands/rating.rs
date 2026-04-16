@@ -1,4 +1,3 @@
-use crate::metadata::xmp;
 use crate::state::AppState;
 use std::path::Path;
 use std::sync::Mutex;
@@ -22,16 +21,18 @@ pub fn set_rating(
     }
 
     let app_state = state.lock().map_err(|e| e.to_string())?;
-    let db = app_state.db.as_ref().ok_or("No project open")?;
+    let db = app_state.db.as_ref().ok_or("No shoot loaded")?;
 
-    db.set_star_rating(image_id, rating).map_err(|e| e.to_string())?;
+    db.set_star_rating(image_id, rating)
+        .map_err(|e| e.to_string())?;
 
-    let img = db.get_image_by_id(image_id).map_err(|e| e.to_string())?;
-    let filepath = img.filepath.clone();
+    let photo = db
+        .get_photo_by_id(image_id)
+        .map_err(|e| e.to_string())?;
 
-    drop(app_state);
-
-    xmp::write_rating(Path::new(&filepath), rating)?;
+    app_state
+        .xmp_queue
+        .enqueue(image_id, Path::new(&photo.raw_path), rating);
 
     Ok(RatingResult {
         image_id,

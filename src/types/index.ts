@@ -9,14 +9,17 @@ export interface ImageEntry {
   aperture: number | null;
   shutterSpeed: string | null;
   iso: number | null;
-  width: number | null;
-  height: number | null;
-  orientation: number | null;
+  flag: string;
+  destination: string;
   starRating: number;
 }
 
-export interface ProjectInfo {
-  folderPath: string;
-  imageCount: number;
-  lastViewedIndex: number;
+export interface ShootSummary {
+  id: number;
+  slug: string;
+  date: string;
+  sourcePath: string;
+  destPath: string;
+  photoCount: number;
+  importedAt: string;
 }

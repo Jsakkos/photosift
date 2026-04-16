@@ -20,7 +20,6 @@ export function MetadataOverlay() {
       .join("  \u00b7  ") || null,
     image.cameraModel,
     image.lens,
-    image.width && image.height ? `${image.width} \u00d7 ${image.height}` : null,
   ].filter(Boolean);
 
   return (

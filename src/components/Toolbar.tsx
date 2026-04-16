@@ -1,17 +1,28 @@
 import { useProjectStore } from "../stores/projectStore";
+import { useNavigate } from "react-router-dom";
 
 export function Toolbar() {
-  const { projectInfo, images, currentIndex, autoAdvance, toggleAutoAdvance } =
+  const { currentShoot, images, currentIndex, autoAdvance, toggleAutoAdvance } =
     useProjectStore();
+  const navigate = useNavigate();
 
-  if (!projectInfo) return null;
-
-  const folderName = projectInfo.folderPath.split(/[/\\]/).pop() || "Unknown";
+  if (!currentShoot) return null;
 
   return (
     <div className="flex items-center justify-between px-4 py-2 bg-[var(--bg-secondary)] border-b border-white/10 text-sm">
       <div className="flex items-center gap-4">
-        <span className="font-medium text-[var(--text-primary)]">{folderName}</span>
+        <button
+          onClick={() => navigate("/shoots")}
+          className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+        >
+          &larr; Shoots
+        </button>
+        <span className="font-medium text-[var(--text-primary)]">
+          {currentShoot.slug}
+        </span>
+        <span className="text-[var(--text-secondary)]">
+          {currentShoot.date}
+        </span>
         <span className="text-[var(--text-secondary)]">
           {images.length > 0 ? `${currentIndex + 1} / ${images.length}` : "No images"}
         </span>

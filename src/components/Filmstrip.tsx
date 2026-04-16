@@ -7,39 +7,18 @@ const THUMB_WIDTH = 100;
 const THUMB_HEIGHT = 80;
 const FILMSTRIP_HEIGHT = THUMB_HEIGHT + 8;
 
-// Thumbnail with retry — background thread may not have generated it yet
 function Thumbnail({ imageId, filename }: { imageId: number; filename: string }) {
-  const [retryCount, setRetryCount] = useState(0);
   const [loaded, setLoaded] = useState(false);
-  const imgRef = useRef<HTMLImageElement>(null);
-
-  // Retry loading every 2 seconds if not loaded (background thread is generating)
-  useEffect(() => {
-    if (loaded) return;
-    const timer = setInterval(() => {
-      setRetryCount((c) => c + 1);
-    }, 2000);
-    // Stop retrying after 3 minutes
-    const stop = setTimeout(() => clearInterval(timer), 180000);
-    return () => { clearInterval(timer); clearTimeout(stop); };
-  }, [loaded]);
-
-  const src = `${thumbUrl(imageId)}${retryCount > 0 ? `?r=${retryCount}` : ""}`;
 
   return (
     <img
-      ref={imgRef}
-      src={src}
+      src={thumbUrl(imageId)}
       alt={filename}
       className={`w-full h-full object-cover ${loaded ? "opacity-100" : "opacity-30"}`}
       loading="lazy"
       draggable={false}
       onLoad={(e) => {
-        // Check if it's a real thumbnail (not the 1x1 placeholder)
-        const img = e.currentTarget;
-        if (img.naturalWidth > 1) {
-          setLoaded(true);
-        }
+        if (e.currentTarget.naturalWidth > 1) setLoaded(true);
       }}
     />
   );
@@ -77,6 +56,12 @@ export function Filmstrip() {
             style={{ width: THUMB_WIDTH - 8, height: THUMB_HEIGHT - 8 }}
           >
             <Thumbnail imageId={image.id} filename={image.filename} />
+            {image.flag === "pick" && (
+              <div className="absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full bg-green-500" />
+            )}
+            {image.flag === "reject" && (
+              <div className="absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full bg-red-500" />
+            )}
             {image.starRating > 0 && (
               <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-0.5 bg-gradient-to-t from-black/60 to-transparent">
                 {Array.from({ length: image.starRating }, (_, i) => (

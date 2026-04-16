@@ -1,16 +1,16 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import type { ImageEntry, ProjectInfo } from "../types";
+import type { ImageEntry, ShootSummary } from "../types";
 
 interface UndoEntry {
   imageId: number;
-  field: "starRating";
-  oldValue: number;
-  newValue: number;
+  field: "starRating" | "flag" | "destination";
+  oldValue: string | number;
+  newValue: string | number;
 }
 
 interface ProjectState {
-  projectInfo: ProjectInfo | null;
+  currentShoot: ShootSummary | null;
   images: ImageEntry[];
   currentIndex: number;
   isLoading: boolean;
@@ -21,11 +21,13 @@ interface ProjectState {
   undoStack: UndoEntry[];
   redoStack: UndoEntry[];
 
-  openProject: (folderPath: string) => Promise<void>;
+  loadShoot: (shootId: number) => Promise<void>;
   setCurrentIndex: (index: number) => void;
   navigateNext: () => void;
   navigatePrev: () => void;
   setRating: (rating: number) => Promise<void>;
+  setFlag: (flag: string) => Promise<void>;
+  setDestination: (dest: string) => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   toggleMetadata: () => void;
@@ -35,7 +37,7 @@ interface ProjectState {
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
-  projectInfo: null,
+  currentShoot: null,
   images: [],
   currentIndex: 0,
   isLoading: false,
@@ -46,21 +48,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   undoStack: [],
   redoStack: [],
 
-  openProject: async (folderPath: string) => {
+  loadShoot: async (shootId: number) => {
     set({ isLoading: true });
     try {
-      const info = await invoke<ProjectInfo>("open_project", { folderPath });
+      const shoot = await invoke<ShootSummary>("get_shoot", { shootId });
       const images = await invoke<ImageEntry[]>("get_image_list");
       set({
-        projectInfo: info,
+        currentShoot: shoot,
         images,
-        currentIndex: info.lastViewedIndex,
+        currentIndex: 0,
         isLoading: false,
         undoStack: [],
         redoStack: [],
       });
     } catch (e) {
-      console.error("Failed to open project:", e);
+      console.error("Failed to load shoot:", e);
       set({ isLoading: false });
     }
   },
@@ -122,6 +124,74 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
+  setFlag: async (flag: string) => {
+    const { images, currentIndex, autoAdvance, undoStack } = get();
+    const image = images[currentIndex];
+    if (!image) return;
+
+    const oldFlag = image.flag;
+    if (oldFlag === flag) return;
+
+    const updatedImages = [...images];
+    updatedImages[currentIndex] = { ...image, flag };
+    set({
+      images: updatedImages,
+      undoStack: [
+        ...undoStack.slice(-49),
+        { imageId: image.id, field: "flag", oldValue: oldFlag, newValue: flag },
+      ],
+      redoStack: [],
+    });
+
+    if (autoAdvance && currentIndex < images.length - 1) {
+      set({ currentIndex: currentIndex + 1, isZoomed: false });
+    }
+
+    try {
+      await invoke("set_flag", { photoId: image.id, flag });
+    } catch (e) {
+      console.error("Failed to set flag:", e);
+      const revertImages = [...get().images];
+      const idx = revertImages.findIndex((img) => img.id === image.id);
+      if (idx >= 0) {
+        revertImages[idx] = { ...revertImages[idx], flag: oldFlag };
+        set({ images: revertImages });
+      }
+    }
+  },
+
+  setDestination: async (dest: string) => {
+    const { images, currentIndex, undoStack } = get();
+    const image = images[currentIndex];
+    if (!image) return;
+
+    const oldDest = image.destination;
+    if (oldDest === dest) return;
+
+    const updatedImages = [...images];
+    updatedImages[currentIndex] = { ...image, destination: dest };
+    set({
+      images: updatedImages,
+      undoStack: [
+        ...undoStack.slice(-49),
+        { imageId: image.id, field: "destination", oldValue: oldDest, newValue: dest },
+      ],
+      redoStack: [],
+    });
+
+    try {
+      await invoke("set_destination", { photoId: image.id, destination: dest });
+    } catch (e) {
+      console.error("Failed to set destination:", e);
+      const revertImages = [...get().images];
+      const idx = revertImages.findIndex((img) => img.id === image.id);
+      if (idx >= 0) {
+        revertImages[idx] = { ...revertImages[idx], destination: oldDest };
+        set({ images: revertImages });
+      }
+    }
+  },
+
   undo: async () => {
     const { undoStack, redoStack, images } = get();
     const entry = undoStack[undoStack.length - 1];
@@ -131,7 +201,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (idx < 0) return;
 
     const updatedImages = [...images];
-    updatedImages[idx] = { ...updatedImages[idx], starRating: entry.oldValue };
+    if (entry.field === "starRating") {
+      updatedImages[idx] = { ...updatedImages[idx], starRating: entry.oldValue as number };
+    } else if (entry.field === "flag") {
+      updatedImages[idx] = { ...updatedImages[idx], flag: entry.oldValue as string };
+    } else if (entry.field === "destination") {
+      updatedImages[idx] = { ...updatedImages[idx], destination: entry.oldValue as string };
+    }
 
     set({
       images: updatedImages,
@@ -141,7 +217,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
 
     try {
-      await invoke("set_rating", { imageId: entry.imageId, rating: entry.oldValue });
+      await invoke("undo_last");
     } catch (e) {
       console.error("Undo failed:", e);
     }
@@ -156,7 +232,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (idx < 0) return;
 
     const updatedImages = [...images];
-    updatedImages[idx] = { ...updatedImages[idx], starRating: entry.newValue };
+    if (entry.field === "starRating") {
+      updatedImages[idx] = { ...updatedImages[idx], starRating: entry.newValue as number };
+      await invoke("set_rating", { imageId: entry.imageId, rating: entry.newValue }).catch(() => {});
+    } else if (entry.field === "flag") {
+      updatedImages[idx] = { ...updatedImages[idx], flag: entry.newValue as string };
+      await invoke("set_flag", { photoId: entry.imageId, flag: entry.newValue }).catch(() => {});
+    } else if (entry.field === "destination") {
+      updatedImages[idx] = { ...updatedImages[idx], destination: entry.newValue as string };
+      await invoke("set_destination", { photoId: entry.imageId, destination: entry.newValue }).catch(() => {});
+    }
 
     set({
       images: updatedImages,
@@ -164,12 +249,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       undoStack: [...undoStack, entry],
       currentIndex: idx,
     });
-
-    try {
-      await invoke("set_rating", { imageId: entry.imageId, rating: entry.newValue });
-    } catch (e) {
-      console.error("Redo failed:", e);
-    }
   },
 
   toggleMetadata: () => set((s) => ({ showMetadata: !s.showMetadata })),

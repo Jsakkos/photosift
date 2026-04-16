@@ -14,6 +14,7 @@
     "@tauri-apps/plugin-dialog": "^2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-router-dom": "^7.14.1",
     "react-window": "^1.8.10",
     "zustand": "^5.0.0"
   },

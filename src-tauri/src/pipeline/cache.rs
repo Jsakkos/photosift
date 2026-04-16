@@ -27,6 +27,12 @@ impl ImageCache {
         }
     }
 
+    pub fn clear(&self) {
+        if let Ok(mut cache) = self.inner.lock() {
+            cache.clear();
+        }
+    }
+
     pub fn contains(&self, image_id: i64) -> bool {
         self.inner
             .lock()

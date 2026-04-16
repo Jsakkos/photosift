@@ -80,6 +80,17 @@ export function LoupeView() {
         style={imgStyle}
         draggable={false}
       />
+      {currentImage.flag !== "unreviewed" && (
+        <div
+          className={`absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-medium uppercase tracking-wide pointer-events-none ${
+            currentImage.flag === "pick"
+              ? "bg-green-500/80 text-white"
+              : "bg-red-500/80 text-white"
+          }`}
+        >
+          {currentImage.flag}
+        </div>
+      )}
     </div>
   );
 }
