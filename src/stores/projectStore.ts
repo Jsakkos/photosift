@@ -127,6 +127,7 @@ interface ProjectState {
   groups: Group[];
   displayItems: DisplayItem[];
   lastFlagAction: { color: string; timestamp: number } | null;
+  toast: { message: string; kind: "info" | "error"; timestamp: number } | null;
 
   loadShoot: (shootId: number) => Promise<void>;
   setCurrentIndex: (index: number) => void;
@@ -145,6 +146,8 @@ interface ProjectState {
   setViewMode: (mode: ViewMode) => void;
   advanceToNextUnreviewed: () => void;
   clearFlagFlash: () => void;
+  setToast: (message: string, kind?: "info" | "error") => void;
+  clearToast: () => void;
   currentImage: () => ImageEntry | null;
   setFlagNoAutoReject: (flag: string) => Promise<void>;
   setGroupCover: (groupId: number, photoId: number) => Promise<void>;
@@ -174,6 +177,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   groups: [],
   displayItems: [],
   lastFlagAction: null,
+  toast: null,
   comparisonPinnedId: null,
   comparisonCyclingId: null,
   comparisonGroupMembers: [],
@@ -663,6 +667,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   clearFlagFlash: () => set({ lastFlagAction: null }),
+
+  setToast: (message: string, kind: "info" | "error" = "info") =>
+    set({ toast: { message, kind, timestamp: Date.now() } }),
+  clearToast: () => set({ toast: null }),
 
   toggleMetadata: () => set((s) => ({ showMetadata: !s.showMetadata })),
   toggleShortcutHints: () =>

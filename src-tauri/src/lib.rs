@@ -53,6 +53,7 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::recluster_shoot,
+            commands::export::export_xmp,
         ]);
 
     let builder = protocol::register_protocol(builder);

@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { ShootListPage } from "./pages/ShootListPage";
 import { CullPage } from "./pages/CullPage";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { Toast } from "./components/Toast";
 import { useSettingsStore } from "./stores/settingsStore";
 
 function App() {
@@ -20,6 +21,7 @@ function App() {
         <Route path="/shoots/:id" element={<CullPage />} />
       </Routes>
       <SettingsDialog />
+      <Toast />
     </>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../stores/projectStore";
 import { useSettingsStore } from "../stores/settingsStore";
 
@@ -30,6 +31,8 @@ export function useKeyboardNav() {
     comparisonQuickPick,
   } = useProjectStore();
   const openSettings = useSettingsStore((s) => s.openDialog);
+  const setToast = useProjectStore((s) => s.setToast);
+  const currentShoot = useProjectStore((s) => s.currentShoot);
 
   useEffect(() => {
     if (displayItems.length === 0) return;
@@ -93,6 +96,16 @@ export function useKeyboardNav() {
       if (e.ctrlKey && e.key === "o") {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("photosift:open-folder"));
+        return;
+      }
+
+      if (e.ctrlKey && (e.key === "e" || e.key === "E")) {
+        e.preventDefault();
+        if (currentShoot) {
+          invoke<number>("export_xmp", { shootId: currentShoot.id, filter: "picks" })
+            .then((count) => setToast(`Exported ${count} XMP sidecar${count === 1 ? "" : "s"}`))
+            .catch((err) => setToast(`Export failed: ${err}`, "error"));
+        }
         return;
       }
 
@@ -257,5 +270,7 @@ export function useKeyboardNav() {
     cycleComparison,
     comparisonQuickPick,
     openSettings,
+    setToast,
+    currentShoot,
   ]);
 }

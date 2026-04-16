@@ -47,6 +47,8 @@ export function setupMockIpc(
         };
       case "recluster_shoot":
         return 0;
+      case "export_xmp":
+        return 0;
       default:
         throw new Error(`Unmocked IPC command: ${cmd}`);
     }

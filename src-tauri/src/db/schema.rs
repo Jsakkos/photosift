@@ -95,6 +95,11 @@ pub struct PhotoInsert {
     pub aperture: Option<f64>,
     pub shutter_speed: Option<String>,
     pub iso: Option<i32>,
+    /// Initial flag from EXIF/XMP sidecar at import time.
+    /// Defaults to "unreviewed" when not provided.
+    pub initial_flag: Option<String>,
+    /// Initial star rating from EXIF/XMP sidecar at import time.
+    pub initial_star_rating: Option<i32>,
 }
 
 impl Database {
@@ -298,10 +303,13 @@ impl Database {
                 "INSERT INTO photos (
                     shoot_id, filename, raw_path, preview_path, thumb_path,
                     content_hash, phash, exif_date, camera, lens,
-                    focal_length, aperture, shutter_speed, iso
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    focal_length, aperture, shutter_speed, iso,
+                    flag, star_rating
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             )?;
             for p in photos {
+                let flag = p.initial_flag.clone().unwrap_or_else(|| "unreviewed".into());
+                let rating = p.initial_star_rating.unwrap_or(0);
                 stmt.execute(params![
                     shoot_id,
                     p.filename,
@@ -317,6 +325,8 @@ impl Database {
                     p.aperture,
                     p.shutter_speed,
                     p.iso,
+                    flag,
+                    rating,
                 ])?;
                 ids.push(tx.last_insert_rowid());
             }
@@ -731,6 +741,8 @@ mod tests {
             aperture: Some(1.8),
             shutter_speed: Some("1/250".into()),
             iso: Some(400),
+            initial_flag: None,
+            initial_star_rating: None,
         }
     }
 

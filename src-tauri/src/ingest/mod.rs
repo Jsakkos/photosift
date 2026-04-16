@@ -8,7 +8,7 @@ pub mod thumbnail;
 pub mod walker;
 
 use crate::db::schema::{Database, PhotoInsert};
-use crate::metadata::exif;
+use crate::metadata::{exif, xmp};
 use progress::{ImportComplete, ImportPhase, ImportProgress};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -250,6 +250,15 @@ fn process_one_file(
     // 3. EXIF
     let exif_data = exif::extract_exif(src_path).ok();
 
+    // 3b. Look for an existing XMP sidecar next to the source file. If present,
+    // prefer its rating/label over EXIF (XMP is the more recently-written
+    // metadata when the user has culled in another tool like DxO or C1).
+    let sidecar_rating = xmp::read_rating(src_path);
+    let sidecar_flag = xmp::read_flag_from_label(src_path);
+    let initial_star_rating = sidecar_rating
+        .or_else(|| exif_data.as_ref().and_then(|e| e.rating));
+    let initial_flag = sidecar_flag;
+
     // 4. Copy to canonical location
     let dest = copy::plan_dest(shoot_dir, &filename);
     let raw_path = match copy::copy_file(src_path, &dest) {
@@ -300,6 +309,8 @@ fn process_one_file(
         aperture: exif_data.as_ref().and_then(|e| e.aperture),
         shutter_speed: exif_data.as_ref().and_then(|e| e.shutter_speed.clone()),
         iso: exif_data.as_ref().and_then(|e| e.iso),
+        initial_flag,
+        initial_star_rating,
     };
 
     ProcessedFile::Ingested(IngestedFile {

@@ -1,4 +1,4 @@
-use exif::{In, Reader, Tag, Value};
+use exif::{Context, In, Reader, Tag, Value};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -15,6 +15,9 @@ pub struct ExifData {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub orientation: Option<i32>,
+    /// XMP-compatible rating (0-5), read from EXIF Rating tag (0x4746)
+    /// or derived from RatingPercent (0x4749) as a fallback.
+    pub rating: Option<i32>,
 }
 
 pub fn extract_exif(path: &Path) -> Result<ExifData, String> {
@@ -73,6 +76,25 @@ pub fn extract_exif(path: &Path) -> Result<ExifData, String> {
         .get_field(Tag::Orientation, In::PRIMARY)
         .and_then(|f| f.value.get_uint(0).map(|v| v as i32));
 
+    // Rating (0x4746) preferred; fall back to RatingPercent (0x4749) mapped per
+    // Windows/Microsoft convention: 0, 25, 50, 75, 99/100 → 0..5. Both live in
+    // the primary TIFF IFD.
+    let rating = exif
+        .get_field(Tag(Context::Tiff, 0x4746), In::PRIMARY)
+        .and_then(|f| f.value.get_uint(0).map(|v| v as i32))
+        .or_else(|| {
+            exif.get_field(Tag(Context::Tiff, 0x4749), In::PRIMARY)
+                .and_then(|f| f.value.get_uint(0).map(|v| match v {
+                    0 => 0,
+                    1..=24 => 1,
+                    25..=49 => 2,
+                    50..=74 => 3,
+                    75..=98 => 4,
+                    _ => 5,
+                }))
+        })
+        .map(|r| r.clamp(0, 5));
+
     Ok(ExifData {
         capture_time,
         camera_model,
@@ -84,5 +106,6 @@ pub fn extract_exif(path: &Path) -> Result<ExifData, String> {
         width,
         height,
         orientation,
+        rating,
     })
 }
