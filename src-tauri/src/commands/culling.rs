@@ -1,4 +1,4 @@
-use crate::db::schema::UndoEntry;
+use crate::db::schema::{GroupData, UndoEntry};
 use crate::state::AppState;
 use std::sync::Mutex;
 use tauri::State;
@@ -96,5 +96,67 @@ pub fn undo_last(state: State<'_, Mutex<AppState>>) -> Result<Option<UndoEntry>,
     let shoot_id = app_state.current_shoot_id.ok_or("No shoot loaded")?;
 
     db.pop_undo(shoot_id, &app_state.session_id)
+        .map_err(|e| e.to_string())
+}
+
+const VALID_VIEWS: &[&str] = &["triage", "select", "route"];
+
+#[tauri::command]
+pub fn get_view_cursor(
+    shoot_id: i64,
+    view_name: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Option<i64>, String> {
+    if !VALID_VIEWS.contains(&view_name.as_str()) {
+        return Err(format!("Invalid view: {view_name}. Must be one of: {VALID_VIEWS:?}"));
+    }
+
+    let app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_ref().ok_or("Database not open")?;
+
+    db.get_view_cursor(shoot_id, &view_name)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_view_cursor(
+    shoot_id: i64,
+    view_name: String,
+    photo_id: i64,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    if !VALID_VIEWS.contains(&view_name.as_str()) {
+        return Err(format!("Invalid view: {view_name}. Must be one of: {VALID_VIEWS:?}"));
+    }
+
+    let app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_ref().ok_or("Database not open")?;
+
+    db.set_view_cursor(shoot_id, &view_name, photo_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_groups_for_shoot(
+    shoot_id: i64,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<GroupData>, String> {
+    let app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_ref().ok_or("Database not open")?;
+
+    db.get_groups_for_shoot(shoot_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_group_cover(
+    group_id: i64,
+    photo_id: i64,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_ref().ok_or("Database not open")?;
+
+    db.set_group_cover(group_id, photo_id)
         .map_err(|e| e.to_string())
 }

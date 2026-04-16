@@ -1,10 +1,10 @@
 import { useProjectStore } from "../stores/projectStore";
 
 export function MetadataOverlay() {
-  const { images, currentIndex, showMetadata } = useProjectStore();
+  const { displayItems, currentIndex, showMetadata } = useProjectStore();
   if (!showMetadata) return null;
 
-  const image = images[currentIndex];
+  const image = displayItems[currentIndex]?.image;
   if (!image) return null;
 
   const lines = [

@@ -25,20 +25,21 @@ function Thumbnail({ imageId, filename }: { imageId: number; filename: string })
 }
 
 export function Filmstrip() {
-  const { images, currentIndex, setCurrentIndex } = useProjectStore();
+  const { displayItems, currentIndex, setCurrentIndex } = useProjectStore();
   const listRef = useRef<List>(null);
 
   useEffect(() => {
-    if (listRef.current && images.length > 0) {
+    if (listRef.current && displayItems.length > 0) {
       listRef.current.scrollToItem(currentIndex, "center");
     }
-  }, [currentIndex, images.length]);
+  }, [currentIndex, displayItems.length]);
 
   const ThumbnailItem = useCallback(
     ({ index, style }: { index: number; style: React.CSSProperties }) => {
-      const image = images[index];
-      if (!image) return null;
+      const item = displayItems[index];
+      if (!item) return null;
 
+      const image = item.image;
       const isCurrent = index === currentIndex;
 
       return (
@@ -76,10 +77,10 @@ export function Filmstrip() {
         </div>
       );
     },
-    [images, currentIndex, setCurrentIndex],
+    [displayItems, currentIndex, setCurrentIndex],
   );
 
-  if (images.length === 0) return null;
+  if (displayItems.length === 0) return null;
 
   return (
     <div
@@ -90,7 +91,7 @@ export function Filmstrip() {
         ref={listRef}
         height={FILMSTRIP_HEIGHT}
         width={typeof window !== "undefined" ? window.innerWidth : 1400}
-        itemCount={images.length}
+        itemCount={displayItems.length}
         itemSize={THUMB_WIDTH}
         layout="horizontal"
         overscanCount={5}

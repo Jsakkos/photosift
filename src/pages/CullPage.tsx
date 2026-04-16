@@ -8,11 +8,14 @@ import { Toolbar } from "../components/Toolbar";
 import { RatingBar } from "../components/RatingBar";
 import { MetadataOverlay } from "../components/MetadataOverlay";
 import { ShortcutHints } from "../components/ShortcutHints";
+import { GroupStrip } from "../components/GroupStrip";
+import { GridView } from "../components/GridView";
+import { ComparisonView } from "../components/ComparisonView";
 
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { currentShoot, isLoading, loadShoot } = useProjectStore();
+  const { currentShoot, isLoading, loadShoot, viewMode } = useProjectStore();
   useKeyboardNav();
 
   useEffect(() => {
@@ -43,13 +46,22 @@ export function CullPage() {
   return (
     <div className="h-screen w-screen flex flex-col bg-[var(--bg-primary)]">
       <Toolbar />
-      <div className="flex-1 relative overflow-hidden">
-        <LoupeView />
-        <MetadataOverlay />
-        <ShortcutHints />
-      </div>
-      <Filmstrip />
-      <RatingBar />
+      {viewMode === "grid" ? (
+        <GridView />
+      ) : viewMode === "comparison" ? (
+        <ComparisonView />
+      ) : (
+        <>
+          <div className="flex-1 relative overflow-hidden">
+            <LoupeView />
+            <MetadataOverlay />
+            <ShortcutHints />
+          </div>
+          <GroupStrip />
+          <Filmstrip />
+          <RatingBar />
+        </>
+      )}
     </div>
   );
 }

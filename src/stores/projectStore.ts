@@ -1,12 +1,110 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import type { ImageEntry, ShootSummary } from "../types";
+import type {
+  ImageEntry,
+  ShootSummary,
+  CullView,
+  ViewMode,
+  DisplayItem,
+  Group,
+} from "../types";
 
 interface UndoEntry {
   imageId: number;
   field: "starRating" | "flag" | "destination";
   oldValue: string | number;
   newValue: string | number;
+  batchSize?: number;
+}
+
+function buildPhotoGroupMap(groups: Group[]): Map<number, Group> {
+  const map = new Map<number, Group>();
+  for (const g of groups) {
+    for (const m of g.members) {
+      map.set(m.photoId, g);
+    }
+  }
+  return map;
+}
+
+function getGroupCover(group: Group): number {
+  const cover = group.members.find((m) => m.isCover);
+  return cover ? cover.photoId : group.members[0].photoId;
+}
+
+function computeDisplayItems(
+  images: ImageEntry[],
+  currentView: CullView,
+  groups: Group[],
+): DisplayItem[] {
+  const items: DisplayItem[] = [];
+  const photoGroupMap = buildPhotoGroupMap(groups);
+
+  if (currentView === "triage") {
+    const seenGroups = new Set<number>();
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      if (img.flag !== "unreviewed") continue;
+
+      const group = photoGroupMap.get(img.id);
+      if (group) {
+        if (seenGroups.has(group.id)) continue;
+        seenGroups.add(group.id);
+        const coverId = getGroupCover(group);
+        const coverIdx = images.findIndex((im) => im.id === coverId);
+        const coverImg = coverIdx >= 0 ? images[coverIdx] : img;
+        const actualIdx = coverIdx >= 0 ? coverIdx : i;
+        const unrevCount = group.members.filter((m) => {
+          const mi = images.find((im) => im.id === m.photoId);
+          return mi && mi.flag === "unreviewed";
+        }).length;
+        if (unrevCount === 0) continue;
+        items.push({
+          imageIndex: actualIdx,
+          image: coverImg,
+          groupId: group.id,
+          isGroupCover: true,
+          groupMemberCount: group.members.length,
+        });
+      } else {
+        items.push({ imageIndex: i, image: img });
+      }
+    }
+  } else if (currentView === "select") {
+    const seenGroups = new Set<number>();
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      if (img.flag === "reject") continue;
+
+      const group = photoGroupMap.get(img.id);
+      if (group) {
+        if (seenGroups.has(group.id)) continue;
+        seenGroups.add(group.id);
+        for (const member of group.members) {
+          const memberIdx = images.findIndex((im) => im.id === member.photoId);
+          if (memberIdx < 0) continue;
+          const memberImg = images[memberIdx];
+          if (memberImg.flag === "reject") continue;
+          items.push({
+            imageIndex: memberIdx,
+            image: memberImg,
+            groupId: group.id,
+          });
+        }
+      } else {
+        items.push({ imageIndex: i, image: img });
+      }
+    }
+  } else {
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      if (img.flag === "pick" && img.destination === "unrouted") {
+        items.push({ imageIndex: i, image: img });
+      }
+    }
+  }
+
+  return items;
 }
 
 interface ProjectState {
@@ -20,6 +118,11 @@ interface ProjectState {
   isZoomed: boolean;
   undoStack: UndoEntry[];
   redoStack: UndoEntry[];
+  currentView: CullView;
+  viewMode: ViewMode;
+  groups: Group[];
+  displayItems: DisplayItem[];
+  lastFlagAction: { color: string; timestamp: number } | null;
 
   loadShoot: (shootId: number) => Promise<void>;
   setCurrentIndex: (index: number) => void;
@@ -34,6 +137,21 @@ interface ProjectState {
   toggleShortcutHints: () => void;
   toggleAutoAdvance: () => void;
   toggleZoom: () => void;
+  setView: (view: CullView) => Promise<void>;
+  setViewMode: (mode: ViewMode) => void;
+  advanceToNextUnreviewed: () => void;
+  clearFlagFlash: () => void;
+  currentImage: () => ImageEntry | null;
+  setFlagNoAutoReject: (flag: string) => Promise<void>;
+  setGroupCover: (groupId: number, photoId: number) => Promise<void>;
+  getGroupForCurrentItem: () => Group | null;
+  comparisonPinnedId: number | null;
+  comparisonCyclingId: number | null;
+  comparisonGroupMembers: number[];
+  enterComparison: () => void;
+  exitComparison: () => void;
+  cycleComparison: (direction: 1 | -1) => void;
+  comparisonQuickPick: (side: "left" | "right") => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -47,19 +165,55 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   isZoomed: false,
   undoStack: [],
   redoStack: [],
+  currentView: "triage",
+  viewMode: "sequential",
+  groups: [],
+  displayItems: [],
+  lastFlagAction: null,
+  comparisonPinnedId: null,
+  comparisonCyclingId: null,
+  comparisonGroupMembers: [],
+
+  currentImage: () => {
+    const { displayItems, currentIndex } = get();
+    return displayItems[currentIndex]?.image ?? null;
+  },
 
   loadShoot: async (shootId: number) => {
     set({ isLoading: true });
     try {
       const shoot = await invoke<ShootSummary>("get_shoot", { shootId });
       const images = await invoke<ImageEntry[]>("get_image_list");
+
+      const groups = await invoke<Group[]>("get_groups_for_shoot", {
+        shootId,
+      }).catch(() => [] as Group[]);
+
+      const cursor = await invoke<number | null>("get_view_cursor", {
+        shootId,
+        viewName: "triage",
+      }).catch(() => null);
+
+      const displayItems = computeDisplayItems(images, "triage", groups);
+
+      let startIndex = 0;
+      if (cursor !== null) {
+        const idx = displayItems.findIndex((d) => d.image.id === cursor);
+        if (idx >= 0) startIndex = idx;
+      }
+
       set({
         currentShoot: shoot,
         images,
-        currentIndex: 0,
+        currentIndex: startIndex,
         isLoading: false,
         undoStack: [],
         redoStack: [],
+        currentView: "triage",
+        viewMode: "sequential",
+        groups,
+        displayItems,
+        lastFlagAction: null,
       });
     } catch (e) {
       console.error("Failed to load shoot:", e);
@@ -68,15 +222,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setCurrentIndex: (index: number) => {
-    const { images } = get();
-    if (index >= 0 && index < images.length) {
+    const { displayItems } = get();
+    if (index >= 0 && index < displayItems.length) {
       set({ currentIndex: index, isZoomed: false });
     }
   },
 
   navigateNext: () => {
-    const { currentIndex, images } = get();
-    if (currentIndex < images.length - 1) {
+    const { currentIndex, displayItems } = get();
+    if (currentIndex < displayItems.length - 1) {
       set({ currentIndex: currentIndex + 1, isZoomed: false });
     }
   },
@@ -89,25 +243,39 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setRating: async (rating: number) => {
-    const { images, currentIndex, autoAdvance, undoStack } = get();
-    const image = images[currentIndex];
-    if (!image) return;
+    const { displayItems, currentIndex, autoAdvance, undoStack, images } =
+      get();
+    const item = displayItems[currentIndex];
+    if (!item) return;
 
+    const image = item.image;
     const oldRating = image.starRating;
     if (oldRating === rating) return;
 
     const updatedImages = [...images];
-    updatedImages[currentIndex] = { ...image, starRating: rating };
+    updatedImages[item.imageIndex] = { ...image, starRating: rating };
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      get().currentView,
+      get().groups,
+    );
+
     set({
       images: updatedImages,
+      displayItems: newDisplayItems,
       undoStack: [
         ...undoStack.slice(-49),
-        { imageId: image.id, field: "starRating", oldValue: oldRating, newValue: rating },
+        {
+          imageId: image.id,
+          field: "starRating",
+          oldValue: oldRating,
+          newValue: rating,
+        },
       ],
       redoStack: [],
     });
 
-    if (autoAdvance && currentIndex < images.length - 1) {
+    if (autoAdvance && currentIndex < newDisplayItems.length - 1) {
       set({ currentIndex: currentIndex + 1, isZoomed: false });
     }
 
@@ -119,81 +287,198 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
         revertImages[idx] = { ...revertImages[idx], starRating: oldRating };
-        set({ images: revertImages });
+        set({
+          images: revertImages,
+          displayItems: computeDisplayItems(
+            revertImages,
+            get().currentView,
+            get().groups,
+          ),
+        });
       }
     }
   },
 
   setFlag: async (flag: string) => {
-    const { images, currentIndex, autoAdvance, undoStack } = get();
-    const image = images[currentIndex];
-    if (!image) return;
+    const {
+      displayItems,
+      currentIndex,
+      autoAdvance,
+      undoStack,
+      images,
+      currentView,
+      groups,
+    } = get();
+    const item = displayItems[currentIndex];
+    if (!item) return;
 
+    const image = item.image;
     const oldFlag = image.flag;
     if (oldFlag === flag) return;
 
     const updatedImages = [...images];
-    updatedImages[currentIndex] = { ...image, flag };
+    const affectedIds: { id: number; oldFlag: string }[] = [];
+
+    if (item.groupId && currentView === "triage" && item.isGroupCover) {
+      const group = groups.find((g) => g.id === item.groupId);
+      if (group) {
+        for (const member of group.members) {
+          const mi = updatedImages.findIndex((im) => im.id === member.photoId);
+          if (mi >= 0) {
+            affectedIds.push({ id: member.photoId, oldFlag: updatedImages[mi].flag });
+            updatedImages[mi] = { ...updatedImages[mi], flag };
+          }
+        }
+      }
+    } else if (item.groupId && currentView === "select" && flag === "pick") {
+      updatedImages[item.imageIndex] = { ...image, flag };
+      affectedIds.push({ id: image.id, oldFlag });
+      const group = groups.find((g) => g.id === item.groupId);
+      if (group) {
+        const siblingIds: number[] = [];
+        for (const member of group.members) {
+          if (member.photoId === image.id) continue;
+          const mi = updatedImages.findIndex((im) => im.id === member.photoId);
+          if (mi >= 0 && updatedImages[mi].flag !== "reject") {
+            affectedIds.push({ id: member.photoId, oldFlag: updatedImages[mi].flag });
+            updatedImages[mi] = { ...updatedImages[mi], flag: "reject" };
+            siblingIds.push(member.photoId);
+          }
+        }
+        if (siblingIds.length > 0) {
+          invoke("bulk_set_flag", { photoIds: siblingIds, flag: "reject" }).catch(() => {});
+        }
+      }
+    } else {
+      updatedImages[item.imageIndex] = { ...image, flag };
+      affectedIds.push({ id: image.id, oldFlag });
+    }
+
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups);
+
+    const flashColor =
+      flag === "pick"
+        ? "rgba(34, 197, 94, 0.15)"
+        : flag === "reject"
+          ? "rgba(239, 68, 68, 0.15)"
+          : null;
+
+    const batchSize = affectedIds.length;
     set({
       images: updatedImages,
+      displayItems: newDisplayItems,
       undoStack: [
         ...undoStack.slice(-49),
-        { imageId: image.id, field: "flag", oldValue: oldFlag, newValue: flag },
+        { imageId: image.id, field: "flag", oldValue: oldFlag, newValue: flag, batchSize },
       ],
       redoStack: [],
+      lastFlagAction: flashColor
+        ? { color: flashColor, timestamp: Date.now() }
+        : get().lastFlagAction,
     });
 
-    if (autoAdvance && currentIndex < images.length - 1) {
-      set({ currentIndex: currentIndex + 1, isZoomed: false });
+    if (autoAdvance) {
+      const clampedIndex = Math.min(currentIndex, Math.max(0, newDisplayItems.length - 1));
+      setTimeout(() => {
+        set({ currentIndex: clampedIndex, isZoomed: false });
+      }, 150);
+    } else {
+      const clampedIndex = Math.min(currentIndex, Math.max(0, newDisplayItems.length - 1));
+      if (clampedIndex !== currentIndex) {
+        set({ currentIndex: clampedIndex });
+      }
     }
 
     try {
-      await invoke("set_flag", { photoId: image.id, flag });
+      if (item.groupId && currentView === "triage" && item.isGroupCover) {
+        const allIds = affectedIds.map((a) => a.id);
+        await invoke("bulk_set_flag", { photoIds: allIds, flag });
+      } else {
+        await invoke("set_flag", { photoId: image.id, flag });
+      }
     } catch (e) {
       console.error("Failed to set flag:", e);
       const revertImages = [...get().images];
-      const idx = revertImages.findIndex((img) => img.id === image.id);
-      if (idx >= 0) {
-        revertImages[idx] = { ...revertImages[idx], flag: oldFlag };
-        set({ images: revertImages });
+      for (const a of affectedIds) {
+        const idx = revertImages.findIndex((img) => img.id === a.id);
+        if (idx >= 0) {
+          revertImages[idx] = { ...revertImages[idx], flag: a.oldFlag };
+        }
       }
+      set({
+        images: revertImages,
+        displayItems: computeDisplayItems(
+          revertImages,
+          get().currentView,
+          get().groups,
+        ),
+      });
     }
   },
 
   setDestination: async (dest: string) => {
-    const { images, currentIndex, undoStack } = get();
-    const image = images[currentIndex];
-    if (!image) return;
+    const { displayItems, currentIndex, undoStack, images, currentView, groups } =
+      get();
+    const item = displayItems[currentIndex];
+    if (!item) return;
 
+    const image = item.image;
     const oldDest = image.destination;
     if (oldDest === dest) return;
 
     const updatedImages = [...images];
-    updatedImages[currentIndex] = { ...image, destination: dest };
+    updatedImages[item.imageIndex] = { ...image, destination: dest };
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+    );
+
     set({
       images: updatedImages,
+      displayItems: newDisplayItems,
       undoStack: [
         ...undoStack.slice(-49),
-        { imageId: image.id, field: "destination", oldValue: oldDest, newValue: dest },
+        {
+          imageId: image.id,
+          field: "destination",
+          oldValue: oldDest,
+          newValue: dest,
+        },
       ],
       redoStack: [],
     });
 
+    const clampedIndex = Math.min(currentIndex, newDisplayItems.length - 1);
+    if (clampedIndex !== currentIndex && clampedIndex >= 0) {
+      set({ currentIndex: clampedIndex });
+    }
+
     try {
-      await invoke("set_destination", { photoId: image.id, destination: dest });
+      await invoke("set_destination", {
+        photoId: image.id,
+        destination: dest,
+      });
     } catch (e) {
       console.error("Failed to set destination:", e);
       const revertImages = [...get().images];
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
         revertImages[idx] = { ...revertImages[idx], destination: oldDest };
-        set({ images: revertImages });
+        set({
+          images: revertImages,
+          displayItems: computeDisplayItems(
+            revertImages,
+            get().currentView,
+            get().groups,
+          ),
+        });
       }
     }
   },
 
   undo: async () => {
-    const { undoStack, redoStack, images } = get();
+    const { undoStack, redoStack, images, currentView, groups } = get();
     const entry = undoStack[undoStack.length - 1];
     if (!entry) return;
 
@@ -202,18 +487,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     if (entry.field === "starRating") {
-      updatedImages[idx] = { ...updatedImages[idx], starRating: entry.oldValue as number };
+      updatedImages[idx] = {
+        ...updatedImages[idx],
+        starRating: entry.oldValue as number,
+      };
     } else if (entry.field === "flag") {
-      updatedImages[idx] = { ...updatedImages[idx], flag: entry.oldValue as string };
+      updatedImages[idx] = {
+        ...updatedImages[idx],
+        flag: entry.oldValue as string,
+      };
     } else if (entry.field === "destination") {
-      updatedImages[idx] = { ...updatedImages[idx], destination: entry.oldValue as string };
+      updatedImages[idx] = {
+        ...updatedImages[idx],
+        destination: entry.oldValue as string,
+      };
     }
+
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+    );
+    const displayIdx = newDisplayItems.findIndex(
+      (d) => d.image.id === entry.imageId,
+    );
 
     set({
       images: updatedImages,
+      displayItems: newDisplayItems,
       undoStack: undoStack.slice(0, -1),
       redoStack: [...redoStack, entry],
-      currentIndex: idx,
+      currentIndex: displayIdx >= 0 ? displayIdx : 0,
     });
 
     try {
@@ -224,7 +528,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   redo: async () => {
-    const { redoStack, undoStack, images } = get();
+    const { redoStack, undoStack, images, currentView, groups } = get();
     const entry = redoStack[redoStack.length - 1];
     if (!entry) return;
 
@@ -233,26 +537,290 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     if (entry.field === "starRating") {
-      updatedImages[idx] = { ...updatedImages[idx], starRating: entry.newValue as number };
-      await invoke("set_rating", { imageId: entry.imageId, rating: entry.newValue }).catch(() => {});
+      updatedImages[idx] = {
+        ...updatedImages[idx],
+        starRating: entry.newValue as number,
+      };
+      await invoke("set_rating", {
+        imageId: entry.imageId,
+        rating: entry.newValue,
+      }).catch(() => {});
     } else if (entry.field === "flag") {
-      updatedImages[idx] = { ...updatedImages[idx], flag: entry.newValue as string };
-      await invoke("set_flag", { photoId: entry.imageId, flag: entry.newValue }).catch(() => {});
+      updatedImages[idx] = {
+        ...updatedImages[idx],
+        flag: entry.newValue as string,
+      };
+      await invoke("set_flag", {
+        photoId: entry.imageId,
+        flag: entry.newValue,
+      }).catch(() => {});
     } else if (entry.field === "destination") {
-      updatedImages[idx] = { ...updatedImages[idx], destination: entry.newValue as string };
-      await invoke("set_destination", { photoId: entry.imageId, destination: entry.newValue }).catch(() => {});
+      updatedImages[idx] = {
+        ...updatedImages[idx],
+        destination: entry.newValue as string,
+      };
+      await invoke("set_destination", {
+        photoId: entry.imageId,
+        destination: entry.newValue,
+      }).catch(() => {});
     }
+
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+    );
 
     set({
       images: updatedImages,
+      displayItems: newDisplayItems,
       redoStack: redoStack.slice(0, -1),
       undoStack: [...undoStack, entry],
-      currentIndex: idx,
+      currentIndex:
+        newDisplayItems.findIndex((d) => d.image.id === entry.imageId) || 0,
     });
   },
 
+  setView: async (view: CullView) => {
+    const { currentShoot, displayItems, currentIndex, images, groups } = get();
+    if (!currentShoot) return;
+
+    const currentPhotoId = displayItems[currentIndex]?.image.id;
+    if (currentPhotoId !== undefined) {
+      invoke("set_view_cursor", {
+        shootId: currentShoot.id,
+        viewName: get().currentView,
+        photoId: currentPhotoId,
+      }).catch(() => {});
+    }
+
+    const newDisplayItems = computeDisplayItems(images, view, groups);
+
+    let newIndex = 0;
+    try {
+      const cursor = await invoke<number | null>("get_view_cursor", {
+        shootId: currentShoot.id,
+        viewName: view,
+      });
+      if (cursor !== null) {
+        const idx = newDisplayItems.findIndex((d) => d.image.id === cursor);
+        if (idx >= 0) newIndex = idx;
+      }
+    } catch {
+      // no saved cursor
+    }
+
+    set({
+      currentView: view,
+      displayItems: newDisplayItems,
+      currentIndex: newIndex,
+      isZoomed: false,
+      showMetadata: view === "route" ? true : get().showMetadata,
+    });
+  },
+
+  setViewMode: (mode: ViewMode) => set({ viewMode: mode }),
+
+  advanceToNextUnreviewed: () => {
+    const { displayItems, currentIndex } = get();
+    for (let i = currentIndex + 1; i < displayItems.length; i++) {
+      if (displayItems[i].image.flag === "unreviewed") {
+        set({ currentIndex: i, isZoomed: false });
+        return;
+      }
+    }
+    for (let i = 0; i < currentIndex; i++) {
+      if (displayItems[i].image.flag === "unreviewed") {
+        set({ currentIndex: i, isZoomed: false });
+        return;
+      }
+    }
+  },
+
+  clearFlagFlash: () => set({ lastFlagAction: null }),
+
   toggleMetadata: () => set((s) => ({ showMetadata: !s.showMetadata })),
-  toggleShortcutHints: () => set((s) => ({ showShortcutHints: !s.showShortcutHints })),
+  toggleShortcutHints: () =>
+    set((s) => ({ showShortcutHints: !s.showShortcutHints })),
   toggleAutoAdvance: () => set((s) => ({ autoAdvance: !s.autoAdvance })),
   toggleZoom: () => set((s) => ({ isZoomed: !s.isZoomed })),
+
+  setFlagNoAutoReject: async (flag: string) => {
+    const { displayItems, currentIndex, autoAdvance, undoStack, images, currentView, groups } = get();
+    const item = displayItems[currentIndex];
+    if (!item) return;
+
+    const image = item.image;
+    const oldFlag = image.flag;
+    if (oldFlag === flag) return;
+
+    const updatedImages = [...images];
+    updatedImages[item.imageIndex] = { ...image, flag };
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups);
+
+    const flashColor = flag === "pick" ? "rgba(34, 197, 94, 0.15)" : flag === "reject" ? "rgba(239, 68, 68, 0.15)" : null;
+
+    set({
+      images: updatedImages,
+      displayItems: newDisplayItems,
+      undoStack: [...undoStack.slice(-49), { imageId: image.id, field: "flag", oldValue: oldFlag, newValue: flag }],
+      redoStack: [],
+      lastFlagAction: flashColor ? { color: flashColor, timestamp: Date.now() } : get().lastFlagAction,
+    });
+
+    if (autoAdvance) {
+      const clampedIndex = Math.min(currentIndex, Math.max(0, newDisplayItems.length - 1));
+      setTimeout(() => {
+        set({ currentIndex: clampedIndex, isZoomed: false });
+      }, 150);
+    }
+
+    try {
+      await invoke("set_flag", { photoId: image.id, flag });
+    } catch (e) {
+      console.error("Failed to set flag:", e);
+      const revertImages = [...get().images];
+      const idx = revertImages.findIndex((img) => img.id === image.id);
+      if (idx >= 0) {
+        revertImages[idx] = { ...revertImages[idx], flag: oldFlag };
+        set({ images: revertImages, displayItems: computeDisplayItems(revertImages, get().currentView, get().groups) });
+      }
+    }
+  },
+
+  setGroupCover: async (groupId: number, photoId: number) => {
+    const { groups } = get();
+    const updatedGroups = groups.map((g) => {
+      if (g.id !== groupId) return g;
+      return {
+        ...g,
+        members: g.members.map((m) => ({ ...m, isCover: m.photoId === photoId })),
+      };
+    });
+
+    set({ groups: updatedGroups });
+
+    try {
+      await invoke("set_group_cover", { groupId, photoId });
+    } catch (e) {
+      console.error("Failed to set group cover:", e);
+      set({ groups });
+    }
+  },
+
+  getGroupForCurrentItem: () => {
+    const { displayItems, currentIndex, groups } = get();
+    const item = displayItems[currentIndex];
+    if (!item?.groupId) return null;
+    return groups.find((g) => g.id === item.groupId) ?? null;
+  },
+
+  enterComparison: () => {
+    const { displayItems, currentIndex, groups, currentView, images } = get();
+    if (currentView !== "select") return;
+    const item = displayItems[currentIndex];
+    if (!item?.groupId) return;
+
+    const group = groups.find((g) => g.id === item.groupId);
+    if (!group) return;
+
+    const memberIds = group.members
+      .filter((m) => {
+        const img = images.find((i) => i.id === m.photoId);
+        return img && img.flag !== "reject";
+      })
+      .map((m) => m.photoId);
+
+    if (memberIds.length < 2) return;
+
+    const pinnedId = item.image.id;
+    const cyclingId = memberIds.find((id) => id !== pinnedId) ?? memberIds[0];
+
+    set({
+      viewMode: "comparison",
+      comparisonPinnedId: pinnedId,
+      comparisonCyclingId: cyclingId,
+      comparisonGroupMembers: memberIds,
+    });
+  },
+
+  exitComparison: () => {
+    const { comparisonPinnedId, displayItems } = get();
+    const idx = displayItems.findIndex(
+      (d) => d.image.id === comparisonPinnedId,
+    );
+    set({
+      viewMode: "sequential",
+      currentIndex: idx >= 0 ? idx : 0,
+      comparisonPinnedId: null,
+      comparisonCyclingId: null,
+      comparisonGroupMembers: [],
+    });
+  },
+
+  cycleComparison: (direction: 1 | -1) => {
+    const { comparisonCyclingId, comparisonPinnedId, comparisonGroupMembers, images } = get();
+    const available = comparisonGroupMembers.filter((id) => {
+      if (id === comparisonPinnedId) return false;
+      const img = images.find((i) => i.id === id);
+      return img && img.flag !== "reject";
+    });
+    if (available.length === 0) return;
+
+    const curIdx = available.indexOf(comparisonCyclingId!);
+    let nextIdx = curIdx + direction;
+    if (nextIdx < 0) nextIdx = available.length - 1;
+    if (nextIdx >= available.length) nextIdx = 0;
+
+    set({ comparisonCyclingId: available[nextIdx] });
+  },
+
+  comparisonQuickPick: async (side: "left" | "right") => {
+    const { comparisonPinnedId, comparisonCyclingId, images, currentView, groups, undoStack } = get();
+    if (!comparisonPinnedId || !comparisonCyclingId) return;
+
+    const pickId = side === "left" ? comparisonPinnedId : comparisonCyclingId;
+    const rejectId = side === "left" ? comparisonCyclingId : comparisonPinnedId;
+
+    const updatedImages = [...images];
+    const pickIdx = updatedImages.findIndex((i) => i.id === pickId);
+    const rejectIdx = updatedImages.findIndex((i) => i.id === rejectId);
+    if (pickIdx < 0 || rejectIdx < 0) return;
+
+    const oldPickFlag = updatedImages[pickIdx].flag;
+    updatedImages[pickIdx] = { ...updatedImages[pickIdx], flag: "pick" };
+    updatedImages[rejectIdx] = { ...updatedImages[rejectIdx], flag: "reject" };
+
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups);
+
+    set({
+      images: updatedImages,
+      displayItems: newDisplayItems,
+      undoStack: [
+        ...undoStack.slice(-49),
+        { imageId: pickId, field: "flag", oldValue: oldPickFlag, newValue: "pick", batchSize: 2 },
+      ],
+      redoStack: [],
+      lastFlagAction: { color: "rgba(34, 197, 94, 0.15)", timestamp: Date.now() },
+    });
+
+    try {
+      await invoke("set_flag", { photoId: pickId, flag: "pick" });
+      await invoke("set_flag", { photoId: rejectId, flag: "reject" });
+    } catch (e) {
+      console.error("Failed quick pick:", e);
+    }
+
+    const available = get().comparisonGroupMembers.filter((id) => {
+      if (id === comparisonPinnedId) return false;
+      const img = get().images.find((i) => i.id === id);
+      return img && img.flag !== "reject";
+    });
+    if (available.length < 1) {
+      get().exitComparison();
+    } else {
+      const newCycling = available.find((id) => id !== rejectId) ?? available[0];
+      set({ comparisonCyclingId: newCycling });
+    }
+  },
 }));

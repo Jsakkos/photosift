@@ -1,10 +1,11 @@
 import { useRef, useState, useCallback } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
+import { FlagFlash } from "./FlagFlash";
 
 export function LoupeView() {
-  const { images, currentIndex, isZoomed, toggleZoom } = useProjectStore();
-  const currentImage = images[currentIndex] ?? null;
+  const { displayItems, currentIndex, isZoomed, toggleZoom, currentView } = useProjectStore();
+  const currentImage = displayItems[currentIndex]?.image ?? null;
   const { displayUrl } = useImageLoader(currentImage?.id ?? null);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -80,6 +81,17 @@ export function LoupeView() {
         style={imgStyle}
         draggable={false}
       />
+      <FlagFlash />
+      {currentView === "triage" && displayItems[currentIndex]?.isGroupCover && (
+        <div className="absolute top-4 right-4 px-3 py-1.5 rounded-md bg-[var(--accent)]/15 border border-[var(--accent)]/30 text-[var(--accent)] text-xs font-medium pointer-events-none flex items-center gap-2">
+          <span className="flex flex-col gap-0.5">
+            <span className="block w-2.5 h-0.5 bg-current rounded-sm" />
+            <span className="block w-2.5 h-0.5 bg-current rounded-sm" />
+            <span className="block w-2.5 h-0.5 bg-current rounded-sm" />
+          </span>
+          Group · {displayItems[currentIndex]?.groupMemberCount} photos
+        </div>
+      )}
       {currentImage.flag !== "unreviewed" && (
         <div
           className={`absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-medium uppercase tracking-wide pointer-events-none ${

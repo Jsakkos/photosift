@@ -1,8 +1,8 @@
 import { useProjectStore } from "../stores/projectStore";
 
 export function RatingBar() {
-  const { images, currentIndex, setRating } = useProjectStore();
-  const image = images[currentIndex];
+  const { displayItems, currentIndex, setRating } = useProjectStore();
+  const image = displayItems[currentIndex]?.image;
   if (!image) return null;
 
   return (

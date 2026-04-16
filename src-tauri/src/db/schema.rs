@@ -46,6 +46,22 @@ pub struct UndoEntry {
     pub new_value: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupData {
+    pub id: i64,
+    pub shoot_id: i64,
+    pub group_type: String,
+    pub members: Vec<GroupMemberData>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMemberData {
+    pub photo_id: i64,
+    pub is_cover: bool,
+}
+
 #[derive(Debug)]
 pub struct PhotoInsert {
     pub filename: String,
@@ -355,6 +371,62 @@ impl Database {
             "INSERT INTO group_members (group_id, photo_id, is_cover)
              VALUES (?1, ?2, ?3)",
             params![group_id, photo_id, is_cover as i32],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_groups_for_shoot(&self, shoot_id: i64) -> Result<Vec<GroupData>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT g.id, g.shoot_id, g.group_type, gm.photo_id, gm.is_cover
+             FROM groups g
+             JOIN group_members gm ON gm.group_id = g.id
+             WHERE g.shoot_id = ?1
+             ORDER BY g.id, gm.photo_id",
+        )?;
+
+        let mut groups: Vec<GroupData> = Vec::new();
+        let mut current_id: Option<i64> = None;
+
+        let rows = stmt.query_map(params![shoot_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, bool>(4)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (gid, sid, gtype, pid, is_cover) = row?;
+            if current_id != Some(gid) {
+                groups.push(GroupData {
+                    id: gid,
+                    shoot_id: sid,
+                    group_type: gtype,
+                    members: Vec::new(),
+                });
+                current_id = Some(gid);
+            }
+            if let Some(g) = groups.last_mut() {
+                g.members.push(GroupMemberData {
+                    photo_id: pid,
+                    is_cover,
+                });
+            }
+        }
+
+        Ok(groups)
+    }
+
+    pub fn set_group_cover(&self, group_id: i64, photo_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE group_members SET is_cover = 0 WHERE group_id = ?1",
+            params![group_id],
+        )?;
+        self.conn.execute(
+            "UPDATE group_members SET is_cover = 1 WHERE group_id = ?1 AND photo_id = ?2",
+            params![group_id, photo_id],
         )?;
         Ok(())
     }

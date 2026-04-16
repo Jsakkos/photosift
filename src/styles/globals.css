@@ -21,3 +21,12 @@ body {
   overflow: hidden;
   user-select: none;
 }
+
+@keyframes flag-flash {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.animate-flag-flash {
+  animation: flag-flash 300ms ease-out forwards;
+}

@@ -1,0 +1,276 @@
+import { useState, useCallback, useRef, useEffect } from "react";
+import { useProjectStore } from "../stores/projectStore";
+import { thumbUrl } from "../hooks/useImageLoader";
+
+const SIZES = [100, 160, 240] as const;
+
+export function GridView() {
+  const { displayItems, setCurrentIndex, setFlag, setViewMode, currentView } =
+    useProjectStore();
+  const [colWidth, setColWidth] = useState<(typeof SIZES)[number]>(160);
+  const [selection, setSelection] = useState<Set<number>>(new Set());
+  const [focusIndex, setFocusIndex] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const lastClickIdx = useRef(0);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      )
+        return;
+
+      const cols = containerRef.current
+        ? Math.floor(containerRef.current.clientWidth / colWidth)
+        : 5;
+
+      switch (e.key) {
+        case "ArrowRight":
+          e.preventDefault();
+          setFocusIndex((i) => Math.min(i + 1, displayItems.length - 1));
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          setFocusIndex((i) => Math.max(i - 1, 0));
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          setFocusIndex((i) => Math.min(i + cols, displayItems.length - 1));
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setFocusIndex((i) => Math.max(i - cols, 0));
+          break;
+        case "Enter":
+          e.preventDefault();
+          setCurrentIndex(focusIndex);
+          setViewMode("sequential");
+          break;
+        case "=":
+        case "+": {
+          const idx = SIZES.indexOf(colWidth);
+          if (idx < SIZES.length - 1) setColWidth(SIZES[idx + 1]);
+          break;
+        }
+        case "-": {
+          const idx = SIZES.indexOf(colWidth);
+          if (idx > 0) setColWidth(SIZES[idx - 1]);
+          break;
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [colWidth, displayItems.length, focusIndex, setCurrentIndex, setViewMode]);
+
+  const handleClick = useCallback(
+    (index: number, e: React.MouseEvent) => {
+      if (e.shiftKey) {
+        const start = Math.min(lastClickIdx.current, index);
+        const end = Math.max(lastClickIdx.current, index);
+        const newSel = new Set(selection);
+        for (let i = start; i <= end; i++) newSel.add(i);
+        setSelection(newSel);
+      } else {
+        setSelection(new Set([index]));
+        lastClickIdx.current = index;
+      }
+      setFocusIndex(index);
+    },
+    [selection],
+  );
+
+  const handleBulkAction = useCallback(
+    async (flag: string) => {
+      const indices = selection.size > 0 ? [...selection] : [focusIndex];
+      for (const idx of indices) {
+        const item = displayItems[idx];
+        if (item) {
+          setCurrentIndex(idx);
+          await setFlag(flag);
+        }
+      }
+      setSelection(new Set());
+    },
+    [selection, focusIndex, displayItems, setCurrentIndex, setFlag],
+  );
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Size controls */}
+      <div className="flex items-center justify-end gap-2 px-3 py-1.5 bg-[var(--bg-secondary)] border-b border-white/5 text-xs text-[var(--text-secondary)]">
+        <button
+          onClick={() => {
+            const idx = SIZES.indexOf(colWidth);
+            if (idx > 0) setColWidth(SIZES[idx - 1]);
+          }}
+          className="w-6 h-6 flex items-center justify-center rounded bg-[var(--bg-tertiary)] border border-white/10 hover:border-white/20"
+        >
+          −
+        </button>
+        <span>{colWidth === 100 ? "Small" : colWidth === 160 ? "Medium" : "Large"}</span>
+        <button
+          onClick={() => {
+            const idx = SIZES.indexOf(colWidth);
+            if (idx < SIZES.length - 1) setColWidth(SIZES[idx + 1]);
+          }}
+          className="w-6 h-6 flex items-center justify-center rounded bg-[var(--bg-tertiary)] border border-white/10 hover:border-white/20"
+        >
+          +
+        </button>
+        <span className="ml-4">{displayItems.length} photos</span>
+      </div>
+
+      {/* Grid */}
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-y-auto p-3"
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(auto-fill, minmax(${colWidth}px, 1fr))`,
+          gap: 8,
+          alignContent: "start",
+        }}
+      >
+        {displayItems.map((item, index) => (
+          <GridThumb
+            key={item.image.id}
+            item={item}
+            index={index}
+            isFocused={index === focusIndex}
+            isSelected={selection.has(index)}
+            isMulti={selection.size > 1}
+            onClick={handleClick}
+            onDoubleClick={() => {
+              setCurrentIndex(index);
+              setViewMode("sequential");
+            }}
+            currentView={currentView}
+          />
+        ))}
+      </div>
+
+      {/* Bulk action bar */}
+      {selection.size > 0 && (
+        <div className="flex items-center justify-between px-4 py-2 bg-[#1a1a2e] border-t border-[var(--accent)]/30 text-sm">
+          <span className="text-[var(--accent)] font-medium">
+            {selection.size} selected
+          </span>
+          <div className="flex gap-3">
+            <button
+              onClick={() => handleBulkAction("pick")}
+              className="px-3 py-1 rounded border border-green-500/40 text-green-500 text-xs hover:bg-green-500/10"
+            >
+              P Pick
+            </button>
+            <button
+              onClick={() => handleBulkAction("reject")}
+              className="px-3 py-1 rounded border border-red-500/40 text-red-500 text-xs hover:bg-red-500/10"
+            >
+              X Reject
+            </button>
+            <button
+              onClick={() => handleBulkAction("unreviewed")}
+              className="px-3 py-1 rounded border border-white/20 text-[var(--text-secondary)] text-xs hover:bg-white/5"
+            >
+              U Reset
+            </button>
+            <button
+              onClick={() => {
+                const idx = [...selection][0] ?? focusIndex;
+                setCurrentIndex(idx);
+                setViewMode("sequential");
+              }}
+              className="px-3 py-1 rounded border border-white/20 text-[var(--text-secondary)] text-xs hover:bg-white/5"
+            >
+              Enter → Loupe
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GridThumb({
+  item,
+  index,
+  isFocused,
+  isSelected,
+  isMulti,
+  onClick,
+  onDoubleClick,
+  currentView: _currentView,
+}: {
+  item: ReturnType<typeof useProjectStore.getState>["displayItems"][0];
+  index: number;
+  isFocused: boolean;
+  isSelected: boolean;
+  isMulti: boolean;
+  onClick: (index: number, e: React.MouseEvent) => void;
+  onDoubleClick: () => void;
+  currentView: string;
+}) {
+  const [loaded, setLoaded] = useState(false);
+  const image = item.image;
+  const isRejected = image.flag === "reject";
+
+  return (
+    <div
+      className={`relative aspect-[3/2] rounded overflow-hidden cursor-pointer border-2 transition-all ${
+        isSelected
+          ? isMulti
+            ? "border-purple-500 shadow-[0_0_0_1px_rgb(168,85,247)]"
+            : "border-[var(--accent)] shadow-[0_0_0_1px_var(--accent)]"
+          : isFocused
+            ? "border-[var(--accent)]/50"
+            : "border-transparent hover:border-white/20"
+      } ${isRejected ? "opacity-35" : ""}`}
+      onClick={(e) => onClick(index, e)}
+      onDoubleClick={onDoubleClick}
+    >
+      <img
+        src={thumbUrl(image.id)}
+        alt={image.filename}
+        className={`w-full h-full object-cover ${loaded ? "opacity-100" : "opacity-30"} ${isRejected ? "grayscale-[0.6]" : ""}`}
+        loading="lazy"
+        draggable={false}
+        onLoad={(e) => {
+          if (e.currentTarget.naturalWidth > 1) setLoaded(true);
+        }}
+      />
+      {/* Flag dot */}
+      {image.flag === "pick" && (
+        <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.5)]" />
+      )}
+      {image.flag === "reject" && (
+        <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.5)]" />
+      )}
+      {/* Destination badge */}
+      {image.destination === "edit" && (
+        <div className="absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30">
+          EDIT
+        </div>
+      )}
+      {image.destination === "publish_direct" && (
+        <div className="absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30">
+          PUBLISH
+        </div>
+      )}
+      {/* Group stack indicator */}
+      {item.isGroupCover && item.groupMemberCount && (
+        <div className="absolute bottom-1.5 right-1.5 bg-black/70 text-blue-300 text-[10px] font-semibold px-1.5 py-0.5 rounded backdrop-blur-sm">
+          +{item.groupMemberCount - 1}
+        </div>
+      )}
+      {/* Filename on hover */}
+      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent pt-4 pb-1 px-1.5 opacity-0 hover:opacity-100 transition-opacity">
+        <span className="text-[10px] text-white/80 truncate block">
+          {image.filename}
+        </span>
+      </div>
+    </div>
+  );
+}
