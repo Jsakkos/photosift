@@ -37,7 +37,16 @@ export function setupMockIpc(
       case "set_rating":
       case "undo_last":
       case "set_group_cover":
+      case "update_settings":
         return undefined;
+      case "get_settings":
+        return {
+          nearDupThreshold: 4,
+          relatedThreshold: 12,
+          triageExpandGroups: false,
+        };
+      case "recluster_shoot":
+        return 0;
       default:
         throw new Error(`Unmocked IPC command: ${cmd}`);
     }

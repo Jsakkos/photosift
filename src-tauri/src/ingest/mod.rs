@@ -171,7 +171,15 @@ pub fn run_import(
         .filter_map(|(&id, (_, _, phash))| phash.map(|h| (id, h)))
         .collect();
 
-    let groups = clustering::cluster_phashes(&phash_data);
+    let settings = {
+        let db_guard = db.lock().map_err(|e| e.to_string())?;
+        db_guard.get_settings().unwrap_or_default()
+    };
+    let groups = clustering::cluster_phashes(
+        &phash_data,
+        settings.near_dup_threshold as u32,
+        settings.related_threshold as u32,
+    );
 
     {
         let db_guard = db.lock().map_err(|e| e.to_string())?;

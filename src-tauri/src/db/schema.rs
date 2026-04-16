@@ -62,6 +62,24 @@ pub struct GroupMemberData {
     pub is_cover: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Settings {
+    pub near_dup_threshold: i32,
+    pub related_threshold: i32,
+    pub triage_expand_groups: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            near_dup_threshold: crate::ingest::clustering::DEFAULT_NEAR_DUP_THRESHOLD as i32,
+            related_threshold: crate::ingest::clustering::DEFAULT_RELATED_THRESHOLD as i32,
+            triage_expand_groups: false,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PhotoInsert {
     pub filename: String,
@@ -171,6 +189,14 @@ impl Database {
                 timestamp TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_undo_session ON undo_log(shoot_id, session_id);
+
+            CREATE TABLE IF NOT EXISTS settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                near_dup_threshold INTEGER NOT NULL DEFAULT 4,
+                related_threshold INTEGER NOT NULL DEFAULT 12,
+                triage_expand_groups INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO settings (id) VALUES (1);
             ",
         )
     }
@@ -431,6 +457,67 @@ impl Database {
         Ok(())
     }
 
+    /// Remove one or more photos from any group they belong to. Any group
+    /// left with fewer than 2 members is deleted.
+    pub fn remove_photos_from_groups(&mut self, photo_ids: &[i64]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        let mut affected_groups: std::collections::HashSet<i64> =
+            std::collections::HashSet::new();
+        for &pid in photo_ids {
+            let mut stmt = tx.prepare(
+                "SELECT group_id FROM group_members WHERE photo_id = ?1",
+            )?;
+            let ids: Vec<i64> = stmt
+                .query_map(params![pid], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(stmt);
+            for gid in ids {
+                affected_groups.insert(gid);
+            }
+            tx.execute(
+                "DELETE FROM group_members WHERE photo_id = ?1",
+                params![pid],
+            )?;
+        }
+        for gid in affected_groups {
+            let count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM group_members WHERE group_id = ?1",
+                params![gid],
+                |row| row.get(0),
+            )?;
+            if count < 2 {
+                tx.execute("DELETE FROM groups WHERE id = ?1", params![gid])?;
+            }
+        }
+        tx.commit()
+    }
+
+    pub fn delete_all_groups_for_shoot(&self, shoot_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM groups WHERE shoot_id = ?1",
+            params![shoot_id],
+        )?;
+        Ok(())
+    }
+
+    /// Returns (photo_id, phash_bytes) for every photo in the shoot that has a phash.
+    pub fn phashes_for_shoot(&self, shoot_id: i64) -> Result<Vec<(i64, [u8; 8])>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, phash FROM photos WHERE shoot_id = ?1 AND phash IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![shoot_id], |row| {
+            let id: i64 = row.get(0)?;
+            let bytes: Vec<u8> = row.get(1)?;
+            let mut arr = [0u8; 8];
+            if bytes.len() == 8 {
+                arr.copy_from_slice(&bytes);
+            }
+            Ok((id, arr))
+        })?;
+        rows.collect()
+    }
+
     // ---- Flag / Destination ----
 
     pub fn set_flag(&self, photo_id: i64, flag: &str) -> Result<String> {
@@ -519,6 +606,38 @@ impl Database {
         }
 
         Ok(entry)
+    }
+
+    // ---- Settings ----
+
+    pub fn get_settings(&self) -> Result<Settings> {
+        self.conn
+            .query_row(
+                "SELECT near_dup_threshold, related_threshold, triage_expand_groups
+                 FROM settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok(Settings {
+                        near_dup_threshold: row.get(0)?,
+                        related_threshold: row.get(1)?,
+                        triage_expand_groups: row.get::<_, i32>(2)? != 0,
+                    })
+                },
+            )
+            .or_else(|_| Ok(Settings::default()))
+    }
+
+    pub fn update_settings(&self, s: &Settings) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (id, near_dup_threshold, related_threshold, triage_expand_groups)
+             VALUES (1, ?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+                near_dup_threshold = excluded.near_dup_threshold,
+                related_threshold = excluded.related_threshold,
+                triage_expand_groups = excluded.triage_expand_groups",
+            params![s.near_dup_threshold, s.related_threshold, s.triage_expand_groups as i32],
+        )?;
+        Ok(())
     }
 
     // ---- View Cursors ----

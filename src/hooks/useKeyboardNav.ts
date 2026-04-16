@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useProjectStore } from "../stores/projectStore";
+import { useSettingsStore } from "../stores/settingsStore";
 
 export function useKeyboardNav() {
   const {
@@ -28,6 +29,7 @@ export function useKeyboardNav() {
     cycleComparison,
     comparisonQuickPick,
   } = useProjectStore();
+  const openSettings = useSettingsStore((s) => s.openDialog);
 
   useEffect(() => {
     if (displayItems.length === 0) return;
@@ -91,6 +93,12 @@ export function useKeyboardNav() {
       if (e.ctrlKey && e.key === "o") {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("photosift:open-folder"));
+        return;
+      }
+
+      if (e.key === ",") {
+        e.preventDefault();
+        openSettings();
         return;
       }
 
@@ -248,5 +256,6 @@ export function useKeyboardNav() {
     exitComparison,
     cycleComparison,
     comparisonQuickPick,
+    openSettings,
   ]);
 }

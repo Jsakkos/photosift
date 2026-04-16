@@ -1,7 +1,7 @@
 use super::phash::hamming_distance;
 
-const NEAR_DUP_THRESHOLD: u32 = 4;
-const RELATED_THRESHOLD: u32 = 12;
+pub const DEFAULT_NEAR_DUP_THRESHOLD: u32 = 4;
+pub const DEFAULT_RELATED_THRESHOLD: u32 = 12;
 
 struct UnionFind {
     parent: Vec<usize>,
@@ -56,10 +56,15 @@ pub struct GroupResult {
     pub member_indices: Vec<usize>,
 }
 
-/// Two-tier disjoint clustering:
-/// - Near-duplicate: hamming distance <= 4
-/// - Related: hamming distance 5-12 (only if group spans multiple near-dup clusters)
-pub fn cluster_phashes(phashes: &[(i64, [u8; 8])]) -> Vec<GroupResult> {
+/// Two-tier disjoint clustering with configurable thresholds.
+/// - Near-duplicate: hamming distance <= near_dup_threshold
+/// - Related: hamming distance near_dup_threshold+1..=related_threshold
+///   (only emitted if a group spans multiple near-dup clusters)
+pub fn cluster_phashes(
+    phashes: &[(i64, [u8; 8])],
+    near_dup_threshold: u32,
+    related_threshold: u32,
+) -> Vec<GroupResult> {
     let n = phashes.len();
     if n < 2 {
         return Vec::new();
@@ -71,10 +76,10 @@ pub fn cluster_phashes(phashes: &[(i64, [u8; 8])]) -> Vec<GroupResult> {
     for i in 0..n {
         for j in (i + 1)..n {
             let d = hamming_distance(&phashes[i].1, &phashes[j].1);
-            if d <= NEAR_DUP_THRESHOLD {
+            if d <= near_dup_threshold {
                 nd_uf.union(i, j);
                 rel_uf.union(i, j);
-            } else if d <= RELATED_THRESHOLD {
+            } else if d <= related_threshold {
                 rel_uf.union(i, j);
             }
         }
@@ -113,15 +118,18 @@ pub fn cluster_phashes(phashes: &[(i64, [u8; 8])]) -> Vec<GroupResult> {
 mod tests {
     use super::*;
 
+    fn default_cluster(phashes: &[(i64, [u8; 8])]) -> Vec<GroupResult> {
+        cluster_phashes(phashes, DEFAULT_NEAR_DUP_THRESHOLD, DEFAULT_RELATED_THRESHOLD)
+    }
+
     #[test]
     fn test_near_dup_cluster() {
-        // Three hashes: first two are identical (distance 0), third is far away
         let phashes = vec![
             (1, [0x00; 8]),
             (2, [0x00; 8]),
             (3, [0xFF; 8]),
         ];
-        let groups = cluster_phashes(&phashes);
+        let groups = default_cluster(&phashes);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].group_type, "near_duplicate");
         assert_eq!(groups[0].member_indices.len(), 2);
@@ -129,15 +137,13 @@ mod tests {
 
     #[test]
     fn test_two_tier_clustering() {
-        // h0, h1: distance 0 (near-dup)
-        // h2: distance ~8 from h0 (related, not near-dup)
         let h0 = [0x00u8; 8];
         let h1 = [0x00u8; 8];
         let mut h2 = [0x00u8; 8];
-        h2[0] = 0xFF; // 8 bits different
+        h2[0] = 0xFF;
 
         let phashes = vec![(1, h0), (2, h1), (3, h2)];
-        let groups = cluster_phashes(&phashes);
+        let groups = default_cluster(&phashes);
 
         let nd_groups: Vec<_> = groups
             .iter()
@@ -160,7 +166,24 @@ mod tests {
             (1, [0x00; 8]),
             (2, [0xFF; 8]),
         ];
-        let groups = cluster_phashes(&phashes);
+        let groups = default_cluster(&phashes);
         assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn test_tighter_near_dup_threshold_splits_group() {
+        // Two hashes at hamming distance 4 should group together with
+        // default threshold=4, but split apart with threshold=2.
+        let h0 = [0x00u8; 8];
+        let mut h1 = [0x00u8; 8];
+        h1[0] = 0x0F; // 4 bits different
+
+        let phashes = vec![(1, h0), (2, h1)];
+
+        let loose = cluster_phashes(&phashes, 4, 12);
+        assert_eq!(loose.iter().filter(|g| g.group_type == "near_duplicate").count(), 1);
+
+        let tight = cluster_phashes(&phashes, 2, 12);
+        assert_eq!(tight.iter().filter(|g| g.group_type == "near_duplicate").count(), 0);
     }
 }

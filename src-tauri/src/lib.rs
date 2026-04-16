@@ -50,6 +50,9 @@ pub fn run() {
             commands::culling::set_view_cursor,
             commands::culling::get_groups_for_shoot,
             commands::culling::set_group_cover,
+            commands::settings::get_settings,
+            commands::settings::update_settings,
+            commands::settings::recluster_shoot,
         ]);
 
     let builder = protocol::register_protocol(builder);
