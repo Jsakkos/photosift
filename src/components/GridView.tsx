@@ -1,8 +1,10 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { FixedSizeGrid as Grid, GridChildComponentProps } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 
 const SIZES = [100, 160, 240] as const;
+const CELL_GAP = 8;
 
 export function GridView() {
   const { displayItems, setCurrentIndex, setFlag, setViewMode, currentView } =
@@ -10,8 +12,32 @@ export function GridView() {
   const [colWidth, setColWidth] = useState<(typeof SIZES)[number]>(160);
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const [focusIndex, setFocusIndex] = useState(0);
+  const [dims, setDims] = useState({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<Grid>(null);
   const lastClickIdx = useRef(0);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => setDims({ width: el.clientWidth, height: el.clientHeight });
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const columnWidth = colWidth + CELL_GAP;
+  const rowHeight = Math.round(colWidth * 2 / 3) + CELL_GAP;
+  const columnCount = Math.max(1, Math.floor(dims.width / columnWidth));
+  const rowCount = Math.ceil(displayItems.length / columnCount);
+
+  useEffect(() => {
+    if (!gridRef.current || columnCount === 0) return;
+    const rowIndex = Math.floor(focusIndex / columnCount);
+    const columnIndex = focusIndex % columnCount;
+    gridRef.current.scrollToItem({ rowIndex, columnIndex, align: "smart" });
+  }, [focusIndex, columnCount]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -20,10 +46,6 @@ export function GridView() {
         e.target instanceof HTMLTextAreaElement
       )
         return;
-
-      const cols = containerRef.current
-        ? Math.floor(containerRef.current.clientWidth / colWidth)
-        : 5;
 
       switch (e.key) {
         case "ArrowRight":
@@ -36,11 +58,11 @@ export function GridView() {
           break;
         case "ArrowDown":
           e.preventDefault();
-          setFocusIndex((i) => Math.min(i + cols, displayItems.length - 1));
+          setFocusIndex((i) => Math.min(i + columnCount, displayItems.length - 1));
           break;
         case "ArrowUp":
           e.preventDefault();
-          setFocusIndex((i) => Math.max(i - cols, 0));
+          setFocusIndex((i) => Math.max(i - columnCount, 0));
           break;
         case "Enter":
           e.preventDefault();
@@ -63,7 +85,7 @@ export function GridView() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [colWidth, displayItems.length, focusIndex, setCurrentIndex, setViewMode]);
+  }, [colWidth, displayItems.length, focusIndex, columnCount, setCurrentIndex, setViewMode]);
 
   const handleClick = useCallback(
     (index: number, e: React.MouseEvent) => {
@@ -97,6 +119,42 @@ export function GridView() {
     [selection, focusIndex, displayItems, setCurrentIndex, setFlag],
   );
 
+  const Cell = useMemo(
+    () =>
+      ({ columnIndex, rowIndex, style }: GridChildComponentProps) => {
+        const index = rowIndex * columnCount + columnIndex;
+        if (index >= displayItems.length) return null;
+        const item = displayItems[index];
+        return (
+          <div style={{ ...style, padding: CELL_GAP / 2 }}>
+            <GridThumb
+              item={item}
+              index={index}
+              isFocused={index === focusIndex}
+              isSelected={selection.has(index)}
+              isMulti={selection.size > 1}
+              onClick={handleClick}
+              onDoubleClick={() => {
+                setCurrentIndex(index);
+                setViewMode("sequential");
+              }}
+              currentView={currentView}
+            />
+          </div>
+        );
+      },
+    [
+      columnCount,
+      displayItems,
+      focusIndex,
+      selection,
+      handleClick,
+      setCurrentIndex,
+      setViewMode,
+      currentView,
+    ],
+  );
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Size controls */}
@@ -123,33 +181,22 @@ export function GridView() {
         <span className="ml-4">{displayItems.length} photos</span>
       </div>
 
-      {/* Grid */}
-      <div
-        ref={containerRef}
-        className="flex-1 overflow-y-auto p-3"
-        style={{
-          display: "grid",
-          gridTemplateColumns: `repeat(auto-fill, minmax(${colWidth}px, 1fr))`,
-          gap: 8,
-          alignContent: "start",
-        }}
-      >
-        {displayItems.map((item, index) => (
-          <GridThumb
-            key={item.image.id}
-            item={item}
-            index={index}
-            isFocused={index === focusIndex}
-            isSelected={selection.has(index)}
-            isMulti={selection.size > 1}
-            onClick={handleClick}
-            onDoubleClick={() => {
-              setCurrentIndex(index);
-              setViewMode("sequential");
-            }}
-            currentView={currentView}
-          />
-        ))}
+      {/* Virtualized grid */}
+      <div ref={containerRef} className="flex-1 overflow-hidden">
+        {dims.width > 0 && dims.height > 0 && columnCount > 0 && (
+          <Grid
+            ref={gridRef}
+            columnCount={columnCount}
+            columnWidth={columnWidth}
+            rowCount={rowCount}
+            rowHeight={rowHeight}
+            width={dims.width}
+            height={dims.height}
+            overscanRowCount={2}
+          >
+            {Cell}
+          </Grid>
+        )}
       </div>
 
       {/* Bulk action bar */}
@@ -219,7 +266,7 @@ function GridThumb({
 
   return (
     <div
-      className={`relative aspect-[3/2] rounded overflow-hidden cursor-pointer border-2 transition-all ${
+      className={`relative w-full h-full rounded overflow-hidden cursor-pointer border-2 transition-all ${
         isSelected
           ? isMulti
             ? "border-purple-500 shadow-[0_0_0_1px_rgb(168,85,247)]"
