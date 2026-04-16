@@ -21,6 +21,59 @@ describe("computeDisplayItems", () => {
       expect(items[1].image.id).toBe(3);
     });
 
+    test("triageExpandGroups=true shows every group member individually", () => {
+      const img1 = makeImage({ id: 1, flag: "unreviewed" });
+      const img2 = makeImage({ id: 2, flag: "unreviewed" });
+      const img3 = makeImage({ id: 3, flag: "unreviewed" });
+      const ungrouped = makeImage({ id: 4, flag: "unreviewed" });
+      const group = makeGroup([
+        { photoId: 1, isCover: true },
+        { photoId: 2 },
+        { photoId: 3 },
+      ]);
+
+      const collapsed = computeDisplayItems(
+        [img1, img2, img3, ungrouped],
+        "triage",
+        [group],
+        false,
+      );
+      // Default: 1 cover + 1 ungrouped = 2 items
+      expect(collapsed).toHaveLength(2);
+
+      const expanded = computeDisplayItems(
+        [img1, img2, img3, ungrouped],
+        "triage",
+        [group],
+        true,
+      );
+      // Expanded: 3 group members + 1 ungrouped = 4 items
+      expect(expanded).toHaveLength(4);
+      // All three group items carry groupId for the blue-bar affiliation
+      expect(expanded[0].groupId).toBe(group.id);
+      expect(expanded[1].groupId).toBe(group.id);
+      expect(expanded[2].groupId).toBe(group.id);
+      expect(expanded[3].groupId).toBeUndefined();
+      // Expanded items do not advertise isGroupCover (no +N badge in this mode)
+      expect(expanded[0].isGroupCover).toBeUndefined();
+    });
+
+    test("triageExpandGroups only shows unreviewed members (skips picks/rejects)", () => {
+      const img1 = makeImage({ id: 1, flag: "unreviewed" });
+      const img2 = makeImage({ id: 2, flag: "pick" });
+      const img3 = makeImage({ id: 3, flag: "reject" });
+      const group = makeGroup([
+        { photoId: 1, isCover: true },
+        { photoId: 2 },
+        { photoId: 3 },
+      ]);
+
+      const items = computeDisplayItems([img1, img2, img3], "triage", [group], true);
+
+      expect(items).toHaveLength(1);
+      expect(items[0].image.id).toBe(1);
+    });
+
     test("collapses group to cover with correct member count", () => {
       const img1 = makeImage({ id: 1 });
       const img2 = makeImage({ id: 2 });

@@ -5,7 +5,7 @@ import { useProjectStore } from "../stores/projectStore";
 export function SettingsDialog() {
   const { isOpen, settings, closeDialog, updateSettings, reclusterShoot } =
     useSettingsStore();
-  const { currentShoot, loadShoot } = useProjectStore();
+  const { currentShoot, loadShoot, refreshDisplay } = useProjectStore();
 
   const [nearDup, setNearDup] = useState(settings.nearDupThreshold);
   const [related, setRelated] = useState(settings.relatedThreshold);
@@ -32,6 +32,9 @@ export function SettingsDialog() {
       relatedThreshold: related,
       triageExpandGroups: expand,
     });
+    // Refresh displayItems so the triage-expand toggle takes effect immediately
+    // without waiting for the next flag/view change.
+    refreshDisplay();
     closeDialog();
   };
 

@@ -8,6 +8,11 @@ import type {
   DisplayItem,
   Group,
 } from "../types";
+import { useSettingsStore } from "./settingsStore";
+
+function triageExpand(): boolean {
+  return useSettingsStore.getState().settings.triageExpandGroups;
+}
 
 interface UndoEntry {
   imageId: number;
@@ -40,38 +45,54 @@ export function computeDisplayItems(
   images: ImageEntry[],
   currentView: CullView,
   groups: Group[],
+  triageExpandGroups: boolean = false,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   const photoGroupMap = buildPhotoGroupMap(groups);
 
   if (currentView === "triage") {
-    const seenGroups = new Set<number>();
-    for (let i = 0; i < images.length; i++) {
-      const img = images[i];
-      if (img.flag !== "unreviewed") continue;
-
-      const group = photoGroupMap.get(img.id);
-      if (group) {
-        if (seenGroups.has(group.id)) continue;
-        seenGroups.add(group.id);
-        const coverId = getGroupCover(group);
-        const coverIdx = images.findIndex((im) => im.id === coverId);
-        const coverImg = coverIdx >= 0 ? images[coverIdx] : img;
-        const actualIdx = coverIdx >= 0 ? coverIdx : i;
-        const unrevCount = group.members.filter((m) => {
-          const mi = images.find((im) => im.id === m.photoId);
-          return mi && mi.flag === "unreviewed";
-        }).length;
-        if (unrevCount === 0) continue;
+    if (triageExpandGroups) {
+      // Every unreviewed image gets its own triage item, with groupId set
+      // so the filmstrip can still draw the blue affiliation bar.
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        if (img.flag !== "unreviewed") continue;
+        const group = photoGroupMap.get(img.id);
         items.push({
-          imageIndex: actualIdx,
-          image: coverImg,
-          groupId: group.id,
-          isGroupCover: true,
-          groupMemberCount: group.members.length,
+          imageIndex: i,
+          image: img,
+          ...(group ? { groupId: group.id } : {}),
         });
-      } else {
-        items.push({ imageIndex: i, image: img });
+      }
+    } else {
+      const seenGroups = new Set<number>();
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        if (img.flag !== "unreviewed") continue;
+
+        const group = photoGroupMap.get(img.id);
+        if (group) {
+          if (seenGroups.has(group.id)) continue;
+          seenGroups.add(group.id);
+          const coverId = getGroupCover(group);
+          const coverIdx = images.findIndex((im) => im.id === coverId);
+          const coverImg = coverIdx >= 0 ? images[coverIdx] : img;
+          const actualIdx = coverIdx >= 0 ? coverIdx : i;
+          const unrevCount = group.members.filter((m) => {
+            const mi = images.find((im) => im.id === m.photoId);
+            return mi && mi.flag === "unreviewed";
+          }).length;
+          if (unrevCount === 0) continue;
+          items.push({
+            imageIndex: actualIdx,
+            image: coverImg,
+            groupId: group.id,
+            isGroupCover: true,
+            groupMemberCount: group.members.length,
+          });
+        } else {
+          items.push({ imageIndex: i, image: img });
+        }
       }
     }
   } else if (currentView === "select") {
@@ -161,6 +182,7 @@ interface ProjectState {
   comparisonQuickPick: (side: "left" | "right") => Promise<void>;
   createGroupFromPhotos: (photoIds: number[]) => Promise<void>;
   ungroupPhotos: (photoIds: number[]) => Promise<void>;
+  refreshDisplay: () => void;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -204,7 +226,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         viewName: "triage",
       }).catch(() => null);
 
-      const displayItems = computeDisplayItems(images, "triage", groups);
+      const displayItems = computeDisplayItems(images, "triage", groups, triageExpand());
 
       let startIndex = 0;
       if (cursor !== null) {
@@ -268,6 +290,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       get().currentView,
       get().groups,
+      triageExpand(),
     );
 
     set({
@@ -303,6 +326,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             revertImages,
             get().currentView,
             get().groups,
+            triageExpand(),
           ),
         });
       }
@@ -364,7 +388,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       affectedIds.push({ id: image.id, oldFlag });
     }
 
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups);
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand());
 
     const flashColor =
       flag === "pick"
@@ -438,6 +462,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           revertImages,
           get().currentView,
           get().groups,
+          triageExpand(),
         ),
       });
     }
@@ -459,6 +484,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
+      triageExpand(),
     );
 
     set({
@@ -498,6 +524,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             revertImages,
             get().currentView,
             get().groups,
+            triageExpand(),
           ),
         });
       }
@@ -530,6 +557,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
+      triageExpand(),
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -584,6 +612,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
+      triageExpand(),
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -625,7 +654,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }).catch(() => {});
     }
 
-    const newDisplayItems = computeDisplayItems(images, view, groups);
+    const newDisplayItems = computeDisplayItems(images, view, groups, triageExpand());
 
     let newIndex = 0;
     try {
@@ -691,7 +720,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, flag };
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups);
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand());
 
     const flashColor = flag === "pick" ? "rgba(34, 197, 94, 0.15)" : flag === "reject" ? "rgba(239, 68, 68, 0.15)" : null;
 
@@ -718,7 +747,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
         revertImages[idx] = { ...revertImages[idx], flag: oldFlag };
-        set({ images: revertImages, displayItems: computeDisplayItems(revertImages, get().currentView, get().groups) });
+        set({ images: revertImages, displayItems: computeDisplayItems(revertImages, get().currentView, get().groups, triageExpand()) });
       }
     }
   },
@@ -827,7 +856,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     updatedImages[pickIdx] = { ...updatedImages[pickIdx], flag: "pick" };
     updatedImages[rejectIdx] = { ...updatedImages[rejectIdx], flag: "reject" };
 
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups);
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand());
 
     set({
       images: updatedImages,
@@ -883,12 +912,25 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(images, currentView, groups),
+        displayItems: computeDisplayItems(images, currentView, groups, triageExpand()),
       });
     } catch (e) {
       console.error("Create group failed:", e);
       get().setToast(`Group failed: ${e}`, "error");
     }
+  },
+
+  refreshDisplay: () => {
+    const { images, currentView, groups, displayItems, currentIndex } = get();
+    const currentPhotoId = displayItems[currentIndex]?.image.id;
+    const next = computeDisplayItems(images, currentView, groups, triageExpand());
+    let nextIndex = currentIndex;
+    if (currentPhotoId !== undefined) {
+      const idx = next.findIndex((d) => d.image.id === currentPhotoId);
+      if (idx >= 0) nextIndex = idx;
+    }
+    nextIndex = Math.min(nextIndex, Math.max(0, next.length - 1));
+    set({ displayItems: next, currentIndex: nextIndex < 0 ? 0 : nextIndex });
   },
 
   ungroupPhotos: async (photoIds: number[]) => {
@@ -901,7 +943,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(images, currentView, groups),
+        displayItems: computeDisplayItems(images, currentView, groups, triageExpand()),
       });
     } catch (e) {
       console.error("Ungroup failed:", e);
