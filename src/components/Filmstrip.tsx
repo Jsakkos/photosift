@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import { FixedSizeList as List } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
+import { GroupStack } from "./GroupStack";
 
 const THUMB_WIDTH = 100;
 const THUMB_HEIGHT = 80;
@@ -25,7 +26,7 @@ function Thumbnail({ imageId, filename }: { imageId: number; filename: string })
 }
 
 export function Filmstrip() {
-  const { displayItems, currentIndex, setCurrentIndex } = useProjectStore();
+  const { displayItems, currentIndex, setCurrentIndex, currentView } = useProjectStore();
   const listRef = useRef<List>(null);
 
   useEffect(() => {
@@ -41,6 +42,24 @@ export function Filmstrip() {
 
       const image = item.image;
       const isCurrent = index === currentIndex;
+
+      if (currentView === "triage" && item.isGroupCover && item.groupMemberCount) {
+        return (
+          <div
+            style={style}
+            className="flex items-center justify-center p-1"
+            onClick={() => setCurrentIndex(index)}
+          >
+            <GroupStack
+              imageId={image.id}
+              filename={image.filename}
+              count={item.groupMemberCount}
+              isCurrent={isCurrent}
+              onClick={() => setCurrentIndex(index)}
+            />
+          </div>
+        );
+      }
 
       return (
         <div
@@ -73,11 +92,14 @@ export function Filmstrip() {
                 ))}
               </div>
             )}
+            {currentView === "select" && item.groupId && (
+              <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[var(--accent)]" />
+            )}
           </div>
         </div>
       );
     },
-    [displayItems, currentIndex, setCurrentIndex],
+    [displayItems, currentIndex, setCurrentIndex, currentView],
   );
 
   if (displayItems.length === 0) return null;

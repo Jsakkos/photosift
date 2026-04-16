@@ -2,6 +2,14 @@ use crate::state::AppState;
 use std::sync::Mutex;
 use tauri::Manager;
 
+fn is_valid_jpeg(data: &[u8]) -> bool {
+    data.len() > 3
+        && data[0] == 0xFF
+        && data[1] == 0xD8
+        && data[2] == 0xFF
+        && crate::pipeline::embedded::is_valid_jpeg_first_marker(data[3])
+}
+
 pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder.register_uri_scheme_protocol("photosift", move |ctx, request| {
         let uri = request.uri().to_string();
@@ -14,11 +22,11 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         let app_handle = ctx.app_handle();
         let state = app_handle.state::<Mutex<AppState>>();
 
-        // Route: /thumb/{id} — read from file cache via photos.thumb_path
+        // Route: /thumb/{id} — thumb → preview → re-extract from RAW → placeholder
         if let Some(id_str) = path.strip_prefix("/thumb/") {
             let id_str = id_str.split('?').next().unwrap_or(id_str);
             if let Ok(image_id) = id_str.parse::<i64>() {
-                let thumb_path = {
+                let paths = {
                     let app_state = match state.lock() {
                         Ok(s) => s,
                         Err(_) => return error_response(500, "Lock failed"),
@@ -27,11 +35,31 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
                         .db
                         .as_ref()
                         .and_then(|db| db.get_photo_by_id(image_id).ok())
-                        .map(|p| p.thumb_path.clone())
+                        .map(|p| (p.thumb_path.clone(), p.preview_path.clone(), p.raw_path.clone()))
                 };
-                if let Some(tp) = thumb_path {
-                    if let Ok(data) = std::fs::read(&tp) {
-                        return jpeg_response(data);
+                if let Some((tp, pp, rp)) = paths {
+                    if !tp.is_empty() {
+                        if let Ok(data) = std::fs::read(&tp) {
+                            if is_valid_jpeg(&data) {
+                                return jpeg_response(data);
+                            }
+                        }
+                    }
+                    if !pp.is_empty() {
+                        if let Ok(data) = std::fs::read(&pp) {
+                            if is_valid_jpeg(&data) {
+                                return jpeg_response(data);
+                            }
+                            log::warn!("thumb/{}: preview is corrupt JPEG, re-extracting from RAW", image_id);
+                        }
+                    }
+                    // Last resort: re-extract embedded JPEG from original RAW
+                    if let Ok(jpeg_bytes) = crate::pipeline::embedded::extract_embedded_jpeg(std::path::Path::new(&rp)) {
+                        // Repair the cached preview file for future requests
+                        if !pp.is_empty() {
+                            let _ = std::fs::write(&pp, &jpeg_bytes);
+                        }
+                        return jpeg_response(jpeg_bytes);
                     }
                 }
             }
@@ -68,18 +96,21 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
                 };
                 // Mutex released — all I/O below is lock-free
 
-                // 3. Read from preview file cache
+                // 3. Read from preview file cache (validate JPEG header)
                 if let Ok(data) = std::fs::read(&preview_path) {
-                    if let Ok(app_state) = state.lock() {
-                        app_state.cache.put(image_id, data.clone());
-                        let idx = app_state
-                            .image_ids
-                            .iter()
-                            .position(|&id| id == image_id)
-                            .unwrap_or(0);
-                        app_state.prefetch.prefetch_around(idx, 1);
+                    if is_valid_jpeg(&data) {
+                        if let Ok(app_state) = state.lock() {
+                            app_state.cache.put(image_id, data.clone());
+                            let idx = app_state
+                                .image_ids
+                                .iter()
+                                .position(|&id| id == image_id)
+                                .unwrap_or(0);
+                            app_state.prefetch.prefetch_around(idx, 1);
+                        }
+                        return jpeg_response(data);
                     }
-                    return jpeg_response(data);
+                    log::warn!("image/{}: cached preview is corrupt, re-extracting", image_id);
                 }
 
                 // 4. Fallback: decode from original RAW file
@@ -90,6 +121,10 @@ pub fn register_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
                     85,
                 ) {
                     Ok(jpeg_bytes) => {
+                        // Repair cached preview for future requests
+                        if !preview_path.is_empty() {
+                            let _ = std::fs::write(&preview_path, &jpeg_bytes);
+                        }
                         if let Ok(app_state) = state.lock() {
                             app_state.cache.put(image_id, jpeg_bytes.clone());
                         }

@@ -113,9 +113,11 @@ photosift/
 
 | Tier | Source | Resolution | Latency | Usage |
 |---|---|---|---|---|
-| Embedded JPEG | RAW file header | ~1600px long edge | < 5ms | Instant display, always first |
+| Embedded JPEG | RAW file header | Camera-dependent | < 5ms | Instant display, always first |
 | Decoded preview | rawler half-res decode | ~3000px | 50-200ms (0ms if cached) | Replaces embedded JPEG |
-| Full resolution | rawler full decode | Native (6000x4000) | 200-500ms | On spacebar zoom to 100% |
+| Full resolution | rawler full decode | Native sensor | 200-500ms | On spacebar zoom to 100% |
+
+**Implementation note (Phase 1):** For Nikon D750 NEF files, the embedded JPEG is already 6016×4016 — native sensor resolution. Tier 1 effectively doubles as Tier 3 for this hardware, and spacebar zoom uses a 3× CSS scale that lands near 1:1 pixel mapping on a 2K display. Tiers 2 and 3 are therefore not wired in Phase 1 code: `DecodeTier::Preview` and `DecodeTier::Full` exist in the enum but all NEF paths return the embedded JPEG. These tiers are reserved for Phase 2+ when we add cameras whose embedded preview is smaller than native resolution (e.g., Fujifilm RAF).
 
 ### Custom Protocol
 

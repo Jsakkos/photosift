@@ -35,9 +35,11 @@ pub fn extract_embedded_jpeg(path: &Path) -> Result<Vec<u8>, EmbeddedError> {
     let mut best_jpeg: Option<Vec<u8>> = None;
     let mut i = 0;
 
-    while i < data.len().saturating_sub(3) {
-        // Real JPEG: FF D8 FF (SOI followed by a marker)
-        if data[i] == 0xFF && data[i + 1] == 0xD8 && data[i + 2] == 0xFF {
+    while i < data.len().saturating_sub(4) {
+        // Real JPEG: FF D8 FF followed by a valid first marker
+        if data[i] == 0xFF && data[i + 1] == 0xD8 && data[i + 2] == 0xFF
+            && is_valid_jpeg_first_marker(data[i + 3])
+        {
             if let Some(end) = find_jpeg_end(&data, i) {
                 let jpeg_data = &data[i..=end];
                 // Only consider blobs > 10KB (skip tiny EXIF thumbnails)
@@ -83,6 +85,14 @@ fn find_jpeg_end(data: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// After FF D8 FF, the fourth byte must be a standard JPEG marker.
+/// Rejects false positives from raw sensor data that coincidentally contain FF D8 FF.
+pub fn is_valid_jpeg_first_marker(byte: u8) -> bool {
+    matches!(byte,
+        0xC0..=0xCF | 0xDB | 0xDD | 0xE0..=0xEF | 0xFE
+    )
+}
+
 pub fn is_raw_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -107,26 +117,6 @@ mod tests {
         assert!(is_raw_file(Path::new("photo.nef")));
         assert!(is_raw_file(Path::new("photo.NEF")));
         assert!(!is_raw_file(Path::new("photo.jpg")));
-    }
-
-    #[test]
-    #[ignore]
-    fn check_db_thumbnails() {
-        use crate::db::schema::Database;
-        let db_path = Path::new(r"E:\photos\DSLR\2026\2026-02_Bend-Weekend\RAW\.photosift\cache.sqlite");
-        if !db_path.exists() { println!("No DB found"); return; }
-        let db = Database::open(db_path).unwrap();
-        let images = db.get_all_images().unwrap();
-        println!("Total images in DB: {}", images.len());
-        let mut with_thumb = 0;
-        let mut without_thumb = 0;
-        for img in &images {
-            match db.get_thumbnail(img.id) {
-                Ok(Some(t)) => { with_thumb += 1; println!("  {} thumb={} bytes", img.filename, t.len()); }
-                _ => { without_thumb += 1; println!("  {} NO THUMB", img.filename); }
-            }
-        }
-        println!("\nWith thumbnail: {}, Without: {}", with_thumb, without_thumb);
     }
 
     #[test]
