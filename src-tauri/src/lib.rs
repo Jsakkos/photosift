@@ -115,6 +115,10 @@ pub fn run() {
             commands::settings::update_settings,
             commands::settings::recluster_shoot,
             commands::export::export_xmp,
+            commands::ai::get_ai_status,
+            commands::ai::cancel_ai_analysis,
+            commands::ai::reanalyze_shoot,
+            commands::ai::get_faces_for_photo,
         ]);
 
     let builder = protocol::register_protocol(builder);
