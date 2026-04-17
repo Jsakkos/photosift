@@ -215,6 +215,18 @@ export function useKeyboardNav() {
         case "Z":
           if (!e.ctrlKey) toggleZoom();
           break;
+        case "f":
+        case "F":
+          if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            useProjectStore.getState().toggleAiPanel();
+          }
+          break;
+        case "h":
+        case "H":
+          if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            useProjectStore.getState().toggleHeatmap();
+          }
+          break;
         case "g":
         case "G":
           setViewMode(mode === "grid" ? "sequential" : "grid");

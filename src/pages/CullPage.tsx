@@ -12,6 +12,7 @@ import { GroupStrip } from "../components/GroupStrip";
 import { GridView } from "../components/GridView";
 import { ComparisonView } from "../components/ComparisonView";
 import { AiPanel } from "../components/AiPanel";
+import { HeatmapOverlay } from "../components/HeatmapOverlay";
 
 function AiPanelHost() {
   const currentItem = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
@@ -20,6 +21,12 @@ function AiPanelHost() {
   const visible = faceCount > 0 || aiPanelForced;
   if (!currentItem) return null;
   return <AiPanel photoId={currentItem.image.id} visible={visible} />;
+}
+
+function HeatmapHost() {
+  const currentItem = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
+  if (!currentItem) return null;
+  return <HeatmapOverlay photoId={currentItem.image.id} />;
 }
 
 export function CullPage() {
@@ -82,6 +89,7 @@ export function CullPage() {
         <>
           <div className="flex-1 relative overflow-hidden">
             <LoupeView />
+            <HeatmapHost />
             <MetadataOverlay />
             <AiPanelHost />
             <ShortcutHints />

@@ -119,6 +119,7 @@ pub fn run() {
             commands::ai::cancel_ai_analysis,
             commands::ai::reanalyze_shoot,
             commands::ai::get_faces_for_photo,
+            commands::ai::get_heatmap,
         ]);
 
     let builder = protocol::register_protocol(builder);

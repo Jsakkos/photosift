@@ -1,3 +1,4 @@
+use crate::ai::sharpness::{normalize_sharpness, tiled_laplacian};
 use crate::ai::AiProviderStatus;
 use crate::db::schema::FaceRow;
 use crate::state::AppState;
@@ -72,4 +73,22 @@ pub fn get_faces_for_photo(
     let s = state.lock().map_err(|e| e.to_string())?;
     let db = s.db.as_ref().ok_or("db not open")?;
     db.get_faces_for_photo(photo_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_heatmap(
+    state: State<'_, Mutex<AppState>>,
+    photo_id: i64,
+) -> Result<Vec<f64>, String> {
+    // Snapshot the path under the lock, then drop it before doing I/O.
+    let preview_path = {
+        let s = state.lock().map_err(|e| e.to_string())?;
+        let db = s.db.as_ref().ok_or("db not open")?;
+        let photo = db.get_photo_by_id(photo_id).map_err(|e| e.to_string())?;
+        photo.preview_path.clone()
+    };
+    let img = image::open(&preview_path).map_err(|e| e.to_string())?;
+    let gray = img.to_luma8();
+    let grid = tiled_laplacian(&gray, 32, 32);
+    Ok(grid.into_iter().map(normalize_sharpness).collect())
 }

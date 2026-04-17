@@ -322,6 +322,10 @@ interface ProjectState {
   refreshDisplay: () => void;
   sortByAi: "none" | "sharpness" | "faces";
   cycleSortByAi: () => void;
+  heatmapOn: boolean;
+  heatmapCache: Map<number, number[]>;
+  toggleHeatmap: () => void;
+  getHeatmapData: (photoId: number) => number[] | null;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -348,6 +352,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   comparisonCyclingId: null,
   comparisonGroupMembers: [],
   sortByAi: "none" as const,
+  heatmapOn: false,
+  heatmapCache: new Map<number, number[]>(),
 
   currentImage: () => {
     const { displayItems, currentIndex } = get();
@@ -915,6 +921,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   toggleShortcutHints: () =>
     set((s) => ({ showShortcutHints: !s.showShortcutHints })),
   toggleAiPanel: () => set((s) => ({ aiPanelForced: !s.aiPanelForced })),
+  toggleHeatmap: () => set((s) => ({ heatmapOn: !s.heatmapOn })),
+
+  getHeatmapData: (photoId: number) => {
+    const cached = get().heatmapCache.get(photoId);
+    if (cached) return cached;
+    invoke<number[]>("get_heatmap", { photoId })
+      .then((grid) => {
+        const next = new Map(get().heatmapCache);
+        // Cap cache at 20 entries (FIFO eviction).
+        while (next.size >= 20) {
+          const firstKey = next.keys().next().value;
+          if (firstKey === undefined) break;
+          next.delete(firstKey);
+        }
+        next.set(photoId, grid);
+        set({ heatmapCache: next });
+      })
+      .catch(() => {
+        // Silently fail — the overlay just stays empty.
+      });
+    return null;
+  },
   toggleAutoAdvance: () => set((s) => ({ autoAdvance: !s.autoAdvance })),
   toggleZoom: () => set((s) => ({ isZoomed: !s.isZoomed })),
 
