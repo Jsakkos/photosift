@@ -12,6 +12,9 @@ const NAV_SHORTCUTS = [
   { key: "?", action: "Toggle this overlay" },
   { key: "Ctrl+Z", action: "Undo" },
   { key: "Ctrl+Shift+Z", action: "Redo" },
+  { key: "F", action: "Toggle AI face panel" },
+  { key: "H", action: "Toggle sharpness heatmap" },
+  { key: "Alt+S", action: "Cycle AI sort" },
 ];
 
 const TRIAGE_SHORTCUTS = [
@@ -31,6 +34,7 @@ const SELECT_SHORTCUTS = [
   { key: "C", action: "Set group cover" },
   { key: "Ctrl+G", action: "Group selected (grid view)" },
   { key: "Ctrl+Shift+G", action: "Ungroup selected (grid view)" },
+  { key: "Shift+A", action: "Accept AI pick as group cover" },
 ];
 
 const ROUTE_SHORTCUTS = [
