@@ -12,6 +12,11 @@ export interface ImageEntry {
   flag: string;
   destination: string;
   starRating: number;
+  // AI fields (optional — populated by background worker)
+  faceCount?: number | null;
+  eyesOpenCount?: number | null;
+  sharpnessScore?: number | null;
+  aiAnalyzedAt?: string | null;
 }
 
 export interface ShootSummary {
@@ -45,4 +50,26 @@ export interface Group {
   shootId: number;
   groupType: "near_duplicate" | "related";
   members: GroupMemberInfo[];
+}
+
+export interface Face {
+  photoId: number;
+  bboxX: number; bboxY: number; bboxW: number; bboxH: number;
+  leftEyeX: number; leftEyeY: number;
+  rightEyeX: number; rightEyeY: number;
+  leftEyeOpen: 0 | 1;
+  rightEyeOpen: 0 | 1;
+  leftEyeSharpness: number;
+  rightEyeSharpness: number;
+  detectionConfidence: number;
+}
+
+export type AiProviderStatus = "cuda" | "cpu" | "disabled";
+
+export interface AiProgressEvent {
+  photoId: number;
+  ok: boolean;
+  done: number;
+  total: number;
+  failed: number;
 }

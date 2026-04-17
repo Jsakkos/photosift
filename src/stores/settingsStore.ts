@@ -8,6 +8,9 @@ export interface Settings {
   selectRequiresPick: boolean;
   routeMinStar: number;
   libraryRoot: string | null;
+  enableAiOnImport: boolean;
+  hideSoftThreshold: number;
+  eyeOpenConfidence: number;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -17,6 +20,9 @@ const DEFAULT_SETTINGS: Settings = {
   selectRequiresPick: true,
   routeMinStar: 3,
   libraryRoot: null,
+  enableAiOnImport: true,
+  hideSoftThreshold: 30,
+  eyeOpenConfidence: 0.7,
 };
 
 interface SettingsState {

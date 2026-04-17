@@ -14,6 +14,9 @@ beforeEach(() => {
       selectRequiresPick: false,
       routeMinStar: 0,
       libraryRoot: null,
+      enableAiOnImport: true,
+      hideSoftThreshold: 30,
+      eyeOpenConfidence: 0.7,
     },
   });
 });
