@@ -4,7 +4,7 @@ use crate::state::AppState;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[tauri::command]
 pub fn start_import(
@@ -36,10 +36,13 @@ pub fn start_import(
         app_state.import_cancel.clone()
     };
 
+    // Clone state handle for the post-import hook.
+    let app_for_ai = app.clone();
     std::thread::spawn(move || {
         match ingest::run_import(app.clone(), source, slug_clean, mode, cancel_flag) {
             Ok(shoot_id) => {
                 log::info!("Import completed: shoot_id={}", shoot_id);
+                enqueue_ai_for_shoot(&app_for_ai, shoot_id);
             }
             Err(e) => {
                 log::error!("Import failed: {}", e);
@@ -57,4 +60,62 @@ pub fn cancel_import(state: State<'_, Mutex<AppState>>) -> Result<(), String> {
     app_state.import_cancel.store(true, Ordering::Relaxed);
     log::info!("Import cancel requested");
     Ok(())
+}
+
+/// After a successful import, enqueue all new photos into the AI worker
+/// (if the user has `enable_ai_on_import` on and the worker is running).
+fn enqueue_ai_for_shoot(app: &AppHandle, shoot_id: i64) {
+    let state: tauri::State<'_, Mutex<AppState>> = app.state::<Mutex<AppState>>();
+    let guard = match state.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            log::error!("enqueue_ai_for_shoot: state lock poisoned: {}", e);
+            return;
+        }
+    };
+
+    let settings = match guard.db.as_ref().and_then(|db| db.get_settings().ok()) {
+        Some(s) => s,
+        None => {
+            log::warn!("enqueue_ai_for_shoot: no settings — skipping");
+            return;
+        }
+    };
+    if !settings.enable_ai_on_import {
+        log::info!("AI-on-import disabled; skipping enqueue for shoot {}", shoot_id);
+        return;
+    }
+
+    let ids = match guard.db.as_ref().and_then(|db| db.photos_needing_ai(shoot_id).ok()) {
+        Some(v) => v,
+        None => {
+            log::warn!("enqueue_ai_for_shoot: photos_needing_ai failed for shoot {}", shoot_id);
+            return;
+        }
+    };
+
+    let worker = match guard.ai_worker.as_ref() {
+        Some(w) => w,
+        None => {
+            log::warn!("enqueue_ai_for_shoot: no worker running");
+            return;
+        }
+    };
+
+    let base = crate::db::schema::shoot_cache_dir(shoot_id).join("previews");
+    let mut sent = 0_usize;
+    for id in &ids {
+        let preview = base.join(format!("{}.jpg", id));
+        if worker.sender.send(crate::ai::AiJob {
+            shoot_id,
+            photo_id: *id,
+            preview_path: preview.to_string_lossy().into_owned(),
+        }).is_ok() {
+            sent += 1;
+        }
+    }
+    guard.ai_total.fetch_add(sent, Ordering::SeqCst);
+    // Reset cancel flag so a prior cancel doesn't immediately kill the new batch.
+    guard.ai_cancel.store(false, Ordering::SeqCst);
+    log::info!("Enqueued {} photos for AI analysis in shoot {}", sent, shoot_id);
 }

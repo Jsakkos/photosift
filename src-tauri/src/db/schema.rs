@@ -74,6 +74,9 @@ pub struct Settings {
     /// Absolute path to the root of the photo library (used for copy-mode imports).
     /// `None` falls back to the system Pictures directory.
     pub library_root: Option<String>,
+    pub enable_ai_on_import: bool,
+    pub hide_soft_threshold: i32,
+    pub eye_open_confidence: f64,
 }
 
 impl Default for Settings {
@@ -85,6 +88,9 @@ impl Default for Settings {
             select_requires_pick: true,
             route_min_star: 3,
             library_root: None,
+            enable_ai_on_import: true,
+            hide_soft_threshold: 30,
+            eye_open_confidence: 0.7,
         }
     }
 }
@@ -245,6 +251,9 @@ impl Database {
         self.ensure_column("photos", "eyes_open_count", "INTEGER")?;
         self.ensure_column("photos", "ai_analyzed_at", "TEXT")?;
         self.create_faces_table()?;
+        self.ensure_column("settings", "enable_ai_on_import", "INTEGER NOT NULL DEFAULT 1")?;
+        self.ensure_column("settings", "hide_soft_threshold", "INTEGER NOT NULL DEFAULT 30")?;
+        self.ensure_column("settings", "eye_open_confidence", "REAL NOT NULL DEFAULT 0.7")?;
         Ok(())
     }
 
@@ -891,7 +900,8 @@ impl Database {
         self.conn
             .query_row(
                 "SELECT near_dup_threshold, related_threshold, triage_expand_groups,
-                        select_requires_pick, route_min_star, library_root
+                        select_requires_pick, route_min_star, library_root,
+                        enable_ai_on_import, hide_soft_threshold, eye_open_confidence
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
@@ -902,6 +912,9 @@ impl Database {
                         select_requires_pick: row.get::<_, i32>(3)? != 0,
                         route_min_star: row.get(4)?,
                         library_root: row.get(5)?,
+                        enable_ai_on_import: row.get::<_, i32>(6)? != 0,
+                        hide_soft_threshold: row.get(7)?,
+                        eye_open_confidence: row.get(8)?,
                     })
                 },
             )
@@ -911,15 +924,19 @@ impl Database {
     pub fn update_settings(&self, s: &Settings) -> Result<()> {
         self.conn.execute(
             "INSERT INTO settings (id, near_dup_threshold, related_threshold, triage_expand_groups,
-                                   select_requires_pick, route_min_star, library_root)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                                   select_requires_pick, route_min_star, library_root,
+                                   enable_ai_on_import, hide_soft_threshold, eye_open_confidence)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
                 triage_expand_groups = excluded.triage_expand_groups,
                 select_requires_pick = excluded.select_requires_pick,
                 route_min_star = excluded.route_min_star,
-                library_root = excluded.library_root",
+                library_root = excluded.library_root,
+                enable_ai_on_import = excluded.enable_ai_on_import,
+                hide_soft_threshold = excluded.hide_soft_threshold,
+                eye_open_confidence = excluded.eye_open_confidence",
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
@@ -927,6 +944,9 @@ impl Database {
                 s.select_requires_pick as i32,
                 s.route_min_star,
                 s.library_root,
+                s.enable_ai_on_import as i32,
+                s.hide_soft_threshold,
+                s.eye_open_confidence,
             ],
         )?;
         Ok(())
