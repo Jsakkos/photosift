@@ -228,6 +228,35 @@ impl Database {
         self.ensure_column("settings", "route_min_star", "INTEGER NOT NULL DEFAULT 3")?;
         self.ensure_column("settings", "library_root", "TEXT")?;
         self.ensure_column("shoots", "import_mode", "TEXT NOT NULL DEFAULT 'copy'")?;
+        // Phase 2 AI
+        self.ensure_column("photos", "face_count", "INTEGER")?;
+        self.ensure_column("photos", "eyes_open_count", "INTEGER")?;
+        self.ensure_column("photos", "ai_analyzed_at", "TEXT")?;
+        self.create_faces_table()?;
+        Ok(())
+    }
+
+    fn create_faces_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+                bbox_x REAL NOT NULL,
+                bbox_y REAL NOT NULL,
+                bbox_w REAL NOT NULL,
+                bbox_h REAL NOT NULL,
+                left_eye_x REAL NOT NULL,
+                left_eye_y REAL NOT NULL,
+                right_eye_x REAL NOT NULL,
+                right_eye_y REAL NOT NULL,
+                left_eye_open INTEGER NOT NULL,
+                right_eye_open INTEGER NOT NULL,
+                left_eye_sharpness REAL NOT NULL,
+                right_eye_sharpness REAL NOT NULL,
+                detection_confidence REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);",
+        )?;
         Ok(())
     }
 
@@ -1008,6 +1037,35 @@ mod tests {
         let mut expected = ids.clone();
         expected.sort();
         assert_eq!(live, expected);
+    }
+
+    #[test]
+    fn test_ai_columns_present_after_migration() {
+        let (db, _dir) = test_db();
+        for col in &["face_count", "eyes_open_count", "ai_analyzed_at"] {
+            assert!(
+                db.column_exists("photos", col).unwrap(),
+                "photos.{} should be present after migration",
+                col
+            );
+        }
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='faces'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "faces table should exist");
+    }
+
+    #[test]
+    fn test_migration_is_idempotent() {
+        let (db, _dir) = test_db();
+        // Re-run migration — should be a no-op, not error.
+        db.run_migrations().unwrap();
+        assert!(db.column_exists("photos", "face_count").unwrap());
     }
 
     /// Mutex-poison resilience: the XmpWriteQueue must not deadlock or crash
