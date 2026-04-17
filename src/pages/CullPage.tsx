@@ -11,6 +11,16 @@ import { ShortcutHints } from "../components/ShortcutHints";
 import { GroupStrip } from "../components/GroupStrip";
 import { GridView } from "../components/GridView";
 import { ComparisonView } from "../components/ComparisonView";
+import { AiPanel } from "../components/AiPanel";
+
+function AiPanelHost() {
+  const currentItem = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
+  const aiPanelForced = useProjectStore((s) => s.aiPanelForced);
+  const faceCount = currentItem?.image.faceCount ?? 0;
+  const visible = faceCount > 0 || aiPanelForced;
+  if (!currentItem) return null;
+  return <AiPanel photoId={currentItem.image.id} visible={visible} />;
+}
 
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
@@ -73,6 +83,7 @@ export function CullPage() {
           <div className="flex-1 relative overflow-hidden">
             <LoupeView />
             <MetadataOverlay />
+            <AiPanelHost />
             <ShortcutHints />
           </div>
           <GroupStrip />

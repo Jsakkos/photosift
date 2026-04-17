@@ -295,6 +295,8 @@ interface ProjectState {
   redo: () => Promise<void>;
   toggleMetadata: () => void;
   toggleShortcutHints: () => void;
+  aiPanelForced: boolean;
+  toggleAiPanel: () => void;
   toggleAutoAdvance: () => void;
   toggleZoom: () => void;
   setView: (view: CullView) => Promise<void>;
@@ -330,6 +332,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   loadError: null,
   showMetadata: false,
   showShortcutHints: false,
+  aiPanelForced: false,
   autoAdvance: true,
   isZoomed: false,
   undoStack: [],
@@ -911,6 +914,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   toggleMetadata: () => set((s) => ({ showMetadata: !s.showMetadata })),
   toggleShortcutHints: () =>
     set((s) => ({ showShortcutHints: !s.showShortcutHints })),
+  toggleAiPanel: () => set((s) => ({ aiPanelForced: !s.aiPanelForced })),
   toggleAutoAdvance: () => set((s) => ({ autoAdvance: !s.autoAdvance })),
   toggleZoom: () => set((s) => ({ isZoomed: !s.isZoomed })),
 
