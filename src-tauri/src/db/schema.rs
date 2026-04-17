@@ -2,7 +2,7 @@ use rusqlite::{params, Connection, OptionalExtension, Result};
 use std::path::{Path, PathBuf};
 
 pub struct Database {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -953,7 +953,7 @@ pub fn shoot_cache_dir(shoot_id: i64) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use tempfile::tempdir;
 
@@ -982,6 +982,10 @@ mod tests {
             initial_flag: None,
             initial_star_rating: None,
         }
+    }
+
+    pub(crate) fn sample_insert_for_test(hash_byte: u8, filename: &str) -> PhotoInsert {
+        sample_insert(hash_byte, filename)
     }
 
     #[test]

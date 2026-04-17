@@ -20,3 +20,5 @@ pub struct AiJob {
     pub photo_id: i64,
     pub preview_path: String,
 }
+
+pub use worker::{process_job, run_loop, WorkerHandle};
