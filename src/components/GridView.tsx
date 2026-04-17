@@ -15,6 +15,7 @@ export function GridView() {
     currentView,
     createGroupFromPhotos,
     ungroupPhotos,
+    toggleGroupExpansion,
   } = useProjectStore();
   const [colWidth, setColWidth] = useState<(typeof SIZES)[number]>(160);
   const [selection, setSelection] = useState<Set<number>>(new Set());
@@ -73,8 +74,19 @@ export function GridView() {
           break;
         case "Enter":
           e.preventDefault();
-          setCurrentIndex(focusIndex);
-          setViewMode("sequential");
+          {
+            const focused = displayItems[focusIndex];
+            if (
+              focused?.isGroupCover &&
+              focused.groupId !== undefined &&
+              (currentView === "triage" || currentView === "select")
+            ) {
+              toggleGroupExpansion(focused.groupId);
+            } else {
+              setCurrentIndex(focusIndex);
+              setViewMode("sequential");
+            }
+          }
           break;
         case "=":
         case "+": {
@@ -92,7 +104,7 @@ export function GridView() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [colWidth, displayItems.length, focusIndex, columnCount, setCurrentIndex, setViewMode]);
+  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, currentView, toggleGroupExpansion]);
 
   const handleClick = useCallback(
     (index: number, e: React.MouseEvent) => {
@@ -189,8 +201,16 @@ export function GridView() {
               isMulti={selection.size > 1}
               onClick={handleClick}
               onDoubleClick={() => {
-                setCurrentIndex(index);
-                setViewMode("sequential");
+                if (
+                  item.isGroupCover &&
+                  item.groupId !== undefined &&
+                  (currentView === "triage" || currentView === "select")
+                ) {
+                  toggleGroupExpansion(item.groupId);
+                } else {
+                  setCurrentIndex(index);
+                  setViewMode("sequential");
+                }
               }}
               currentView={currentView}
             />
@@ -206,6 +226,7 @@ export function GridView() {
       setCurrentIndex,
       setViewMode,
       currentView,
+      toggleGroupExpansion,
     ],
   );
 
@@ -218,6 +239,7 @@ export function GridView() {
             const idx = SIZES.indexOf(colWidth);
             if (idx > 0) setColWidth(SIZES[idx - 1]);
           }}
+          title="Shrink thumbnails (-)"
           className="w-6 h-6 flex items-center justify-center rounded bg-[var(--bg-tertiary)] border border-white/10 hover:border-white/20"
         >
           −
@@ -228,6 +250,7 @@ export function GridView() {
             const idx = SIZES.indexOf(colWidth);
             if (idx < SIZES.length - 1) setColWidth(SIZES[idx + 1]);
           }}
+          title="Grow thumbnails (+)"
           className="w-6 h-6 flex items-center justify-center rounded bg-[var(--bg-tertiary)] border border-white/10 hover:border-white/20"
         >
           +
@@ -262,18 +285,21 @@ export function GridView() {
           <div className="flex gap-3">
             <button
               onClick={() => handleBulkAction("pick")}
+              title="Pick selected (P)"
               className="px-3 py-1 rounded border border-green-500/40 text-green-500 text-xs hover:bg-green-500/10"
             >
               P Pick
             </button>
             <button
               onClick={() => handleBulkAction("reject")}
+              title="Reject selected (X)"
               className="px-3 py-1 rounded border border-red-500/40 text-red-500 text-xs hover:bg-red-500/10"
             >
               X Reject
             </button>
             <button
               onClick={() => handleBulkAction("unreviewed")}
+              title="Reset to unreviewed (U)"
               className="px-3 py-1 rounded border border-white/20 text-[var(--text-secondary)] text-xs hover:bg-white/5"
             >
               U Reset
@@ -302,6 +328,7 @@ export function GridView() {
                 setCurrentIndex(idx);
                 setViewMode("sequential");
               }}
+              title="Open first selection in sequential view (Enter)"
               className="px-3 py-1 rounded border border-white/20 text-[var(--text-secondary)] text-xs hover:bg-white/5"
             >
               Enter → Loupe

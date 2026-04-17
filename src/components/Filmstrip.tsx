@@ -26,7 +26,7 @@ function Thumbnail({ imageId, filename }: { imageId: number; filename: string })
 }
 
 export function Filmstrip() {
-  const { displayItems, currentIndex, setCurrentIndex, currentView, setViewMode } = useProjectStore();
+  const { displayItems, currentIndex, setCurrentIndex, currentView, setViewMode, toggleGroupExpansion } = useProjectStore();
   const listRef = useRef<List>(null);
 
   const openLoupe = useCallback(
@@ -35,6 +35,18 @@ export function Filmstrip() {
       setViewMode("sequential");
     },
     [setCurrentIndex, setViewMode],
+  );
+
+  const handleGroupDoubleClick = useCallback(
+    (index: number, groupId: number) => {
+      if (currentView === "triage") {
+        setCurrentIndex(index);
+        toggleGroupExpansion(groupId);
+      } else {
+        openLoupe(index);
+      }
+    },
+    [currentView, setCurrentIndex, toggleGroupExpansion, openLoupe],
   );
 
   useEffect(() => {
@@ -51,13 +63,14 @@ export function Filmstrip() {
       const image = item.image;
       const isCurrent = index === currentIndex;
 
-      if (currentView === "triage" && item.isGroupCover && item.groupMemberCount) {
+      if (currentView === "triage" && item.isGroupCover && item.groupMemberCount && item.groupId !== undefined) {
+        const gid = item.groupId;
         return (
           <div
             style={style}
             className="flex items-center justify-center p-1"
             onClick={() => setCurrentIndex(index)}
-            onDoubleClick={() => openLoupe(index)}
+            onDoubleClick={() => handleGroupDoubleClick(index, gid)}
           >
             <GroupStack
               imageId={image.id}
@@ -65,7 +78,7 @@ export function Filmstrip() {
               count={item.groupMemberCount}
               isCurrent={isCurrent}
               onClick={() => setCurrentIndex(index)}
-              onDoubleClick={() => openLoupe(index)}
+              onDoubleClick={() => handleGroupDoubleClick(index, gid)}
             />
           </div>
         );
@@ -110,7 +123,7 @@ export function Filmstrip() {
         </div>
       );
     },
-    [displayItems, currentIndex, setCurrentIndex, currentView, openLoupe],
+    [displayItems, currentIndex, setCurrentIndex, currentView, openLoupe, handleGroupDoubleClick],
   );
 
   if (displayItems.length === 0) return null;

@@ -14,6 +14,14 @@ function triageExpand(): boolean {
   return useSettingsStore.getState().settings.triageExpandGroups;
 }
 
+function selectRequiresPick(): boolean {
+  return useSettingsStore.getState().settings.selectRequiresPick ?? false;
+}
+
+function routeMinStar(): number {
+  return useSettingsStore.getState().settings.routeMinStar ?? 0;
+}
+
 interface UndoEntry {
   imageId: number;
   field: "starRating" | "flag" | "destination";
@@ -46,6 +54,9 @@ export function computeDisplayItems(
   currentView: CullView,
   groups: Group[],
   triageExpandGroups: boolean = false,
+  expandedGroupIds: Set<number> = new Set(),
+  selectRequiresPickFilter: boolean = false,
+  routeMinStarGate: number = 0,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   const photoGroupMap = buildPhotoGroupMap(groups);
@@ -74,6 +85,22 @@ export function computeDisplayItems(
         if (group) {
           if (seenGroups.has(group.id)) continue;
           seenGroups.add(group.id);
+          if (expandedGroupIds.has(group.id)) {
+            // Per-group drill-down: emit each unreviewed member inline with
+            // groupId set so the filmstrip still draws the blue affiliation bar.
+            for (const member of group.members) {
+              const mi = images.findIndex((im) => im.id === member.photoId);
+              if (mi < 0) continue;
+              const memImg = images[mi];
+              if (memImg.flag !== "unreviewed") continue;
+              items.push({
+                imageIndex: mi,
+                image: memImg,
+                groupId: group.id,
+              });
+            }
+            continue;
+          }
           const coverId = getGroupCover(group);
           const coverIdx = images.findIndex((im) => im.id === coverId);
           const coverImg = coverIdx >= 0 ? images[coverIdx] : img;
@@ -97,9 +124,12 @@ export function computeDisplayItems(
     }
   } else if (currentView === "select") {
     const seenGroups = new Set<number>();
+    const passesSelectGate = (img: ImageEntry): boolean =>
+      selectRequiresPickFilter ? img.flag === "pick" : img.flag !== "reject";
+
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
-      if (img.flag === "reject") continue;
+      if (!passesSelectGate(img)) continue;
 
       const group = photoGroupMap.get(img.id);
       if (group) {
@@ -109,7 +139,7 @@ export function computeDisplayItems(
           const memberIdx = images.findIndex((im) => im.id === member.photoId);
           if (memberIdx < 0) continue;
           const memberImg = images[memberIdx];
-          if (memberImg.flag === "reject") continue;
+          if (!passesSelectGate(memberImg)) continue;
           items.push({
             imageIndex: memberIdx,
             image: memberImg,
@@ -123,7 +153,11 @@ export function computeDisplayItems(
   } else {
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
-      if (img.flag === "pick" && img.destination === "unrouted") {
+      if (
+        img.flag === "pick" &&
+        img.destination === "unrouted" &&
+        (routeMinStarGate === 0 || img.starRating >= routeMinStarGate)
+      ) {
         items.push({ imageIndex: i, image: img });
       }
     }
@@ -147,10 +181,12 @@ interface ProjectState {
   viewMode: ViewMode;
   groups: Group[];
   displayItems: DisplayItem[];
+  expandedGroupIds: Set<number>;
   lastFlagAction: { color: string; timestamp: number } | null;
   toast: { message: string; kind: "info" | "error"; timestamp: number } | null;
 
   loadShoot: (shootId: number) => Promise<void>;
+  toggleGroupExpansion: (groupId: number) => void;
   setCurrentIndex: (index: number) => void;
   navigateNext: () => void;
   navigatePrev: () => void;
@@ -200,6 +236,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   viewMode: "sequential",
   groups: [],
   displayItems: [],
+  expandedGroupIds: new Set<number>(),
   lastFlagAction: null,
   toast: null,
   comparisonPinnedId: null,
@@ -226,7 +263,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         viewName: "triage",
       }).catch(() => null);
 
-      const displayItems = computeDisplayItems(images, "triage", groups, triageExpand());
+      const displayItems = computeDisplayItems(images, "triage", groups, triageExpand(), new Set<number>(), selectRequiresPick(), routeMinStar());
 
       let startIndex = 0;
       if (cursor !== null) {
@@ -245,6 +282,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         viewMode: "sequential",
         groups,
         displayItems,
+        expandedGroupIds: new Set<number>(),
         lastFlagAction: null,
       });
     } catch (e) {
@@ -291,6 +329,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().currentView,
       get().groups,
       triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
     );
 
     set({
@@ -327,6 +368,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().currentView,
             get().groups,
             triageExpand(),
+            get().expandedGroupIds,
+            selectRequiresPick(),
+            routeMinStar(),
           ),
         });
       }
@@ -388,7 +432,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       affectedIds.push({ id: image.id, oldFlag });
     }
 
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand());
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
 
     const flashColor =
       flag === "pick"
@@ -463,6 +507,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           get().currentView,
           get().groups,
           triageExpand(),
+          get().expandedGroupIds,
+          selectRequiresPick(),
+          routeMinStar(),
         ),
       });
     }
@@ -485,6 +532,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentView,
       groups,
       triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
     );
 
     set({
@@ -525,6 +575,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().currentView,
             get().groups,
             triageExpand(),
+            get().expandedGroupIds,
+            selectRequiresPick(),
+            routeMinStar(),
           ),
         });
       }
@@ -558,6 +611,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentView,
       groups,
       triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -613,6 +669,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentView,
       groups,
       triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -654,7 +713,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }).catch(() => {});
     }
 
-    const newDisplayItems = computeDisplayItems(images, view, groups, triageExpand());
+    const newDisplayItems = computeDisplayItems(images, view, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
 
     let newIndex = 0;
     try {
@@ -709,6 +768,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   toggleAutoAdvance: () => set((s) => ({ autoAdvance: !s.autoAdvance })),
   toggleZoom: () => set((s) => ({ isZoomed: !s.isZoomed })),
 
+  toggleGroupExpansion: (groupId: number) => {
+    const { expandedGroupIds, images, currentView, groups, displayItems, currentIndex } = get();
+    const next = new Set(expandedGroupIds);
+    if (next.has(groupId)) next.delete(groupId);
+    else next.add(groupId);
+
+    const currentPhotoId = displayItems[currentIndex]?.image.id;
+    const newDisplayItems = computeDisplayItems(
+      images,
+      currentView,
+      groups,
+      triageExpand(),
+      next,
+      selectRequiresPick(),
+      routeMinStar(),
+    );
+
+    let newIndex = 0;
+    if (currentPhotoId !== undefined) {
+      const idx = newDisplayItems.findIndex((d) => d.image.id === currentPhotoId);
+      if (idx >= 0) newIndex = idx;
+    }
+    newIndex = Math.min(newIndex, Math.max(0, newDisplayItems.length - 1));
+
+    set({
+      expandedGroupIds: next,
+      displayItems: newDisplayItems,
+      currentIndex: newIndex < 0 ? 0 : newIndex,
+    });
+  },
+
   setFlagNoAutoReject: async (flag: string) => {
     const { displayItems, currentIndex, autoAdvance, undoStack, images, currentView, groups } = get();
     const item = displayItems[currentIndex];
@@ -720,7 +810,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, flag };
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand());
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
 
     const flashColor = flag === "pick" ? "rgba(34, 197, 94, 0.15)" : flag === "reject" ? "rgba(239, 68, 68, 0.15)" : null;
 
@@ -747,7 +837,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
         revertImages[idx] = { ...revertImages[idx], flag: oldFlag };
-        set({ images: revertImages, displayItems: computeDisplayItems(revertImages, get().currentView, get().groups, triageExpand()) });
+        set({ images: revertImages, displayItems: computeDisplayItems(revertImages, get().currentView, get().groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()) });
       }
     }
   },
@@ -856,7 +946,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     updatedImages[pickIdx] = { ...updatedImages[pickIdx], flag: "pick" };
     updatedImages[rejectIdx] = { ...updatedImages[rejectIdx], flag: "reject" };
 
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand());
+    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
 
     set({
       images: updatedImages,
@@ -912,7 +1002,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(images, currentView, groups, triageExpand()),
+        displayItems: computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()),
       });
     } catch (e) {
       console.error("Create group failed:", e);
@@ -923,7 +1013,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   refreshDisplay: () => {
     const { images, currentView, groups, displayItems, currentIndex } = get();
     const currentPhotoId = displayItems[currentIndex]?.image.id;
-    const next = computeDisplayItems(images, currentView, groups, triageExpand());
+    const next = computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
     let nextIndex = currentIndex;
     if (currentPhotoId !== undefined) {
       const idx = next.findIndex((d) => d.image.id === currentPhotoId);
@@ -943,7 +1033,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(images, currentView, groups, triageExpand()),
+        displayItems: computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()),
       });
     } catch (e) {
       console.error("Ungroup failed:", e);

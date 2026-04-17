@@ -107,3 +107,37 @@ describe("ungroupPhotos", () => {
     expect(useProjectStore.getState().displayItems).toHaveLength(3);
   });
 });
+
+describe("toggleGroupExpansion", () => {
+  test("toggling adds and removes groupId and rebuilds displayItems", () => {
+    const img1 = makeImage({ id: 1, flag: "unreviewed" });
+    const img2 = makeImage({ id: 2, flag: "unreviewed" });
+    const img3 = makeImage({ id: 3, flag: "unreviewed" });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+      { photoId: 3 },
+    ]);
+
+    useProjectStore.setState({
+      images: [img1, img2, img3],
+      groups: [group],
+      displayItems: computeDisplayItems([img1, img2, img3], "triage", [group]),
+      currentView: "triage",
+      currentIndex: 0,
+      expandedGroupIds: new Set<number>(),
+    });
+
+    // Collapsed: one cover item
+    expect(useProjectStore.getState().displayItems).toHaveLength(1);
+
+    useProjectStore.getState().toggleGroupExpansion(group.id);
+    expect(useProjectStore.getState().expandedGroupIds.has(group.id)).toBe(true);
+    // Expanded: 3 member rows
+    expect(useProjectStore.getState().displayItems).toHaveLength(3);
+
+    useProjectStore.getState().toggleGroupExpansion(group.id);
+    expect(useProjectStore.getState().expandedGroupIds.has(group.id)).toBe(false);
+    expect(useProjectStore.getState().displayItems).toHaveLength(1);
+  });
+});

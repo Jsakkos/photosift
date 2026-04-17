@@ -152,6 +152,91 @@ describe("computeDisplayItems", () => {
       expect(items).toHaveLength(1);
       expect(items[0].groupMemberCount).toBe(3);
     });
+
+    test("expandedGroupIds drills into one group inline while others stay collapsed", () => {
+      const img1 = makeImage({ id: 1, flag: "unreviewed" });
+      const img2 = makeImage({ id: 2, flag: "unreviewed" });
+      const img3 = makeImage({ id: 3, flag: "unreviewed" });
+      const img4 = makeImage({ id: 4, flag: "unreviewed" });
+      const img5 = makeImage({ id: 5, flag: "unreviewed" });
+      const groupA = makeGroup([
+        { photoId: 1, isCover: true },
+        { photoId: 2 },
+      ]);
+      const groupB = makeGroup([
+        { photoId: 3, isCover: true },
+        { photoId: 4 },
+        { photoId: 5 },
+      ]);
+
+      const items = computeDisplayItems(
+        [img1, img2, img3, img4, img5],
+        "triage",
+        [groupA, groupB],
+        false,
+        new Set([groupB.id]),
+      );
+
+      // groupA stays collapsed (1 cover) + groupB expanded (3 members) = 4 items
+      expect(items).toHaveLength(4);
+      expect(items[0].isGroupCover).toBe(true);
+      expect(items[0].groupId).toBe(groupA.id);
+      // Expanded members carry groupId but no isGroupCover / count
+      expect(items[1].groupId).toBe(groupB.id);
+      expect(items[1].isGroupCover).toBeUndefined();
+      expect(items.slice(1).map((i) => i.image.id)).toEqual([3, 4, 5]);
+    });
+
+    test("expandedGroupIds skips non-unreviewed members within an expanded group", () => {
+      const img1 = makeImage({ id: 1, flag: "unreviewed" });
+      const img2 = makeImage({ id: 2, flag: "reject" });
+      const img3 = makeImage({ id: 3, flag: "unreviewed" });
+      const group = makeGroup([
+        { photoId: 1, isCover: true },
+        { photoId: 2 },
+        { photoId: 3 },
+      ]);
+
+      const items = computeDisplayItems(
+        [img1, img2, img3],
+        "triage",
+        [group],
+        false,
+        new Set([group.id]),
+      );
+
+      expect(items).toHaveLength(2);
+      expect(items.map((i) => i.image.id)).toEqual([1, 3]);
+    });
+
+    test("global triageExpandGroups=true makes expandedGroupIds a no-op", () => {
+      const img1 = makeImage({ id: 1, flag: "unreviewed" });
+      const img2 = makeImage({ id: 2, flag: "unreviewed" });
+      const group = makeGroup([
+        { photoId: 1, isCover: true },
+        { photoId: 2 },
+      ]);
+
+      const withExpanded = computeDisplayItems(
+        [img1, img2],
+        "triage",
+        [group],
+        true,
+        new Set([group.id]),
+      );
+      const withoutExpanded = computeDisplayItems(
+        [img1, img2],
+        "triage",
+        [group],
+        true,
+        new Set(),
+      );
+      expect(withExpanded).toHaveLength(2);
+      expect(withoutExpanded).toHaveLength(2);
+      expect(withExpanded.map((i) => i.image.id)).toEqual(
+        withoutExpanded.map((i) => i.image.id),
+      );
+    });
   });
 
   describe("select view", () => {
@@ -237,6 +322,112 @@ describe("computeDisplayItems", () => {
 
       expect(items).toHaveLength(2);
       expect(items[0].groupId).toBeUndefined();
+    });
+  });
+
+  describe("select view gate (selectRequiresPick)", () => {
+    test("selectRequiresPick=true drops unreviewed members from group", () => {
+      const img1 = makeImage({ id: 1, flag: "pick" });
+      const img2 = makeImage({ id: 2, flag: "unreviewed" });
+      const img3 = makeImage({ id: 3, flag: "reject" });
+      const group = makeGroup([
+        { photoId: 1, isCover: true },
+        { photoId: 2 },
+        { photoId: 3 },
+      ]);
+
+      const items = computeDisplayItems(
+        [img1, img2, img3],
+        "select",
+        [group],
+        false,
+        new Set(),
+        true, // selectRequiresPick
+      );
+
+      expect(items).toHaveLength(1);
+      expect(items[0].image.id).toBe(1);
+    });
+
+    test("selectRequiresPick=true drops ungrouped unreviewed images", () => {
+      const images = [
+        makeImage({ flag: "unreviewed" }),
+        makeImage({ flag: "pick" }),
+        makeImage({ flag: "reject" }),
+      ];
+
+      const items = computeDisplayItems(
+        images,
+        "select",
+        [],
+        false,
+        new Set(),
+        true,
+      );
+
+      expect(items).toHaveLength(1);
+      expect(items[0].image.id).toBe(2);
+    });
+
+    test("selectRequiresPick=false preserves legacy flag != reject semantics", () => {
+      const images = [
+        makeImage({ flag: "unreviewed" }),
+        makeImage({ flag: "pick" }),
+      ];
+
+      const items = computeDisplayItems(
+        images,
+        "select",
+        [],
+        false,
+        new Set(),
+        false,
+      );
+
+      expect(items).toHaveLength(2);
+    });
+  });
+
+  describe("route view gate (routeMinStar)", () => {
+    test("routeMinStar=3 drops picks below threshold", () => {
+      const images = [
+        makeImage({ flag: "pick", destination: "unrouted", starRating: 0 }),
+        makeImage({ flag: "pick", destination: "unrouted", starRating: 2 }),
+        makeImage({ flag: "pick", destination: "unrouted", starRating: 3 }),
+        makeImage({ flag: "pick", destination: "unrouted", starRating: 5 }),
+      ];
+
+      const items = computeDisplayItems(
+        images,
+        "route",
+        [],
+        false,
+        new Set(),
+        false,
+        3, // routeMinStar
+      );
+
+      expect(items).toHaveLength(2);
+      expect(items.map((i) => i.image.starRating).sort()).toEqual([3, 5]);
+    });
+
+    test("routeMinStar=0 disables the gate", () => {
+      const images = [
+        makeImage({ flag: "pick", destination: "unrouted", starRating: 0 }),
+        makeImage({ flag: "pick", destination: "unrouted", starRating: 3 }),
+      ];
+
+      const items = computeDisplayItems(
+        images,
+        "route",
+        [],
+        false,
+        new Set(),
+        false,
+        0,
+      );
+
+      expect(items).toHaveLength(2);
     });
   });
 

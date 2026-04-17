@@ -29,6 +29,7 @@ export function useKeyboardNav() {
     exitComparison,
     cycleComparison,
     comparisonQuickPick,
+    toggleGroupExpansion,
   } = useProjectStore();
   const openSettings = useSettingsStore((s) => s.openDialog);
   const setToast = useProjectStore((s) => s.setToast);
@@ -239,6 +240,19 @@ export function useKeyboardNav() {
         case "?":
           toggleShortcutHints();
           break;
+        case "Enter":
+          {
+            const focused = displayItems[currentIndex];
+            if (
+              focused?.isGroupCover &&
+              focused.groupId !== undefined &&
+              (currentView === "triage" || currentView === "select")
+            ) {
+              e.preventDefault();
+              toggleGroupExpansion(focused.groupId);
+            }
+          }
+          break;
       }
     };
 
@@ -272,5 +286,6 @@ export function useKeyboardNav() {
     openSettings,
     setToast,
     currentShoot,
+    toggleGroupExpansion,
   ]);
 }

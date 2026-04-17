@@ -5,12 +5,18 @@ export interface Settings {
   nearDupThreshold: number;
   relatedThreshold: number;
   triageExpandGroups: boolean;
+  selectRequiresPick: boolean;
+  routeMinStar: number;
+  libraryRoot: string | null;
 }
 
 const DEFAULT_SETTINGS: Settings = {
   nearDupThreshold: 4,
   relatedThreshold: 12,
   triageExpandGroups: false,
+  selectRequiresPick: true,
+  routeMinStar: 3,
+  libraryRoot: null,
 };
 
 interface SettingsState {
@@ -40,12 +46,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   updateSettings: async (partial: Partial<Settings>) => {
-    const next = { ...get().settings, ...partial };
+    const prev = get().settings;
+    const next = { ...prev, ...partial };
     set({ settings: next });
     try {
       await invoke("update_settings", { settings: next });
     } catch (e) {
+      // Roll back optimistic update on validation failure so the dialog can
+      // surface the error and re-prompt.
+      set({ settings: prev });
       console.error("Failed to persist settings:", e);
+      throw e;
     }
   },
 
