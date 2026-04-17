@@ -7,6 +7,8 @@ const NAV_SHORTCUTS = [
   { key: "Z", action: "Toggle zoom" },
   { key: "I", action: "Toggle metadata" },
   { key: "G", action: "Toggle grid view" },
+  { key: ",", action: "Open settings" },
+  { key: "Ctrl+E", action: "Export XMP sidecars" },
   { key: "?", action: "Toggle this overlay" },
   { key: "Ctrl+Z", action: "Undo" },
   { key: "Ctrl+Shift+Z", action: "Redo" },
@@ -26,12 +28,21 @@ const SELECT_SHORTCUTS = [
   { key: "U", action: "Reset to unreviewed" },
   { key: "Tab", action: "2-up comparison" },
   { key: "C", action: "Set group cover" },
+  { key: "Ctrl+G", action: "Group selected (grid view)" },
+  { key: "Ctrl+Shift+G", action: "Ungroup selected (grid view)" },
 ];
 
 const ROUTE_SHORTCUTS = [
   { key: "E", action: "Mark for edit" },
   { key: "D", action: "Publish direct" },
   { key: "U", action: "Reset to unrouted" },
+];
+
+const COMPARISON_SHORTCUTS = [
+  { key: "Tab", action: "Enter comparison" },
+  { key: "Shift+Tab / Esc", action: "Exit comparison" },
+  { key: "1 / 2", action: "Pick left / right (reject other)" },
+  { key: "← →", action: "Cycle right panel" },
 ];
 
 export function ShortcutHints() {
@@ -85,6 +96,23 @@ export function ShortcutHints() {
             </div>
           ))}
         </div>
+        {currentView === "select" && (
+          <>
+            <h3 className="text-sm font-medium text-[var(--accent)] mt-4 mb-2">
+              Comparison
+            </h3>
+            <div className="space-y-2">
+              {COMPARISON_SHORTCUTS.map(({ key, action }) => (
+                <div key={key} className="flex justify-between gap-8 text-sm">
+                  <kbd className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-primary)] font-mono text-xs">
+                    {key}
+                  </kbd>
+                  <span className="text-[var(--text-secondary)]">{action}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
         <p className="mt-4 text-xs text-[var(--text-secondary)] text-center">
           Press ? or click to close
         </p>

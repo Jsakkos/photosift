@@ -1,10 +1,10 @@
 import { useProjectStore } from "../stores/projectStore";
 import type { CullView } from "../types";
 
-const VIEWS: { key: CullView; label: string }[] = [
-  { key: "triage", label: "Triage" },
-  { key: "select", label: "Select" },
-  { key: "route", label: "Route" },
+const VIEWS: { key: CullView; label: string; tooltip: string }[] = [
+  { key: "triage", label: "Triage", tooltip: "Triage — pick or reject each photo" },
+  { key: "select", label: "Select", tooltip: "Select — choose the best of similar shots" },
+  { key: "route", label: "Route", tooltip: "Route — mark for edit or publish" },
 ];
 
 function useViewStats() {
@@ -43,10 +43,11 @@ export function ViewSelector() {
   return (
     <div className="flex items-center justify-between px-4 bg-[#111] border-b border-white/10">
       <div className="flex">
-        {VIEWS.map(({ key, label }) => (
+        {VIEWS.map(({ key, label, tooltip }) => (
           <button
             key={key}
             onClick={() => setView(key)}
+            title={tooltip}
             className={`px-5 py-2.5 text-[13px] border-b-2 transition-colors ${
               currentView === key
                 ? "text-[var(--accent)] font-semibold border-[var(--accent)]"

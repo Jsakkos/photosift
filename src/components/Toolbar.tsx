@@ -5,7 +5,7 @@ import { ViewSelector } from "./ViewSelector";
 import { ProgressBar } from "./ProgressBar";
 
 export function Toolbar() {
-  const { currentShoot, displayItems, currentIndex, autoAdvance, toggleAutoAdvance } =
+  const { currentShoot, displayItems, currentIndex, autoAdvance, toggleAutoAdvance, toggleShortcutHints } =
     useProjectStore();
   const openSettings = useSettingsStore((s) => s.openDialog);
   const navigate = useNavigate();
@@ -19,6 +19,7 @@ export function Toolbar() {
         <div className="flex items-center gap-4">
           <button
             onClick={() => navigate("/shoots")}
+            title="Back to shoots"
             className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
           >
             &larr; Shoots
@@ -37,7 +38,15 @@ export function Toolbar() {
         </div>
         <div className="flex items-center gap-3">
           <button
+            onClick={toggleShortcutHints}
+            title="Keyboard shortcuts (?)"
+            className="text-xs text-[var(--text-secondary)]/60 hover:text-[var(--text-primary)] transition-colors"
+          >
+            Press ? for shortcuts
+          </button>
+          <button
             onClick={toggleAutoAdvance}
+            title="Toggle auto-advance on pick/reject"
             className={`px-2 py-1 rounded text-xs transition-colors ${
               autoAdvance
                 ? "bg-[var(--accent)] text-white"
