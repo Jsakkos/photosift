@@ -68,6 +68,14 @@ pub fn eye_crop_pixels(
     }
 }
 
+use anyhow::Result;
+use image::GrayImage;
+
+pub trait EyeStateProvider: Send + Sync {
+    /// Returns 0 (closed) or 1 (open).
+    fn classify(&self, crop: &GrayImage) -> Result<i32>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
