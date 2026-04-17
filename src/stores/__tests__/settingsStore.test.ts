@@ -3,7 +3,14 @@ import { setupMockIpc } from "../../test/mockIpc";
 
 beforeEach(() => {
   useSettingsStore.setState({
-    settings: { nearDupThreshold: 4, relatedThreshold: 12, triageExpandGroups: false },
+    settings: {
+      nearDupThreshold: 4,
+      relatedThreshold: 12,
+      triageExpandGroups: false,
+      selectRequiresPick: true,
+      routeMinStar: 3,
+      libraryRoot: null,
+    },
     isLoaded: false,
     isOpen: false,
   });

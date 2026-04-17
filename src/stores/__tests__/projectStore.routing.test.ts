@@ -1,11 +1,24 @@
 import { useProjectStore } from "../projectStore";
 import { computeDisplayItems } from "../projectStore";
+import { useSettingsStore } from "../settingsStore";
 import { setupMockIpc } from "../../test/mockIpc";
 import { makeImage, makeShoot, resetIds } from "../../test/fixtures";
 
 beforeEach(() => {
   resetIds();
   setupMockIpc();
+  // Disable the new Select/Route gating settings so these legacy tests exercise
+  // the underlying view mechanics, not the gates themselves.
+  useSettingsStore.setState({
+    settings: {
+      nearDupThreshold: 4,
+      relatedThreshold: 12,
+      triageExpandGroups: false,
+      selectRequiresPick: false,
+      routeMinStar: 0,
+      libraryRoot: null,
+    },
+  });
 });
 
 /**

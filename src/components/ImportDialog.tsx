@@ -22,9 +22,12 @@ interface ImportDialogProps {
   onComplete: (shootId: number) => void;
 }
 
+type ImportMode = "copy" | "in_place";
+
 export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
   const [sourcePath, setSourcePath] = useState("");
   const [slug, setSlug] = useState("");
+  const [importMode, setImportMode] = useState<ImportMode>("copy");
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,12 +74,16 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
     setImporting(true);
 
     try {
-      await invoke("start_import", { sourcePath, slug: slug.trim() });
+      await invoke("start_import", {
+        sourcePath,
+        slug: slug.trim(),
+        importMode,
+      });
     } catch (e) {
       setError(String(e));
       setImporting(false);
     }
-  }, [sourcePath, slug]);
+  }, [sourcePath, slug, importMode]);
 
   const phaseLabel = progress?.phase === "processing"
     ? "Processing files..."
@@ -95,6 +102,46 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
 
         {!importing ? (
           <>
+            <div className="mb-4">
+              <label className="block text-sm text-[var(--text-secondary)] mb-2">
+                Import Mode
+              </label>
+              <div className="flex flex-col gap-2">
+                <label className="flex items-start gap-2 cursor-pointer text-sm">
+                  <input
+                    type="radio"
+                    name="import-mode"
+                    value="copy"
+                    checked={importMode === "copy"}
+                    onChange={() => setImportMode("copy")}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="text-[var(--text-primary)]">Copy to library</span>
+                    <span className="block text-xs text-[var(--text-secondary)]">
+                      Files are copied into a canonical folder under the library root.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2 cursor-pointer text-sm">
+                  <input
+                    type="radio"
+                    name="import-mode"
+                    value="in_place"
+                    checked={importMode === "in_place"}
+                    onChange={() => setImportMode("in_place")}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="text-[var(--text-primary)]">Import in-place</span>
+                    <span className="block text-xs text-[var(--text-secondary)]">
+                      Register files where they are. XMP sidecars land next to the originals on export.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
             <div className="mb-4">
               <label className="block text-sm text-[var(--text-secondary)] mb-1">
                 Source Folder

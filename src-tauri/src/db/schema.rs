@@ -15,6 +15,7 @@ pub struct ShootRow {
     pub dest_path: String,
     pub photo_count: i64,
     pub imported_at: String,
+    pub import_mode: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -68,6 +69,11 @@ pub struct Settings {
     pub near_dup_threshold: i32,
     pub related_threshold: i32,
     pub triage_expand_groups: bool,
+    pub select_requires_pick: bool,
+    pub route_min_star: i32,
+    /// Absolute path to the root of the photo library (used for copy-mode imports).
+    /// `None` falls back to the system Pictures directory.
+    pub library_root: Option<String>,
 }
 
 impl Default for Settings {
@@ -76,6 +82,9 @@ impl Default for Settings {
             near_dup_threshold: crate::ingest::clustering::DEFAULT_NEAR_DUP_THRESHOLD as i32,
             related_threshold: crate::ingest::clustering::DEFAULT_RELATED_THRESHOLD as i32,
             triage_expand_groups: false,
+            select_requires_pick: true,
+            route_min_star: 3,
+            library_root: None,
         }
     }
 }
@@ -132,7 +141,8 @@ impl Database {
                 source_path TEXT NOT NULL,
                 dest_path TEXT NOT NULL,
                 photo_count INTEGER NOT NULL DEFAULT 0,
-                imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+                imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+                import_mode TEXT NOT NULL DEFAULT 'copy'
             );
 
             CREATE TABLE IF NOT EXISTS photos (
@@ -199,11 +209,47 @@ impl Database {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 near_dup_threshold INTEGER NOT NULL DEFAULT 4,
                 related_threshold INTEGER NOT NULL DEFAULT 12,
-                triage_expand_groups INTEGER NOT NULL DEFAULT 0
+                triage_expand_groups INTEGER NOT NULL DEFAULT 0,
+                select_requires_pick INTEGER NOT NULL DEFAULT 1,
+                route_min_star INTEGER NOT NULL DEFAULT 3,
+                library_root TEXT
             );
             INSERT OR IGNORE INTO settings (id) VALUES (1);
             ",
-        )
+        )?;
+        self.run_migrations()
+    }
+
+    /// Additive SQLite migrations for columns introduced after the initial
+    /// schema. Idempotent — each migration checks column presence before
+    /// altering the table, so existing DBs are upgraded in place.
+    fn run_migrations(&self) -> Result<()> {
+        self.ensure_column("settings", "select_requires_pick", "INTEGER NOT NULL DEFAULT 1")?;
+        self.ensure_column("settings", "route_min_star", "INTEGER NOT NULL DEFAULT 3")?;
+        self.ensure_column("settings", "library_root", "TEXT")?;
+        self.ensure_column("shoots", "import_mode", "TEXT NOT NULL DEFAULT 'copy'")?;
+        Ok(())
+    }
+
+    fn column_exists(&self, table: &str, column: &str) -> Result<bool> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({})", table))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for r in rows {
+            if r? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn ensure_column(&self, table: &str, column: &str, type_clause: &str) -> Result<()> {
+        if !self.column_exists(table, column)? {
+            self.conn.execute(
+                &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, type_clause),
+                [],
+            )?;
+        }
+        Ok(())
     }
 
     // ---- Shoots ----
@@ -214,11 +260,12 @@ impl Database {
         date: &str,
         source_path: &str,
         dest_path: &str,
+        import_mode: &str,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO shoots (slug, date, source_path, dest_path)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![slug, date, source_path, dest_path],
+            "INSERT INTO shoots (slug, date, source_path, dest_path, import_mode)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![slug, date, source_path, dest_path, import_mode],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -239,7 +286,7 @@ impl Database {
 
     pub fn list_shoots(&self) -> Result<Vec<ShootRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, slug, date, source_path, dest_path, photo_count, imported_at
+            "SELECT id, slug, date, source_path, dest_path, photo_count, imported_at, import_mode
              FROM shoots ORDER BY date DESC, id DESC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -251,6 +298,7 @@ impl Database {
                 dest_path: row.get(4)?,
                 photo_count: row.get(5)?,
                 imported_at: row.get(6)?,
+                import_mode: row.get(7)?,
             })
         })?;
         rows.collect()
@@ -259,7 +307,7 @@ impl Database {
     pub fn get_shoot(&self, shoot_id: i64) -> Result<Option<ShootRow>> {
         self.conn
             .query_row(
-                "SELECT id, slug, date, source_path, dest_path, photo_count, imported_at
+                "SELECT id, slug, date, source_path, dest_path, photo_count, imported_at, import_mode
                  FROM shoots WHERE id = ?1",
                 params![shoot_id],
                 |row| {
@@ -271,6 +319,7 @@ impl Database {
                         dest_path: row.get(4)?,
                         photo_count: row.get(5)?,
                         imported_at: row.get(6)?,
+                        import_mode: row.get(7)?,
                     })
                 },
             )
@@ -658,7 +707,8 @@ impl Database {
     pub fn get_settings(&self) -> Result<Settings> {
         self.conn
             .query_row(
-                "SELECT near_dup_threshold, related_threshold, triage_expand_groups
+                "SELECT near_dup_threshold, related_threshold, triage_expand_groups,
+                        select_requires_pick, route_min_star, library_root
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
@@ -666,6 +716,9 @@ impl Database {
                         near_dup_threshold: row.get(0)?,
                         related_threshold: row.get(1)?,
                         triage_expand_groups: row.get::<_, i32>(2)? != 0,
+                        select_requires_pick: row.get::<_, i32>(3)? != 0,
+                        route_min_star: row.get(4)?,
+                        library_root: row.get(5)?,
                     })
                 },
             )
@@ -674,13 +727,24 @@ impl Database {
 
     pub fn update_settings(&self, s: &Settings) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO settings (id, near_dup_threshold, related_threshold, triage_expand_groups)
-             VALUES (1, ?1, ?2, ?3)
+            "INSERT INTO settings (id, near_dup_threshold, related_threshold, triage_expand_groups,
+                                   select_requires_pick, route_min_star, library_root)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
-                triage_expand_groups = excluded.triage_expand_groups",
-            params![s.near_dup_threshold, s.related_threshold, s.triage_expand_groups as i32],
+                triage_expand_groups = excluded.triage_expand_groups,
+                select_requires_pick = excluded.select_requires_pick,
+                route_min_star = excluded.route_min_star,
+                library_root = excluded.library_root",
+            params![
+                s.near_dup_threshold,
+                s.related_threshold,
+                s.triage_expand_groups as i32,
+                s.select_requires_pick as i32,
+                s.route_min_star,
+                s.library_root,
+            ],
         )?;
         Ok(())
     }
@@ -800,7 +864,7 @@ mod tests {
     fn test_shoot_roundtrip() {
         let (db, _dir) = test_db();
         let id = db
-            .insert_shoot("Greece", "2026-06-01", "/src", "/dst")
+            .insert_shoot("Greece", "2026-06-01", "/src", "/dst", "copy")
             .unwrap();
         let s = db.get_shoot(id).unwrap().unwrap();
         assert_eq!(s.slug, "Greece");
@@ -818,7 +882,7 @@ mod tests {
     fn test_insert_photos_batch_and_read() {
         let (mut db, _dir) = test_db();
         let shoot_id = db
-            .insert_shoot("Test", "2026-04-15", "/s", "/d")
+            .insert_shoot("Test", "2026-04-15", "/s", "/d", "copy")
             .unwrap();
 
         let photos = vec![sample_insert(1, "a.nef"), sample_insert(2, "b.nef")];
@@ -835,7 +899,7 @@ mod tests {
     #[test]
     fn test_dedup_by_hash() {
         let (mut db, _dir) = test_db();
-        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d").unwrap();
+        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
         db.insert_photos_batch(shoot_id, &[sample_insert(7, "x.nef")])
             .unwrap();
 
@@ -848,7 +912,7 @@ mod tests {
     #[test]
     fn test_star_rating() {
         let (mut db, _dir) = test_db();
-        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d").unwrap();
+        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
         let ids = db
             .insert_photos_batch(shoot_id, &[sample_insert(1, "a.nef")])
             .unwrap();
@@ -860,7 +924,7 @@ mod tests {
     #[test]
     fn test_groups_and_members() {
         let (mut db, _dir) = test_db();
-        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d").unwrap();
+        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
         let ids = db
             .insert_photos_batch(
                 shoot_id,

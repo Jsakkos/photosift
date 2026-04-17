@@ -1,4 +1,5 @@
 use crate::ingest;
+use crate::ingest::ImportMode;
 use crate::state::AppState;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -9,6 +10,7 @@ use tauri::{AppHandle, Emitter, State};
 pub fn start_import(
     source_path: String,
     slug: String,
+    import_mode: Option<String>,
     app: AppHandle,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
@@ -26,6 +28,8 @@ pub fn start_import(
         .replace(' ', "-")
         .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "");
 
+    let mode = ImportMode::parse(import_mode.as_deref().unwrap_or("copy"));
+
     let cancel_flag = {
         let app_state = state.lock().map_err(|e| e.to_string())?;
         app_state.import_cancel.store(false, Ordering::Relaxed);
@@ -33,7 +37,7 @@ pub fn start_import(
     };
 
     std::thread::spawn(move || {
-        match ingest::run_import(app.clone(), source, slug_clean, cancel_flag) {
+        match ingest::run_import(app.clone(), source, slug_clean, mode, cancel_flag) {
             Ok(shoot_id) => {
                 log::info!("Import completed: shoot_id={}", shoot_id);
             }

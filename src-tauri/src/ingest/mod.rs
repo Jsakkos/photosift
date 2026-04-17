@@ -30,12 +30,37 @@ struct IngestedFile {
     phash: Option<[u8; 8]>,
 }
 
+/// Import mode: either copy files into a canonical library folder, or
+/// register them in-place (leaves the source directory untouched).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportMode {
+    Copy,
+    InPlace,
+}
+
+impl ImportMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ImportMode::Copy => "copy",
+            ImportMode::InPlace => "in_place",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "in_place" => ImportMode::InPlace,
+            _ => ImportMode::Copy,
+        }
+    }
+}
+
 /// Main import orchestrator. Runs on a background thread.
 /// Opens its own DB connection (WAL mode allows concurrent access).
 pub fn run_import(
     app: AppHandle,
     source: PathBuf,
     slug: String,
+    import_mode: ImportMode,
     cancel: Arc<AtomicBool>,
 ) -> Result<i64, String> {
     let db = Database::open_global().map_err(|e| e.to_string())?;
@@ -51,9 +76,21 @@ pub fn run_import(
     // Phase 2: Probe first file for EXIF date to derive YYYY-MM
     let yyyy_mm = derive_yyyy_mm(&files[0]);
 
-    // Phase 3: Create shoot row and directories
-    let lib_root = copy::library_root();
-    let shoot_dir = copy::shoot_folder(&lib_root, &yyyy_mm, &slug);
+    // Phase 3: Create shoot row and directories.
+    // Copy mode derives a canonical folder under the user's library root;
+    // in-place mode registers files where they are and records the source
+    // folder as the effective dest_path.
+    let configured_lib_root: Option<PathBuf> = {
+        let db_guard = db.lock().map_err(|e| e.to_string())?;
+        db_guard.get_settings().ok().and_then(|s| s.library_root.map(PathBuf::from))
+    };
+    let shoot_dir = match import_mode {
+        ImportMode::Copy => {
+            let lib_root = configured_lib_root.unwrap_or_else(copy::library_root);
+            copy::shoot_folder(&lib_root, &yyyy_mm, &slug)
+        }
+        ImportMode::InPlace => source.clone(),
+    };
     let dest_path = shoot_dir.to_string_lossy().to_string();
 
     let shoot_id = {
@@ -63,7 +100,7 @@ pub fn run_import(
             &yyyy_mm
         );
         db_guard
-            .insert_shoot(&slug, &date, &source.to_string_lossy(), &dest_path)
+            .insert_shoot(&slug, &date, &source.to_string_lossy(), &dest_path, import_mode.as_str())
             .map_err(|e| e.to_string())?
     };
 
@@ -90,6 +127,7 @@ pub fn run_import(
                 &previews_dir,
                 &thumbs_dir,
                 &db,
+                import_mode,
             );
 
             let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
@@ -224,6 +262,7 @@ fn process_one_file(
     previews_dir: &Path,
     thumbs_dir: &Path,
     db: &Mutex<Database>,
+    import_mode: ImportMode,
 ) -> ProcessedFile {
     // 1. SHA-256
     let content_hash = match hashing::sha256_stream(src_path) {
@@ -259,14 +298,20 @@ fn process_one_file(
         .or_else(|| exif_data.as_ref().and_then(|e| e.rating));
     let initial_flag = sidecar_flag;
 
-    // 4. Copy to canonical location
-    let dest = copy::plan_dest(shoot_dir, &filename);
-    let raw_path = match copy::copy_file(src_path, &dest) {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("Copy failed for {:?}: {}", src_path, e);
-            return ProcessedFile::Skipped;
+    // 4. In copy mode, copy file into the canonical location. In in-place
+    //    mode, raw_path is simply the source path (the file is left where it is).
+    let raw_path = match import_mode {
+        ImportMode::Copy => {
+            let dest = copy::plan_dest(shoot_dir, &filename);
+            match copy::copy_file(src_path, &dest) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::error!("Copy failed for {:?}: {}", src_path, e);
+                    return ProcessedFile::Skipped;
+                }
+            }
         }
+        ImportMode::InPlace => src_path.to_path_buf(),
     };
 
     // 5. Extract embedded JPEG bytes (always succeeds if the file is valid)

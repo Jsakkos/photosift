@@ -24,6 +24,20 @@ pub fn update_settings(
     {
         return Err("related_threshold must be >= near_dup_threshold and <= 64".into());
     }
+    if settings.route_min_star < 0 || settings.route_min_star > 5 {
+        return Err("route_min_star must be 0..=5".into());
+    }
+    if let Some(root) = settings.library_root.as_deref() {
+        if !root.trim().is_empty() {
+            let path = std::path::Path::new(root);
+            if !path.is_dir() {
+                return Err(format!(
+                    "library_root is not an existing directory: {}",
+                    root
+                ));
+            }
+        }
+    }
 
     let app_state = state.lock().map_err(|e| e.to_string())?;
     let db = app_state.db.as_ref().ok_or("Database not open")?;

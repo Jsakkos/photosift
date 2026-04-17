@@ -94,9 +94,9 @@ Each photo carries three orthogonal attributes:
 |---|---|---|
 | `flag` | `unreviewed` · `pick` · `reject` | Triage & Select passes |
 | `destination` | `unrouted` · `edit` · `publish_direct` | Route pass |
-| `star_rating` | `0–5` | Post-edit (outside MVP culling flow) |
+| `star_rating` | `0–5` | Set during Select when `route_min_star > 0` (optional gate); otherwise post-edit |
 
-Stars are deliberately excluded from the culling workflow. Quality ratings are meaningful only after editing. During culling, stars remain at 0.
+When the `route_min_star` setting is above 0 (default `3`), Route view only shows picks rated at or above that threshold, so rating happens in Select as part of the narrowing pass. With `route_min_star = 0`, stars remain a post-edit concept and are not part of the culling flow. Either way, a rating's "meaning" is still primarily post-edit quality — the in-cull value is just the selection gate.
 
 ### Three-Pass Workflow
 
@@ -120,7 +120,7 @@ Perceptual hash groups save the most time here. A burst of 12 near-identical sho
 
 | | |
 |---|---|
-| **Filter** | `flag != reject` (shows picks and unreviewed) |
+| **Filter** | `flag = pick` by default (configurable via `select_requires_pick` setting; off = legacy `flag != reject`) |
 | **Groups** | Expanded for comparison. |
 | **Tempo** | Moderate. 5–10 seconds per group. |
 | **Actions** | `P` pick (auto-rejects others in group) · `Shift+P` pick without auto-reject · `X` reject · `Tab` enter 2-up comparison |
@@ -133,7 +133,7 @@ This is where comparison mode matters. Expand a group, compare in 2-up with link
 
 | | |
 |---|---|
-| **Filter** | `flag = pick, destination = unrouted` |
+| **Filter** | `flag = pick, destination = unrouted, star_rating >= route_min_star` (default `3`; set to `0` to disable the star gate) |
 | **Groups** | None. Groups have served their purpose. |
 | **Tempo** | Moderate. Per-photo decision. |
 | **Actions** | `E` mark for edit · `D` mark as publish direct · `U` reset to unrouted |
