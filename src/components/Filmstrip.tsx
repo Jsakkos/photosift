@@ -83,6 +83,7 @@ export function Filmstrip() {
               isCurrent={isCurrent}
               onClick={() => setCurrentIndex(index)}
               onDoubleClick={() => handleGroupDoubleClick(index, gid)}
+              isAiPick={item.isAiPick}
             />
           </div>
         );

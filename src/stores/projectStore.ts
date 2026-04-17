@@ -63,6 +63,35 @@ export function getGroupCover(group: Group): number {
   return cover ? cover.photoId : group.members[0].photoId;
 }
 
+/// Returns the id of the AI-recommended photo in the group, or null when
+/// fewer than 2 members have been analyzed.
+///
+/// Scoring: sharpness * (1 + eyes_open_count). Ties broken by lower id.
+export function aiPickForGroup(
+  group: Group,
+  images: ImageEntry[],
+): number | null {
+  const analyzed = group.members
+    .map((m) => images.find((i) => i.id === m.photoId))
+    .filter((img): img is ImageEntry => !!img && img.aiAnalyzedAt != null);
+
+  if (analyzed.length < 2) return null;
+
+  let bestId = analyzed[0].id;
+  let bestScore =
+    (analyzed[0].sharpnessScore ?? 0) * (1 + (analyzed[0].eyesOpenCount ?? 0));
+
+  for (const img of analyzed.slice(1)) {
+    const score =
+      (img.sharpnessScore ?? 0) * (1 + (img.eyesOpenCount ?? 0));
+    if (score > bestScore || (score === bestScore && img.id < bestId)) {
+      bestId = img.id;
+      bestScore = score;
+    }
+  }
+  return bestId;
+}
+
 export function computeDisplayItems(
   images: ImageEntry[],
   currentView: CullView,
@@ -216,6 +245,21 @@ export function computeDisplayItems(
     });
   }
 
+  // AI pick derivation: for each group with ≥2 analyzed members, mark the
+  // recommended photo. We memoize per groupId so the scoring runs once per
+  // group regardless of how many members are emitted in the display list.
+  const pickCache = new Map<number, number | null>();
+  for (const it of result) {
+    if (it.groupId === undefined) continue;
+    if (!pickCache.has(it.groupId)) {
+      const g = groups.find((gg) => gg.id === it.groupId);
+      pickCache.set(it.groupId, g ? aiPickForGroup(g, images) : null);
+    }
+    if (pickCache.get(it.groupId) === it.image.id) {
+      it.isAiPick = true;
+    }
+  }
+
   return result;
 }
 
@@ -262,6 +306,7 @@ interface ProjectState {
   currentImage: () => ImageEntry | null;
   setFlagNoAutoReject: (flag: string) => Promise<void>;
   setGroupCover: (groupId: number, photoId: number) => Promise<void>;
+  acceptAiPick: () => Promise<void>;
   getGroupForCurrentItem: () => Group | null;
   comparisonPinnedId: number | null;
   comparisonCyclingId: number | null;
@@ -985,6 +1030,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().setToast(`Set cover failed: ${e}`, "error");
       set({ groups });
     }
+  },
+
+  acceptAiPick: async () => {
+    const { groups, images, displayItems, currentIndex, setGroupCover } = get();
+    const item = displayItems[currentIndex];
+    if (!item?.groupId) return;
+    const group = groups.find((g) => g.id === item.groupId);
+    if (!group) return;
+    const pickId = aiPickForGroup(group, images);
+    if (pickId === null) return;
+    await setGroupCover(group.id, pickId);
   },
 
   getGroupForCurrentItem: () => {

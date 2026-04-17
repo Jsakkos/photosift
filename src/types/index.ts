@@ -38,6 +38,7 @@ export interface DisplayItem {
   groupId?: number;
   isGroupCover?: boolean;
   groupMemberCount?: number;
+  isAiPick?: boolean;
 }
 
 export interface GroupMemberInfo {

@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { FixedSizeGrid as Grid, GridChildComponentProps } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
+import { AiPickBadge } from "./AiPickBadge";
 
 const SIZES = [100, 160, 240] as const;
 const CELL_GAP = 8;
@@ -412,14 +413,16 @@ function GridThumb({
       {image.flag === "reject" && (
         <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.5)]" />
       )}
+      {/* AI pick badge */}
+      {item.isAiPick && <AiPickBadge />}
       {/* Destination badge */}
       {image.destination === "edit" && (
-        <div className="absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30">
+        <div className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}>
           EDIT
         </div>
       )}
       {image.destination === "publish_direct" && (
-        <div className="absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30">
+        <div className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}>
           PUBLISH
         </div>
       )}
