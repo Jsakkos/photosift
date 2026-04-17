@@ -15,6 +15,7 @@ export function useKeyboardNav() {
     redo,
     toggleMetadata,
     toggleShortcutHints,
+    toggleAutoAdvance,
     toggleZoom,
     advanceToNextUnreviewed,
     displayItems,
@@ -237,6 +238,17 @@ export function useKeyboardNav() {
         case "I":
           toggleMetadata();
           break;
+        case "a":
+        case "A":
+          if (currentView === "triage") {
+            const { toast } = useProjectStore.getState();
+            toggleAutoAdvance();
+            const newState = useProjectStore.getState().autoAdvance;
+            if (!toast) {
+              setToast(`Auto-advance ${newState ? "on" : "off"}`);
+            }
+          }
+          break;
         case "?":
           toggleShortcutHints();
           break;
@@ -273,6 +285,7 @@ export function useKeyboardNav() {
     redo,
     toggleMetadata,
     toggleShortcutHints,
+    toggleAutoAdvance,
     toggleZoom,
     advanceToNextUnreviewed,
     setCurrentIndex,

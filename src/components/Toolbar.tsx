@@ -20,6 +20,7 @@ export function Toolbar() {
           <button
             onClick={() => navigate("/shoots")}
             title="Back to shoots"
+            aria-label="Back to shoot list"
             className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
           >
             &larr; Shoots

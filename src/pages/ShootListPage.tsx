@@ -17,6 +17,12 @@ export function ShootListPage() {
       if (e.key === ",") {
         e.preventDefault();
         openSettings();
+      } else if (
+        (e.ctrlKey || e.metaKey) &&
+        (e.key === "i" || e.key === "I" || e.key === "o" || e.key === "O")
+      ) {
+        e.preventDefault();
+        setShowImport(true);
       }
     };
     window.addEventListener("keydown", onKey);

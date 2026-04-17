@@ -18,3 +18,10 @@ src-tauri/target/
 # OS
 .DS_Store
 Thumbs.db
+
+# Tooling artifacts
+.playwright-mcp/
+.superpowers/
+
+# App data (never commit local database or caches)
+.photosift/

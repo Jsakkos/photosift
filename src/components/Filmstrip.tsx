@@ -68,6 +68,10 @@ export function Filmstrip() {
         return (
           <div
             style={style}
+            role="button"
+            tabIndex={-1}
+            aria-label={`Group cover ${image.filename}, ${item.groupMemberCount} photos`}
+            aria-current={isCurrent ? "true" : undefined}
             className="flex items-center justify-center p-1"
             onClick={() => setCurrentIndex(index)}
             onDoubleClick={() => handleGroupDoubleClick(index, gid)}
@@ -87,6 +91,10 @@ export function Filmstrip() {
       return (
         <div
           style={style}
+          role="button"
+          tabIndex={-1}
+          aria-label={image.filename}
+          aria-current={isCurrent ? "true" : undefined}
           className="flex items-center justify-center p-1"
           onClick={() => setCurrentIndex(index)}
           onDoubleClick={() => openLoupe(index)}

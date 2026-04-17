@@ -148,14 +148,14 @@ fn jpeg_response(data: Vec<u8>) -> http::Response<Vec<u8>> {
         .header("Content-Type", "image/jpeg")
         .header("Content-Length", data.len().to_string())
         .body(data)
-        .unwrap()
+        .expect("static header values and body are infallible")
 }
 
 fn error_response(status: u16, msg: &str) -> http::Response<Vec<u8>> {
     http::Response::builder()
         .status(status)
         .body(msg.as_bytes().to_vec())
-        .unwrap()
+        .expect("static status and body are infallible")
 }
 
 static PLACEHOLDER_JPEG: &[u8] = &[

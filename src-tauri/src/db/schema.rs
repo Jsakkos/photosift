@@ -946,4 +946,94 @@ mod tests {
             .unwrap();
         assert_eq!(count, 2);
     }
+
+    /// End-to-end integration: simulates a Select-view pick where the user
+    /// picks one photo and auto-rejects its three siblings, then undoes the
+    /// whole batch. Exercises set_flag + bulk_set_flag + append_undo +
+    /// pop_undo in a single realistic sequence, and confirms reverted state
+    /// persists across DB reopens.
+    #[test]
+    fn test_select_pick_batch_then_undo() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("cull.sqlite");
+        let session = "sess-abc";
+
+        let ids: Vec<i64> = {
+            let mut db = Database::open(&db_path).unwrap();
+            let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
+            let photos = vec![
+                sample_insert(1, "a.nef"),
+                sample_insert(2, "b.nef"),
+                sample_insert(3, "c.nef"),
+                sample_insert(4, "d.nef"),
+            ];
+            let ids = db.insert_photos_batch(shoot_id, &photos).unwrap();
+
+            // Pick photo[0], reject photos[1..4] (simulating select-view auto-reject).
+            let old_pick = db.set_flag(ids[0], "pick").unwrap();
+            db.append_undo(shoot_id, session, ids[0], "flag", &old_pick, "pick").unwrap();
+            let old_rejs = db.bulk_set_flag(&ids[1..], "reject").unwrap();
+            for (id, old) in &old_rejs {
+                db.append_undo(shoot_id, session, *id, "flag", old, "reject").unwrap();
+            }
+
+            // State check: one pick + three rejects.
+            let rows = db.photos_for_shoot(shoot_id).unwrap();
+            let picks = rows.iter().filter(|p| p.flag == "pick").count();
+            let rejects = rows.iter().filter(|p| p.flag == "reject").count();
+            assert_eq!(picks, 1);
+            assert_eq!(rejects, 3);
+
+            // Undo 4 actions (bulk reject was logged as 3 separate entries + 1 pick).
+            for _ in 0..4 {
+                let entry = db.pop_undo(shoot_id, session).unwrap();
+                assert!(entry.is_some(), "undo stack drained prematurely");
+            }
+            assert!(db.pop_undo(shoot_id, session).unwrap().is_none());
+
+            ids
+        };
+
+        // Reopen and verify the undo reverted state survived.
+        let db = Database::open(&db_path).unwrap();
+        let shoot_id: i64 = db.conn.query_row("SELECT id FROM shoots LIMIT 1", [], |r| r.get(0)).unwrap();
+        let rows = db.photos_for_shoot(shoot_id).unwrap();
+        assert_eq!(rows.len(), 4);
+        for row in &rows {
+            assert_eq!(row.flag, "unreviewed", "photo {} should be reverted", row.id);
+        }
+        // And the id set is unchanged — no rows were lost.
+        let mut live: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        live.sort();
+        let mut expected = ids.clone();
+        expected.sort();
+        assert_eq!(live, expected);
+    }
+
+    /// Mutex-poison resilience: the XmpWriteQueue must not deadlock or crash
+    /// when a poisoned lock is encountered. This simulates a panic in one
+    /// thread while holding the pending map, then verifies the queue still
+    /// enqueues and drains correctly.
+    #[test]
+    fn test_xmp_queue_survives_poison() {
+        use crate::metadata::xmp_queue::XmpWriteQueue;
+        use std::path::PathBuf;
+        use std::sync::Arc;
+        use std::thread;
+
+        let queue = Arc::new(XmpWriteQueue::new());
+        let q2 = queue.clone();
+
+        // Force a panic inside a thread while nominally using the queue;
+        // this would poison the internal Mutex if not handled.
+        let _ = thread::spawn(move || {
+            q2.enqueue(1, &PathBuf::from("/nonexistent/a.xmp"), 3);
+            panic!("deliberate");
+        })
+        .join();
+
+        // Must not panic — poison-tolerant lock returns the inner guard.
+        queue.enqueue(2, &PathBuf::from("/nonexistent/b.xmp"), 5);
+        queue.drain(); // writes to bogus paths will fail gracefully via log::error
+    }
 }

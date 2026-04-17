@@ -12,7 +12,7 @@ impl ImageCache {
     pub fn new(capacity: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(capacity).unwrap(),
+                NonZeroUsize::new(capacity).expect("preview cache capacity must be > 0"),
             ))),
         }
     }

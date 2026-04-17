@@ -18,6 +18,7 @@ const TRIAGE_SHORTCUTS = [
   { key: "P", action: "Pick" },
   { key: "X", action: "Reject" },
   { key: "U", action: "Reset to unreviewed" },
+  { key: "A", action: "Toggle auto-advance" },
   { key: "1-5 / 0", action: "Star rating / Clear" },
 ];
 

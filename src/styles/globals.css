@@ -30,3 +30,15 @@ body {
 .animate-flag-flash {
   animation: flag-flash 300ms ease-out forwards;
 }
+
+/* Keyboard focus ring for interactive elements. Mouse clicks don't trigger
+   this pseudo-class, so the ring only appears for keyboard navigation. */
+button:focus-visible,
+[role="button"]:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

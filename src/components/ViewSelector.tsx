@@ -48,6 +48,7 @@ export function ViewSelector() {
             key={key}
             onClick={() => setView(key)}
             title={tooltip}
+            aria-current={currentView === key ? "page" : undefined}
             className={`px-5 py-2.5 text-[13px] border-b-2 transition-colors ${
               currentView === key
                 ? "text-[var(--accent)] font-semibold border-[var(--accent)]"

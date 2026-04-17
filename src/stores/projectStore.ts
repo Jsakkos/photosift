@@ -171,6 +171,7 @@ interface ProjectState {
   images: ImageEntry[];
   currentIndex: number;
   isLoading: boolean;
+  loadError: string | null;
   showMetadata: boolean;
   showShortcutHints: boolean;
   autoAdvance: boolean;
@@ -226,6 +227,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   images: [],
   currentIndex: 0,
   isLoading: false,
+  loadError: null,
   showMetadata: false,
   showShortcutHints: false,
   autoAdvance: true,
@@ -249,7 +251,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadShoot: async (shootId: number) => {
-    set({ isLoading: true });
+    set({ isLoading: true, loadError: null });
     try {
       const shoot = await invoke<ShootSummary>("get_shoot", { shootId });
       const images = await invoke<ImageEntry[]>("get_image_list");
@@ -287,7 +289,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
     } catch (e) {
       console.error("Failed to load shoot:", e);
-      set({ isLoading: false });
+      set({ isLoading: false, loadError: String(e) });
     }
   },
 
@@ -357,6 +359,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("set_rating", { imageId: image.id, rating });
     } catch (e) {
       console.error("Failed to set rating:", e);
+      get().setToast(`Rating save failed: ${e}`, "error");
       const revertImages = [...get().images];
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
@@ -424,7 +427,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           }
         }
         if (siblingIds.length > 0) {
-          invoke("bulk_set_flag", { photoIds: siblingIds, flag: "reject" }).catch(() => {});
+          invoke("bulk_set_flag", { photoIds: siblingIds, flag: "reject" }).catch(
+            (err) => {
+              get().setToast(`Group reject failed: ${err}`, "error");
+            },
+          );
         }
       }
     } else {
@@ -493,6 +500,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch (e) {
       console.error("Failed to set flag:", e);
+      get().setToast(`Flag save failed: ${e}`, "error");
       const revertImages = [...get().images];
       for (const a of affectedIds) {
         const idx = revertImages.findIndex((img) => img.id === a.id);
@@ -564,6 +572,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
     } catch (e) {
       console.error("Failed to set destination:", e);
+      get().setToast(`Destination save failed: ${e}`, "error");
       const revertImages = [...get().images];
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
@@ -639,6 +648,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch (e) {
       console.error("Undo failed:", e);
+      get().setToast(`Undo failed: ${e}`, "error");
     }
   },
 
@@ -697,6 +707,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch (e) {
       console.error("Redo failed:", e);
+      get().setToast(`Redo failed: ${e}`, "error");
     }
   },
 
@@ -833,6 +844,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("set_flag", { photoId: image.id, flag });
     } catch (e) {
       console.error("Failed to set flag:", e);
+      get().setToast(`Flag save failed: ${e}`, "error");
       const revertImages = [...get().images];
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
@@ -858,6 +870,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("set_group_cover", { groupId, photoId });
     } catch (e) {
       console.error("Failed to set group cover:", e);
+      get().setToast(`Set cover failed: ${e}`, "error");
       set({ groups });
     }
   },
@@ -973,6 +986,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("set_flag", { photoId: rejectId, flag: "reject" });
     } catch (e) {
       console.error("Failed quick pick:", e);
+      get().setToast(`Quick pick failed: ${e}`, "error");
     }
 
     const available = get().comparisonGroupMembers.filter((id) => {

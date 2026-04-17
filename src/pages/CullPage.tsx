@@ -15,7 +15,7 @@ import { ComparisonView } from "../components/ComparisonView";
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { currentShoot, isLoading, loadShoot, viewMode } = useProjectStore();
+  const { currentShoot, isLoading, loadError, loadShoot, viewMode } = useProjectStore();
   useKeyboardNav();
 
   useEffect(() => {
@@ -31,6 +31,24 @@ export function CullPage() {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-[var(--bg-primary)]">
         <p className="text-[var(--text-secondary)]">Loading shoot...</p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center gap-4 bg-[var(--bg-primary)]">
+        <p className="text-red-400 font-medium">Could not load shoot</p>
+        <p className="text-[var(--text-secondary)] text-sm max-w-md text-center">
+          {loadError}
+        </p>
+        <button
+          type="button"
+          onClick={() => navigate("/shoots")}
+          className="px-4 py-2 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm"
+        >
+          Back to shoots
+        </button>
       </div>
     );
   }

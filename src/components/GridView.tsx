@@ -240,6 +240,7 @@ export function GridView() {
             if (idx > 0) setColWidth(SIZES[idx - 1]);
           }}
           title="Shrink thumbnails (-)"
+          aria-label="Shrink thumbnails"
           className="w-6 h-6 flex items-center justify-center rounded bg-[var(--bg-tertiary)] border border-white/10 hover:border-white/20"
         >
           −
@@ -251,6 +252,7 @@ export function GridView() {
             if (idx < SIZES.length - 1) setColWidth(SIZES[idx + 1]);
           }}
           title="Grow thumbnails (+)"
+          aria-label="Grow thumbnails"
           className="w-6 h-6 flex items-center justify-center rounded bg-[var(--bg-tertiary)] border border-white/10 hover:border-white/20"
         >
           +
@@ -363,8 +365,24 @@ function GridThumb({
   const image = item.image;
   const isRejected = image.flag === "reject";
 
+  const ariaLabel = [
+    image.filename,
+    image.flag !== "unreviewed" ? image.flag : null,
+    image.destination !== "unrouted" ? image.destination.replace("_", " ") : null,
+    image.starRating > 0 ? `${image.starRating} star${image.starRating === 1 ? "" : "s"}` : null,
+    item.isGroupCover && item.groupMemberCount
+      ? `group of ${item.groupMemberCount}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
   return (
     <div
+      role="button"
+      tabIndex={isFocused ? 0 : -1}
+      aria-label={ariaLabel}
+      aria-pressed={isSelected}
       className={`relative w-full h-full rounded overflow-hidden cursor-pointer border-2 transition-all ${
         isSelected
           ? isMulti

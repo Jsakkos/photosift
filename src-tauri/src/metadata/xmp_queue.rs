@@ -27,7 +27,7 @@ impl XmpWriteQueue {
     }
 
     pub fn enqueue(&self, image_id: i64, path: &Path, rating: i32) {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         pending.insert(
             image_id,
             Entry {
@@ -45,7 +45,7 @@ impl XmpWriteQueue {
         thread::spawn(move || loop {
             thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
             let ready: Vec<(i64, PathBuf, i32)> = {
-                let mut guard = pending.lock().unwrap();
+                let mut guard = pending.lock().unwrap_or_else(|e| e.into_inner());
                 let now = Instant::now();
                 let mut out = Vec::new();
                 guard.retain(|id, entry| {
@@ -69,7 +69,7 @@ impl XmpWriteQueue {
     /// Synchronously flush all pending entries. Call on shutdown.
     pub fn drain(&self) {
         let entries: Vec<(PathBuf, i32)> = {
-            let mut guard = self.pending.lock().unwrap();
+            let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             guard
                 .drain()
                 .map(|(_, e)| (e.path, e.rating))
