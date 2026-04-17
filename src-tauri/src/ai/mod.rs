@@ -22,3 +22,62 @@ pub struct AiJob {
 }
 
 pub use worker::{process_job, run_loop, WorkerHandle};
+
+use crate::ai::eye::EyeStateProvider;
+use crate::ai::face::FaceProvider;
+use crate::db::schema::Database;
+use crossbeam_channel::unbounded;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+
+pub struct SpawnedWorker {
+    pub handle: worker::WorkerHandle,
+}
+
+/// Spawn the AI background worker. Opens its own Database handle against
+/// `db_path` so it owns the connection exclusively (SQLite with WAL handles
+/// the reader/writer overlap). Returns the handle immediately; job
+/// processing happens on the spawned thread.
+pub fn spawn_worker(
+    db_path: std::path::PathBuf,
+    faces_provider: Box<dyn FaceProvider>,
+    eyes_provider: Box<dyn EyeStateProvider>,
+    cancel: Arc<AtomicBool>,
+    analyzed: Arc<AtomicUsize>,
+    failed: Arc<AtomicUsize>,
+    on_job_done: impl Fn(i64, bool) + Send + 'static,
+) -> SpawnedWorker {
+    let (tx, rx) = unbounded::<AiJob>();
+    let cancel_clone = cancel.clone();
+    thread::spawn(move || {
+        let db = match Database::open(&db_path) {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("ai worker db open failed: {}", e);
+                return;
+            }
+        };
+        worker::run_loop(
+            rx,
+            cancel_clone,
+            db,
+            faces_provider,
+            eyes_provider,
+            move |job, res| match res {
+                Ok(_) => {
+                    analyzed.fetch_add(1, Ordering::SeqCst);
+                    on_job_done(job.photo_id, true);
+                }
+                Err(e) => {
+                    log::error!("ai job failed for photo {}: {}", job.photo_id, e);
+                    failed.fetch_add(1, Ordering::SeqCst);
+                    on_job_done(job.photo_id, false);
+                }
+            },
+        );
+    });
+    SpawnedWorker {
+        handle: worker::WorkerHandle { sender: tx, cancel },
+    }
+}

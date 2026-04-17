@@ -9,6 +9,7 @@ mod state;
 use pipeline::protocol;
 use state::AppState;
 use std::sync::Mutex;
+use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -34,6 +35,63 @@ pub fn run() {
                     q.drain();
                 }
             }
+        })
+        .setup(|app| {
+            use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
+            use crate::ai::AiProviderStatus;
+            use std::sync::atomic::Ordering;
+
+            let state = app.state::<Mutex<AppState>>();
+            let db_path = crate::db::schema::global_db_path();
+
+            // Snapshot atomics we need to read from the progress callback.
+            let (cancel, analyzed, failed, total) = {
+                let s = state.lock().expect("state lock");
+                (
+                    s.ai_cancel.clone(),
+                    s.ai_analyzed.clone(),
+                    s.ai_failed.clone(),
+                    s.ai_total.clone(),
+                )
+            };
+
+            let app_handle = app.handle().clone();
+            let analyzed_for_cb = analyzed.clone();
+            let failed_for_cb = failed.clone();
+            let total_for_cb = total.clone();
+
+            let spawned = crate::ai::spawn_worker(
+                db_path,
+                Box::new(MockFaceProvider::default()),
+                Box::new(MockEyeProvider::default()),
+                cancel,
+                analyzed,
+                failed,
+                move |photo_id, ok| {
+                    let done = analyzed_for_cb.load(Ordering::SeqCst)
+                        + failed_for_cb.load(Ordering::SeqCst);
+                    let total_v = total_for_cb.load(Ordering::SeqCst);
+                    let failed_v = failed_for_cb.load(Ordering::SeqCst);
+                    let _ = app_handle.emit(
+                        "ai-progress",
+                        serde_json::json!({
+                            "photoId": photo_id,
+                            "ok": ok,
+                            "done": done,
+                            "total": total_v,
+                            "failed": failed_v,
+                        }),
+                    );
+                },
+            );
+
+            {
+                let mut s = state.lock().expect("state lock");
+                s.ai_worker = Some(spawned.handle);
+                s.ai_status = AiProviderStatus::Cpu;
+            }
+
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::shoots::list_shoots,
