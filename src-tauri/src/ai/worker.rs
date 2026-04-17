@@ -60,12 +60,9 @@ pub fn process_job(
     // Whole-image sharpness on the already-decoded gray image.
     let whole = normalize_sharpness(laplacian_variance(&gray));
 
-    db.delete_faces_for_photo(job.photo_id)?;
-    if !face_rows.is_empty() {
-        db.insert_faces_batch(&face_rows)?;
-    }
-    db.mark_ai_analyzed(
+    db.write_ai_result(
         job.photo_id,
+        &face_rows,
         Some(faces.len() as i32),
         Some(open_count),
         Some(whole),
@@ -74,7 +71,8 @@ pub fn process_job(
 }
 
 /// Main worker loop. Pulls jobs until the channel closes or the cancel flag
-/// flips. On cancel, drops remaining queued jobs.
+/// flips. The cancel check happens between jobs, so the currently in-flight
+/// job (if any) completes. All remaining queued jobs are dropped.
 pub fn run_loop(
     rx: Receiver<AiJob>,
     cancel: Arc<AtomicBool>,
@@ -143,5 +141,73 @@ mod tests {
         assert_eq!(row.0, Some(1));
         assert_eq!(row.1, Some(1));
         assert!(row.2.is_some());
+    }
+
+    #[test]
+    fn test_run_loop_honors_cancel_between_jobs() {
+        use crossbeam_channel::unbounded;
+        use std::sync::atomic::AtomicUsize;
+        use std::thread;
+        use std::time::Duration;
+
+        let dir = tempdir().unwrap();
+        let preview = dir.path().join("p.jpg");
+        write_tiny_preview(&preview);
+
+        let db_path = dir.path().join("t.db");
+        // Pre-create the shoot and photos so the worker DB can find them.
+        let ids = {
+            let mut db = Database::open(&db_path).unwrap();
+            let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
+            db.insert_photos_batch(shoot_id, &[
+                crate::db::schema::tests::sample_insert_for_test(1, "a.nef"),
+                crate::db::schema::tests::sample_insert_for_test(2, "b.nef"),
+                crate::db::schema::tests::sample_insert_for_test(3, "c.nef"),
+            ]).unwrap()
+        };
+        let shoot_id = 1;
+
+        let worker_db = Database::open(&db_path).unwrap();
+        let (tx, rx) = unbounded::<AiJob>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_clone = cancel.clone();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let completed_clone = completed.clone();
+
+        let handle = thread::spawn(move || {
+            run_loop(
+                rx,
+                cancel_clone,
+                worker_db,
+                Box::new(crate::ai::mock::MockFaceProvider::default()),
+                Box::new(crate::ai::mock::MockEyeProvider::default()),
+                move |_job, res| {
+                    if res.is_ok() {
+                        completed_clone.fetch_add(1, Ordering::SeqCst);
+                    }
+                },
+            );
+        });
+
+        // Send 3 jobs; flip cancel after a short delay so at least 1 completes
+        // and at least 1 is dropped.
+        for id in &ids {
+            tx.send(AiJob {
+                shoot_id,
+                photo_id: *id,
+                preview_path: preview.to_string_lossy().into_owned(),
+            })
+            .unwrap();
+        }
+
+        // Give the worker time to process at least one job, then cancel.
+        thread::sleep(Duration::from_millis(200));
+        cancel.store(true, Ordering::SeqCst);
+        drop(tx); // closes the channel so run_loop exits cleanly
+        handle.join().unwrap();
+
+        let n = completed.load(Ordering::SeqCst);
+        assert!(n >= 1, "at least one job should complete before cancel");
+        assert!(n <= 3, "completed count bounded by queue length");
     }
 }

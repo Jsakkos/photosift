@@ -726,6 +726,50 @@ impl Database {
         Ok(())
     }
 
+    /// Atomically write AI results for a photo: delete any existing face rows,
+    /// insert new ones, and update the aggregate columns. All in one transaction
+    /// so a crash between statements cannot leave inconsistent state.
+    pub fn write_ai_result(
+        &mut self,
+        photo_id: i64,
+        faces: &[FaceRow],
+        face_count: Option<i32>,
+        eyes_open_count: Option<i32>,
+        sharpness_score: Option<f64>,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM faces WHERE photo_id = ?1", params![photo_id])?;
+        if !faces.is_empty() {
+            let mut stmt = tx.prepare(
+                "INSERT INTO faces (
+                    photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                    left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+                    left_eye_open, right_eye_open,
+                    left_eye_sharpness, right_eye_sharpness,
+                    detection_confidence
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            )?;
+            for f in faces {
+                stmt.execute(params![
+                    f.photo_id, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
+                    f.left_eye_x, f.left_eye_y, f.right_eye_x, f.right_eye_y,
+                    f.left_eye_open, f.right_eye_open,
+                    f.left_eye_sharpness, f.right_eye_sharpness,
+                    f.detection_confidence,
+                ])?;
+            }
+        }
+        tx.execute(
+            "UPDATE photos SET face_count = ?2, eyes_open_count = ?3,
+                               sharpness_score = ?4,
+                               ai_analyzed_at = datetime('now')
+             WHERE id = ?1",
+            params![photo_id, face_count, eyes_open_count, sharpness_score],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn clear_ai_for_shoot(&mut self, shoot_id: i64) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute(
