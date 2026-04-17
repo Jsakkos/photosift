@@ -22,6 +22,20 @@ function routeMinStar(): number {
   return useSettingsStore.getState().settings.routeMinStar ?? 0;
 }
 
+function hideSoftThreshold(): number {
+  return useSettingsStore.getState().settings.hideSoftThreshold ?? 0;
+}
+
+export interface AiDisplayOptions {
+  sortByAi: "none" | "sharpness" | "faces";
+  hideSoftThreshold: number; // 0 disables
+}
+
+const DEFAULT_AI_OPTIONS: AiDisplayOptions = {
+  sortByAi: "none",
+  hideSoftThreshold: 0,
+};
+
 interface UndoEntry {
   imageId: number;
   field: "starRating" | "flag" | "destination";
@@ -57,6 +71,7 @@ export function computeDisplayItems(
   expandedGroupIds: Set<number> = new Set(),
   selectRequiresPickFilter: boolean = false,
   routeMinStarGate: number = 0,
+  aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   const photoGroupMap = buildPhotoGroupMap(groups);
@@ -163,7 +178,45 @@ export function computeDisplayItems(
     }
   }
 
-  return items;
+  // AI filter: hideSoft (Select + Route only). Nulls pass through so images
+  // still being analyzed remain visible; the gate only evicts known-soft shots.
+  let result = items;
+  if (
+    aiOptions.hideSoftThreshold > 0 &&
+    (currentView === "select" || currentView === "route")
+  ) {
+    result = result.filter((it) => {
+      const s = it.image.sharpnessScore;
+      return s === null || s === undefined || s >= aiOptions.hideSoftThreshold;
+    });
+  }
+
+  // AI sort: stable sort, nulls/undefineds to the end.
+  if (aiOptions.sortByAi === "sharpness") {
+    result = [...result].sort((a, b) => {
+      const sa = a.image.sharpnessScore;
+      const sb = b.image.sharpnessScore;
+      const na = sa === null || sa === undefined;
+      const nb = sb === null || sb === undefined;
+      if (na && nb) return 0;
+      if (na) return 1;
+      if (nb) return -1;
+      return (sb as number) - (sa as number);
+    });
+  } else if (aiOptions.sortByAi === "faces") {
+    result = [...result].sort((a, b) => {
+      const fa = a.image.faceCount;
+      const fb = b.image.faceCount;
+      const na = fa === null || fa === undefined;
+      const nb = fb === null || fb === undefined;
+      if (na && nb) return 0;
+      if (na) return 1;
+      if (nb) return -1;
+      return (fb as number) - (fa as number);
+    });
+  }
+
+  return result;
 }
 
 interface ProjectState {
@@ -220,6 +273,8 @@ interface ProjectState {
   createGroupFromPhotos: (photoIds: number[]) => Promise<void>;
   ungroupPhotos: (photoIds: number[]) => Promise<void>;
   refreshDisplay: () => void;
+  sortByAi: "none" | "sharpness" | "faces";
+  cycleSortByAi: () => void;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -244,6 +299,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   comparisonPinnedId: null,
   comparisonCyclingId: null,
   comparisonGroupMembers: [],
+  sortByAi: "none" as const,
 
   currentImage: () => {
     const { displayItems, currentIndex } = get();
@@ -265,7 +321,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         viewName: "triage",
       }).catch(() => null);
 
-      const displayItems = computeDisplayItems(images, "triage", groups, triageExpand(), new Set<number>(), selectRequiresPick(), routeMinStar());
+      const displayItems = computeDisplayItems(
+        images,
+        "triage",
+        groups,
+        triageExpand(),
+        new Set<number>(),
+        selectRequiresPick(),
+        routeMinStar(),
+        { sortByAi: "none", hideSoftThreshold: hideSoftThreshold() },
+      );
 
       let startIndex = 0;
       if (cursor !== null) {
@@ -334,6 +399,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
     );
 
     set({
@@ -374,6 +440,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().expandedGroupIds,
             selectRequiresPick(),
             routeMinStar(),
+            { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
           ),
         });
       }
@@ -439,7 +506,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       affectedIds.push({ id: image.id, oldFlag });
     }
 
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+    );
 
     const flashColor =
       flag === "pick"
@@ -518,6 +594,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           get().expandedGroupIds,
           selectRequiresPick(),
           routeMinStar(),
+          { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
         ),
       });
     }
@@ -543,6 +620,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
     );
 
     set({
@@ -587,6 +665,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().expandedGroupIds,
             selectRequiresPick(),
             routeMinStar(),
+            { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
           ),
         });
       }
@@ -623,6 +702,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -682,6 +762,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -724,7 +805,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }).catch(() => {});
     }
 
-    const newDisplayItems = computeDisplayItems(images, view, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const newDisplayItems = computeDisplayItems(
+      images,
+      view,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+    );
 
     let newIndex = 0;
     try {
@@ -794,6 +884,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       next,
       selectRequiresPick(),
       routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
     );
 
     let newIndex = 0;
@@ -821,7 +912,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, flag };
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+    );
 
     const flashColor = flag === "pick" ? "rgba(34, 197, 94, 0.15)" : flag === "reject" ? "rgba(239, 68, 68, 0.15)" : null;
 
@@ -849,7 +949,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
         revertImages[idx] = { ...revertImages[idx], flag: oldFlag };
-        set({ images: revertImages, displayItems: computeDisplayItems(revertImages, get().currentView, get().groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()) });
+        set({
+          images: revertImages,
+          displayItems: computeDisplayItems(
+            revertImages,
+            get().currentView,
+            get().groups,
+            triageExpand(),
+            get().expandedGroupIds,
+            selectRequiresPick(),
+            routeMinStar(),
+            { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+          ),
+        });
       }
     }
   },
@@ -959,7 +1071,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     updatedImages[pickIdx] = { ...updatedImages[pickIdx], flag: "pick" };
     updatedImages[rejectIdx] = { ...updatedImages[rejectIdx], flag: "reject" };
 
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+    );
 
     set({
       images: updatedImages,
@@ -1016,7 +1137,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()),
+        displayItems: computeDisplayItems(
+          images,
+          currentView,
+          groups,
+          triageExpand(),
+          get().expandedGroupIds,
+          selectRequiresPick(),
+          routeMinStar(),
+          { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+        ),
       });
     } catch (e) {
       console.error("Create group failed:", e);
@@ -1027,7 +1157,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   refreshDisplay: () => {
     const { images, currentView, groups, displayItems, currentIndex } = get();
     const currentPhotoId = displayItems[currentIndex]?.image.id;
-    const next = computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const next = computeDisplayItems(
+      images,
+      currentView,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+    );
     let nextIndex = currentIndex;
     if (currentPhotoId !== undefined) {
       const idx = next.findIndex((d) => d.image.id === currentPhotoId);
@@ -1035,6 +1174,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
     nextIndex = Math.min(nextIndex, Math.max(0, next.length - 1));
     set({ displayItems: next, currentIndex: nextIndex < 0 ? 0 : nextIndex });
+  },
+
+  cycleSortByAi: () => {
+    const cur = get().sortByAi;
+    const next: "none" | "sharpness" | "faces" =
+      cur === "none" ? "sharpness" : cur === "sharpness" ? "faces" : "none";
+    set({ sortByAi: next });
+    get().refreshDisplay();
   },
 
   ungroupPhotos: async (photoIds: number[]) => {
@@ -1047,7 +1194,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()),
+        displayItems: computeDisplayItems(
+          images,
+          currentView,
+          groups,
+          triageExpand(),
+          get().expandedGroupIds,
+          selectRequiresPick(),
+          routeMinStar(),
+          { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+        ),
       });
     } catch (e) {
       console.error("Ungroup failed:", e);
