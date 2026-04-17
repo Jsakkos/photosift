@@ -656,6 +656,7 @@ impl Database {
     // ---- AI: Faces + Aggregates ----
 
     pub fn insert_faces_batch(&mut self, faces: &[FaceRow]) -> Result<()> {
+        if faces.is_empty() { return Ok(()); }
         let tx = self.conn.transaction()?;
         {
             let mut stmt = tx.prepare(
@@ -713,7 +714,7 @@ impl Database {
         photo_id: i64,
         face_count: Option<i32>,
         eyes_open_count: Option<i32>,
-        sharpness_score: f64,
+        sharpness_score: Option<f64>,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE photos SET face_count = ?2, eyes_open_count = ?3,
@@ -725,18 +726,20 @@ impl Database {
         Ok(())
     }
 
-    pub fn clear_ai_for_shoot(&self, shoot_id: i64) -> Result<()> {
-        self.conn.execute(
+    pub fn clear_ai_for_shoot(&mut self, shoot_id: i64) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
             "UPDATE photos SET face_count = NULL, eyes_open_count = NULL,
                                sharpness_score = NULL, ai_analyzed_at = NULL
              WHERE shoot_id = ?1",
             params![shoot_id],
         )?;
-        self.conn.execute(
+        tx.execute(
             "DELETE FROM faces WHERE photo_id IN
                 (SELECT id FROM photos WHERE shoot_id = ?1)",
             params![shoot_id],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1213,18 +1216,20 @@ mod tests {
         let ids = db
             .insert_photos_batch(shoot_id, &[sample_insert(1, "a.nef"), sample_insert(2, "b.nef")])
             .unwrap();
-        db.mark_ai_analyzed(ids[0], Some(0), Some(0), 50.0).unwrap();
-        db.mark_ai_analyzed(ids[1], Some(1), Some(2), 75.0).unwrap();
+        db.mark_ai_analyzed(ids[0], Some(0), Some(0), Some(50.0)).unwrap();
+        db.mark_ai_analyzed(ids[1], Some(1), Some(2), Some(75.0)).unwrap();
 
         db.clear_ai_for_shoot(shoot_id).unwrap();
 
         for id in &ids {
-            let row: (Option<i32>, Option<String>) = db.conn.query_row(
-                "SELECT face_count, ai_analyzed_at FROM photos WHERE id = ?1",
-                params![id], |r| Ok((r.get(0)?, r.get(1)?)),
+            let row: (Option<i32>, Option<i32>, Option<f64>, Option<String>) = db.conn.query_row(
+                "SELECT face_count, eyes_open_count, sharpness_score, ai_analyzed_at FROM photos WHERE id = ?1",
+                params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             ).unwrap();
-            assert_eq!(row.0, None);
-            assert_eq!(row.1, None);
+            assert_eq!(row.0, None, "face_count should be NULL");
+            assert_eq!(row.1, None, "eyes_open_count should be NULL");
+            assert_eq!(row.2, None, "sharpness_score should be NULL");
+            assert_eq!(row.3, None, "ai_analyzed_at should be NULL");
         }
     }
 
