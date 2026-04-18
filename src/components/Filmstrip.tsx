@@ -89,6 +89,21 @@ export function Filmstrip() {
         );
       }
 
+      // Double-click behavior depends on context:
+      //  - Expanded group member in triage: toggle-collapse the group.
+      //  - Anything else: open loupe.
+      // This makes double-click symmetric — click a collapsed cover to
+      // expand, click any expanded member to collapse back.
+      const isExpandedMember =
+        currentView === "triage" && item.groupId !== undefined && !item.isGroupCover;
+      const onThumbDoubleClick = () => {
+        if (isExpandedMember && item.groupId !== undefined) {
+          toggleGroupExpansion(item.groupId);
+        } else {
+          openLoupe(index);
+        }
+      };
+
       return (
         <div
           style={style}
@@ -98,7 +113,7 @@ export function Filmstrip() {
           aria-current={isCurrent ? "true" : undefined}
           className="flex items-center justify-center p-1"
           onClick={() => setCurrentIndex(index)}
-          onDoubleClick={() => openLoupe(index)}
+          onDoubleClick={onThumbDoubleClick}
         >
           <div
             className={`relative cursor-pointer rounded overflow-hidden transition-all ${
@@ -132,7 +147,7 @@ export function Filmstrip() {
         </div>
       );
     },
-    [displayItems, currentIndex, setCurrentIndex, currentView, openLoupe, handleGroupDoubleClick],
+    [displayItems, currentIndex, setCurrentIndex, currentView, openLoupe, handleGroupDoubleClick, toggleGroupExpansion],
   );
 
   if (displayItems.length === 0) return null;

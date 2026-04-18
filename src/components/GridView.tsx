@@ -202,11 +202,22 @@ export function GridView() {
               isMulti={selection.size > 1}
               onClick={handleClick}
               onDoubleClick={() => {
+                // Symmetric toggle: clicking a collapsed group cover
+                // expands it; clicking any expanded-group member
+                // collapses it back. Non-group photos open loupe.
+                const inExpandableView =
+                  currentView === "triage" || currentView === "select";
+                const isExpandedMember =
+                  inExpandableView &&
+                  item.groupId !== undefined &&
+                  !item.isGroupCover;
                 if (
                   item.isGroupCover &&
                   item.groupId !== undefined &&
-                  (currentView === "triage" || currentView === "select")
+                  inExpandableView
                 ) {
+                  toggleGroupExpansion(item.groupId);
+                } else if (isExpandedMember && item.groupId !== undefined) {
                   toggleGroupExpansion(item.groupId);
                 } else {
                   setCurrentIndex(index);
