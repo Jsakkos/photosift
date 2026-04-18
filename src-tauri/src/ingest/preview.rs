@@ -3,41 +3,47 @@ use image::{DynamicImage, ImageBuffer, Rgb};
 use std::path::Path;
 
 /// Extract JPEG bytes suitable for saving as the preview file + decoding.
-/// Returns (preview_bytes_for_disk, decodable_image). The preview bytes
-/// are the largest embedded JPEG so the disk file retains full quality
-/// even if we couldn't decode it. The decodable image is whichever
-/// embedded JPEG successfully decoded (which may be a smaller
-/// standard-baseline thumbnail when the primary is arithmetic-coded).
+/// Returns (preview_bytes_for_disk, decodable_image).
 ///
-/// For JPEG/TIFF source files, there's just one JPEG and both values
+/// For RAW files the strategy is:
+/// 1. Walk every embedded JPEG candidate largest-first.
+/// 2. The first candidate that BOTH decodes AND is reasonably sized
+///    becomes the disk preview (so downstream readers — protocol
+///    handler, AI worker, loupe — can always decode it).
+/// 3. If no candidate decodes, keep the largest raw bytes anyway so
+///    SOMETHING lands on disk, even if tools can't read it.
+///
+/// For JPEG/TIFF source files, there's one JPEG and both values
 /// come from it.
 pub fn extract_and_decode(path: &Path) -> Result<(Vec<u8>, Option<DynamicImage>), String> {
     if embedded::is_raw_file(path) {
         let candidates = embedded::extract_all_jpegs(path).map_err(|e| e.to_string())?;
-        let primary_bytes = candidates
-            .first()
-            .ok_or_else(|| "no embedded JPEG".to_string())?
-            .bytes
-            .clone();
+        if candidates.is_empty() {
+            return Err("no embedded JPEG".to_string());
+        }
 
-        // Walk candidates largest-first. On any successful decode, return
-        // the decoded image alongside the primary bytes. If every
-        // candidate fails, still return the primary bytes so the preview
-        // file gets saved — the caller tolerates a None image.
+        // Try to find a candidate that decodes. If found, save ITS bytes
+        // as the preview — not the largest raw bytes — so the preview
+        // file on disk is always decodable by downstream readers (AI
+        // worker calls image::open, loupe served by the webview).
         let mut last_err = String::new();
         for cand in &candidates {
             match decode_jpeg_to_image(&cand.bytes) {
-                Ok(img) => return Ok((primary_bytes, Some(img))),
+                Ok(img) => return Ok((cand.bytes.clone(), Some(img))),
                 Err(e) => last_err = e,
             }
         }
+
+        // Nothing decoded. Fall back to the primary (full-res) bytes
+        // just so the preview file isn't missing; downstream will skip
+        // thumb/phash/AI for these photos.
         log::warn!(
             "All {} embedded JPEG candidates for {:?} failed to decode. Last error: {}",
             candidates.len(),
             path,
             last_err
         );
-        Ok((primary_bytes, None))
+        Ok((candidates[0].bytes.clone(), None))
     } else {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let img = decode_jpeg_to_image(&bytes).ok();
