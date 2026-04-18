@@ -102,20 +102,32 @@ fn enqueue_ai_for_shoot(app: &AppHandle, shoot_id: i64) {
         }
     };
 
+    // Reset the cancel flag FIRST so any stale cancel from a prior
+    // session doesn't cause the worker to drop jobs we're about to
+    // enqueue. (The worker's own loop also clears it on cancel now,
+    // but this belt-and-suspenders ensures the race window is closed.)
+    guard.ai_cancel.store(false, Ordering::SeqCst);
+
     let base = crate::db::schema::shoot_cache_dir(shoot_id).join("previews");
     let mut sent = 0_usize;
+    let mut send_errors = 0_usize;
     for id in &ids {
         let preview = base.join(format!("{}.jpg", id));
-        if worker.sender.send(crate::ai::AiJob {
+        match worker.sender.send(crate::ai::AiJob {
             shoot_id,
             photo_id: *id,
             preview_path: preview.to_string_lossy().into_owned(),
-        }).is_ok() {
-            sent += 1;
+        }) {
+            Ok(()) => sent += 1,
+            Err(_) => send_errors += 1,
         }
     }
+    if send_errors > 0 {
+        log::error!(
+            "enqueue_ai_for_shoot: {} jobs failed to send (worker thread likely exited)",
+            send_errors
+        );
+    }
     guard.ai_total.fetch_add(sent, Ordering::SeqCst);
-    // Reset cancel flag so a prior cancel doesn't immediately kill the new batch.
-    guard.ai_cancel.store(false, Ordering::SeqCst);
     log::info!("Enqueued {} photos for AI analysis in shoot {}", sent, shoot_id);
 }

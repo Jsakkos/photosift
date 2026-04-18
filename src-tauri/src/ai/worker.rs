@@ -70,9 +70,15 @@ pub fn process_job(
     Ok(())
 }
 
-/// Main worker loop. Pulls jobs until the channel closes or the cancel flag
-/// flips. The cancel check happens between jobs, so the currently in-flight
-/// job (if any) completes. All remaining queued jobs are dropped.
+/// Main worker loop. Runs for the lifetime of the channel.
+///
+/// Cancel semantics: when the cancel flag is set, the worker drops
+/// any queued jobs without processing them, clears the flag, and
+/// resumes waiting for new work. This interrupts the *current batch*
+/// without killing the worker for the session — a subsequent
+/// re-analyze or import still works.
+///
+/// The worker only exits when all senders are dropped (app shutdown).
 pub fn run_loop(
     rx: Receiver<AiJob>,
     cancel: Arc<AtomicBool>,
@@ -81,13 +87,23 @@ pub fn run_loop(
     eyes_provider: Box<dyn EyeStateProvider>,
     on_progress: impl Fn(&AiJob, Result<()>) + Send,
 ) {
+    log::info!("AI worker started");
     while let Ok(job) = rx.recv() {
         if cancel.load(Ordering::SeqCst) {
-            break;
+            // Cancelled: drain any other queued jobs too, then clear
+            // the flag and go back to waiting for new work.
+            let mut drained = 1;
+            while rx.try_recv().is_ok() {
+                drained += 1;
+            }
+            cancel.store(false, Ordering::SeqCst);
+            log::info!("AI worker: cancel — dropped {} queued job(s)", drained);
+            continue;
         }
         let result = process_job(&mut db, &job, faces_provider.as_ref(), eyes_provider.as_ref());
         on_progress(&job, result);
     }
+    log::info!("AI worker exited (channel closed)");
 }
 
 #[cfg(test)]
