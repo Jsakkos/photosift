@@ -40,3 +40,22 @@ anyhow = "1"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Optimize hot-path crates in dev builds. Without these overrides, ORT
+# inference in `cargo tauri dev` takes >1s per image because debug
+# codegen for the inference runtime + image preprocessing is 5-10x
+# slower than release. Bumping opt-level for just these crates keeps
+# our own edit-compile loop fast while letting the actual heavy work
+# run at full speed.
+[profile.dev.package.ort]
+opt-level = 3
+[profile.dev.package.ort-sys]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.rawler]
+opt-level = 3
+[profile.dev.package."jpeg-decoder"]
+opt-level = 3
