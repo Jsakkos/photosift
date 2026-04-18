@@ -320,6 +320,7 @@ interface ProjectState {
   createGroupFromPhotos: (photoIds: number[]) => Promise<void>;
   ungroupPhotos: (photoIds: number[]) => Promise<void>;
   refreshDisplay: () => void;
+  patchImageAiData: (photoId: number) => Promise<void>;
   sortByAi: "none" | "sharpness" | "faces";
   cycleSortByAi: () => void;
   heatmapOn: boolean;
@@ -1262,6 +1263,32 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
     nextIndex = Math.min(nextIndex, Math.max(0, next.length - 1));
     set({ displayItems: next, currentIndex: nextIndex < 0 ? 0 : nextIndex });
+  },
+
+  // Called from the ai-progress listener: pulls the latest AI fields
+  // for one photo from the backend and patches the local images array
+  // so the UI reflects analysis results as they land. Without this,
+  // face_count / sharpness_score stay at whatever they were when
+  // loadShoot snapshotted the DB — typically null — and the panel,
+  // badges, and sort never see real data.
+  patchImageAiData: async (photoId: number) => {
+    const idx = get().images.findIndex((i) => i.id === photoId);
+    if (idx < 0) return; // photo not in the current shoot's view
+    try {
+      const fresh = await invoke<ImageEntry>("get_image_metadata", { imageId: photoId });
+      const updatedImages = [...get().images];
+      updatedImages[idx] = {
+        ...updatedImages[idx],
+        faceCount: fresh.faceCount,
+        eyesOpenCount: fresh.eyesOpenCount,
+        sharpnessScore: fresh.sharpnessScore,
+        aiAnalyzedAt: fresh.aiAnalyzedAt,
+      };
+      set({ images: updatedImages });
+      get().refreshDisplay();
+    } catch (e) {
+      console.error("patchImageAiData failed for", photoId, e);
+    }
   },
 
   cycleSortByAi: () => {

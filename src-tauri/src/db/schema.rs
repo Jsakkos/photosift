@@ -36,6 +36,11 @@ pub struct PhotoRow {
     pub flag: String,
     pub destination: String,
     pub star_rating: i32,
+    // AI enrichment — populated by the background worker.
+    pub face_count: Option<i32>,
+    pub eyes_open_count: Option<i32>,
+    pub sharpness_score: Option<f64>,
+    pub ai_analyzed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -455,7 +460,8 @@ impl Database {
         self.conn.query_row(
             "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
-                    iso, flag, destination, star_rating
+                    iso, flag, destination, star_rating,
+                    face_count, eyes_open_count, sharpness_score, ai_analyzed_at
              FROM photos WHERE id = ?1",
             params![photo_id],
             row_to_photo,
@@ -466,7 +472,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
-                    iso, flag, destination, star_rating
+                    iso, flag, destination, star_rating,
+                    face_count, eyes_open_count, sharpness_score, ai_analyzed_at
              FROM photos
              WHERE shoot_id = ?1
              ORDER BY exif_date ASC NULLS LAST, id ASC",
@@ -994,6 +1001,10 @@ fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {
         flag: row.get(13)?,
         destination: row.get(14)?,
         star_rating: row.get(15)?,
+        face_count: row.get(16)?,
+        eyes_open_count: row.get(17)?,
+        sharpness_score: row.get(18)?,
+        ai_analyzed_at: row.get(19)?,
     })
 }
 

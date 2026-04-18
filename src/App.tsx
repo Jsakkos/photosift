@@ -8,11 +8,13 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { Toast } from "./components/Toast";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useAiStore } from "./stores/aiStore";
+import { useProjectStore } from "./stores/projectStore";
 import type { AiProgressEvent, AiProviderStatus } from "./types";
 
 function useAiListener() {
   const handleProgress = useAiStore((s) => s.handleProgress);
   const setProvider = useAiStore((s) => s.setProvider);
+  const patchImageAiData = useProjectStore((s) => s.patchImageAiData);
 
   useEffect(() => {
     // Fetch initial provider status so the UI knows if AI is available.
@@ -23,11 +25,16 @@ function useAiListener() {
     // Subscribe to ai-progress events emitted by the worker for each photo.
     const unlisten = listen<AiProgressEvent>("ai-progress", (event) => {
       handleProgress(event.payload);
+      // On success, pull the updated AI fields for this photo so the
+      // loupe panel, AI-pick badge, and sort can see them immediately.
+      if (event.payload.ok) {
+        patchImageAiData(event.payload.photoId);
+      }
     });
     return () => {
       unlisten.then((fn) => fn()).catch(() => {});
     };
-  }, [handleProgress, setProvider]);
+  }, [handleProgress, setProvider, patchImageAiData]);
 }
 
 function App() {
