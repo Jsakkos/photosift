@@ -124,6 +124,8 @@ pub fn run() {
                 s.ai_status = face_status;
             }
 
+            log::info!("AI provider status: {:?}", face_status);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
