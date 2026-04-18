@@ -33,6 +33,7 @@ dirs = "5"
 walkdir = "2"
 uuid = { version = "1", features = ["v4"] }
 ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
+zune-jpeg = "0.4"
 ndarray = "0.16"
 crossbeam-channel = "0.5"
 anyhow = "1"
