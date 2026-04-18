@@ -129,6 +129,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::shoots::list_shoots,
             commands::shoots::get_shoot,
+            commands::shoots::delete_shoot,
             commands::import::start_import,
             commands::import::cancel_import,
             commands::image::get_image_list,

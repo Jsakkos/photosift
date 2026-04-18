@@ -6,7 +6,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { ImportDialog } from "../components/ImportDialog";
 
 export function ShootListPage() {
-  const { shoots, isLoading, refresh } = useShootListStore();
+  const { shoots, isLoading, refresh, deleteShoot } = useShootListStore();
   const openSettings = useSettingsStore((s) => s.openDialog);
   const navigate = useNavigate();
   const [showImport, setShowImport] = useState(false);
@@ -81,23 +81,54 @@ export function ShootListPage() {
 
         {shoots.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {shoots.map((shoot) => (
-              <button
-                key={shoot.id}
-                onClick={() => navigate(`/shoots/${shoot.id}`)}
-                className="text-left p-4 rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-white/5 hover:border-white/10 transition-colors"
-              >
-                <div className="font-medium text-[var(--text-primary)] text-lg mb-1">
-                  {shoot.slug}
+            {shoots.map((shoot) => {
+              const open = () => navigate(`/shoots/${shoot.id}`);
+              const handleDelete = async (e: React.MouseEvent) => {
+                e.stopPropagation();
+                if (!window.confirm(
+                  `Delete shoot "${shoot.slug}"? This removes the DB record and cached thumbnails. RAW files on disk are preserved.`
+                )) return;
+                try {
+                  await deleteShoot(shoot.id);
+                } catch (err) {
+                  window.alert(`Delete failed: ${err}`);
+                }
+              };
+              return (
+                <div
+                  key={shoot.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={open}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      open();
+                    }
+                  }}
+                  className="relative text-left p-4 rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-white/5 hover:border-white/10 transition-colors cursor-pointer"
+                >
+                  <div className="font-medium text-[var(--text-primary)] text-lg mb-1 pr-8">
+                    {shoot.slug}
+                  </div>
+                  <div className="text-[var(--text-secondary)] text-sm mb-2">
+                    {shoot.date}
+                  </div>
+                  <div className="text-[var(--text-secondary)] text-xs">
+                    {shoot.photoCount} photos
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    title="Delete shoot"
+                    aria-label={`Delete shoot ${shoot.slug}`}
+                    className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded text-[var(--text-secondary)]/60 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                  >
+                    ×
+                  </button>
                 </div>
-                <div className="text-[var(--text-secondary)] text-sm mb-2">
-                  {shoot.date}
-                </div>
-                <div className="text-[var(--text-secondary)] text-xs">
-                  {shoot.photoCount} photos
-                </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
