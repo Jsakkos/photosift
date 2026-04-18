@@ -1327,4 +1327,75 @@ pub(crate) mod tests {
         queue.enqueue(2, &PathBuf::from("/nonexistent/b.xmp"), 5);
         queue.drain(); // writes to bogus paths will fail gracefully via log::error
     }
+
+    /// End-to-end: 3 photos through the full AI pipeline (mock-backed), DB
+    /// closed and reopened, aggregates + face rows must survive. Catches
+    /// regressions in transaction ordering, FK cascade, and file-based
+    /// persistence that purely in-memory tests miss.
+    #[test]
+    fn test_ai_full_pipeline_mock_provider_reopens_clean() {
+        use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
+        use crate::ai::worker::process_job;
+        use crate::ai::AiJob;
+        use image::{ImageBuffer, Luma};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("e2e.db");
+
+        let ids = {
+            let mut db = Database::open(&db_path).unwrap();
+            let shoot_id = db
+                .insert_shoot("E2E", "2026-04-15", "/s", "/d", "copy")
+                .unwrap();
+            let ids = db
+                .insert_photos_batch(
+                    shoot_id,
+                    &[
+                        sample_insert(1, "a.nef"),
+                        sample_insert(2, "b.nef"),
+                        sample_insert(3, "c.nef"),
+                    ],
+                )
+                .unwrap();
+
+            let face_p = MockFaceProvider::default();
+            let eye_p = MockEyeProvider::default();
+
+            for id in &ids {
+                let preview = dir.path().join(format!("{}.jpg", id));
+                let img: ImageBuffer<Luma<u8>, Vec<u8>> = ImageBuffer::from_fn(128, 128, |x, y| {
+                    Luma([if (x / 4 + y / 4) % 2 == 0 { 0 } else { 255 }])
+                });
+                img.save(&preview).unwrap();
+
+                let job = AiJob {
+                    shoot_id,
+                    photo_id: *id,
+                    preview_path: preview.to_string_lossy().into_owned(),
+                };
+                process_job(&mut db, &job, &face_p, &eye_p).unwrap();
+            }
+            ids
+        };
+
+        // Reopen — everything must survive on disk.
+        let db = Database::open(&db_path).unwrap();
+        for id in &ids {
+            let (fc, oc, ts): (Option<i32>, Option<i32>, Option<String>) = db
+                .conn
+                .query_row(
+                    "SELECT face_count, eyes_open_count, ai_analyzed_at FROM photos WHERE id = ?1",
+                    rusqlite::params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(fc, Some(1), "photo {} face_count should survive reopen", id);
+            assert!(oc.is_some(), "photo {} eyes_open_count should survive", id);
+            assert!(ts.is_some(), "photo {} ai_analyzed_at should survive", id);
+
+            let faces = db.get_faces_for_photo(*id).unwrap();
+            assert_eq!(faces.len(), 1, "photo {} face row should survive", id);
+        }
+    }
 }
