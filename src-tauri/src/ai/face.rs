@@ -79,8 +79,13 @@ impl YuNetProvider {
             .map_err(|e| anyhow!("ort with_optimization_level failed: {}", e))?;
         let mut builder = if cuda {
             use ort::ep::CUDAExecutionProvider;
+            // Force an explicit error if CUDA registration fails. Without
+            // this, ORT silently falls back to CPU at session creation —
+            // the session still runs, just on CPU, with no way for the
+            // caller to tell the difference. error_on_failure makes the
+            // fallback in `load()` above work the way it's documented.
             builder
-                .with_execution_providers([CUDAExecutionProvider::default().build()])
+                .with_execution_providers([CUDAExecutionProvider::default().build().error_on_failure()])
                 .map_err(|e| anyhow!("ort with_execution_providers(cuda) failed: {}", e))?
         } else {
             use ort::ep::CPUExecutionProvider;
@@ -166,13 +171,15 @@ fn decode_level(
     cls: &[f32],
     obj: &[f32],
     bbox: &[f32],
+    kps: &[f32],
     stride: u32,
 ) -> Vec<RawDetection> {
     let grid_side = INPUT_SIDE as u32 / stride;
     let n_anchors = (grid_side * grid_side) as usize;
     debug_assert_eq!(cls.len(), n_anchors);
     debug_assert_eq!(obj.len(), n_anchors);
-    debug_assert_eq!(bbox.len(), n_anchors * 14);
+    debug_assert_eq!(bbox.len(), n_anchors * 4);
+    debug_assert_eq!(kps.len(), n_anchors * 10);
 
     let mut out = Vec::with_capacity(32);
     let s = stride as f32;
@@ -183,20 +190,21 @@ fn decode_level(
             if score < CONF_THRESHOLD {
                 continue;
             }
-            let base = i * 14;
-            let dx = bbox[base];
-            let dy = bbox[base + 1];
-            let log_w = bbox[base + 2];
-            let log_h = bbox[base + 3];
+            let bbase = i * 4;
+            let dx = bbox[bbase];
+            let dy = bbox[bbase + 1];
+            let log_w = bbox[bbase + 2];
+            let log_h = bbox[bbase + 3];
             let cx = (dx + col as f32) * s;
             let cy = (dy + row as f32) * s;
             let w = log_w.exp() * s;
             let h = log_h.exp() * s;
 
+            let kbase = i * 10;
             let mut landmarks = [(0.0_f32, 0.0_f32); 5];
             for k in 0..5 {
-                let lx = (bbox[base + 4 + 2 * k] + col as f32) * s;
-                let ly = (bbox[base + 4 + 2 * k + 1] + row as f32) * s;
+                let lx = (kps[kbase + 2 * k] + col as f32) * s;
+                let ly = (kps[kbase + 2 * k + 1] + row as f32) * s;
                 landmarks[k] = (lx, ly);
             }
             out.push(RawDetection {
@@ -317,18 +325,23 @@ impl FaceProvider for YuNetProvider {
         // borrows from the session), then process candidates after the
         // guard drops. Each extracted slice is cloned into a Vec so
         // the decoder can own its inputs.
-        let head_data: Vec<(u32, Vec<f32>, Vec<f32>, Vec<f32>)> = {
+        //
+        // YuNet 2023mar outputs 12 tensors total: per-stride
+        // {cls, obj, bbox, kps}. bbox head is 4-channel (dx/dy/log_w/log_h);
+        // landmark deltas live in the separate kps head (10-channel).
+        let head_data: Vec<(u32, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> = {
             let mut session = self.session.lock().unwrap_or_else(|p| p.into_inner());
             let outputs = session
                 .run(ort::inputs!["input" => input_tensor])
                 .map_err(|e| anyhow!("ort session.run failed: {}", e))?;
 
-            let mut heads: Vec<(u32, Vec<f32>, Vec<f32>, Vec<f32>)> =
+            let mut heads: Vec<(u32, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> =
                 Vec::with_capacity(STRIDES.len());
             for &stride in &STRIDES {
                 let cls_name = format!("cls_{}", stride);
                 let obj_name = format!("obj_{}", stride);
                 let bbox_name = format!("bbox_{}", stride);
+                let kps_name = format!("kps_{}", stride);
 
                 let (_, cls) = outputs
                     .get(cls_name.as_str())
@@ -345,15 +358,20 @@ impl FaceProvider for YuNetProvider {
                     .ok_or_else(|| anyhow!("missing output {}", bbox_name))?
                     .try_extract_tensor::<f32>()
                     .map_err(|e| anyhow!("extract {}: {}", bbox_name, e))?;
+                let (_, kps) = outputs
+                    .get(kps_name.as_str())
+                    .ok_or_else(|| anyhow!("missing output {}", kps_name))?
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| anyhow!("extract {}: {}", kps_name, e))?;
 
-                heads.push((stride, cls.to_vec(), obj.to_vec(), bbox.to_vec()));
+                heads.push((stride, cls.to_vec(), obj.to_vec(), bbox.to_vec(), kps.to_vec()));
             }
             heads
         };
 
         let mut candidates: Vec<RawDetection> = Vec::new();
-        for (stride, cls, obj, bbox) in &head_data {
-            candidates.extend(decode_level(cls, obj, bbox, *stride));
+        for (stride, cls, obj, bbox, kps) in &head_data {
+            candidates.extend(decode_level(cls, obj, bbox, kps, *stride));
         }
 
         let kept = nms(candidates, NMS_IOU_THRESHOLD);
@@ -389,8 +407,9 @@ mod tests {
         let n = (INPUT_SIDE / 8) * (INPUT_SIDE / 8);
         let cls = vec![0.0_f32; n];
         let obj = vec![0.0_f32; n];
-        let bbox = vec![0.0_f32; n * 14];
-        let dets = decode_level(&cls, &obj, &bbox, 8);
+        let bbox = vec![0.0_f32; n * 4];
+        let kps = vec![0.0_f32; n * 10];
+        let dets = decode_level(&cls, &obj, &bbox, &kps, 8);
         assert!(dets.is_empty());
     }
 
