@@ -37,8 +37,10 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            use crate::ai::eye::EyeStateProvider;
+            use crate::ai::face::{FaceProvider, YuNetProvider};
             use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
-            use crate::ai::AiProviderStatus;
+            use crate::ai::{ensure_models_on_disk, AiProviderStatus};
             use std::sync::atomic::Ordering;
 
             let state = app.state::<Mutex<AppState>>();
@@ -55,6 +57,37 @@ pub fn run() {
                 )
             };
 
+            // Real face provider via YuNet with graceful fallback to mock if
+            // model extraction or ORT init fails (e.g. onnxruntime dylib
+            // missing). Surface the actual backend via ai_status so the UI
+            // can badge it.
+            let (face_provider, face_status): (Box<dyn FaceProvider>, AiProviderStatus) =
+                match ensure_models_on_disk() {
+                    Ok(dir) => match YuNetProvider::load(&dir.join("yunet.onnx"), true) {
+                        Ok((yunet, status)) => (Box::new(yunet), status),
+                        Err(e) => {
+                            log::error!(
+                                "YuNet load failed; disabling real face detection: {}",
+                                e
+                            );
+                            (
+                                Box::new(MockFaceProvider::default()),
+                                AiProviderStatus::Disabled,
+                            )
+                        }
+                    },
+                    Err(e) => {
+                        log::error!("Model extraction failed; disabling AI: {}", e);
+                        (
+                            Box::new(MockFaceProvider::default()),
+                            AiProviderStatus::Disabled,
+                        )
+                    }
+                };
+
+            // Eye provider stays mock-backed until a real classifier model is sourced.
+            let eye_provider: Box<dyn EyeStateProvider> = Box::new(MockEyeProvider::default());
+
             let app_handle = app.handle().clone();
             let analyzed_for_cb = analyzed.clone();
             let failed_for_cb = failed.clone();
@@ -62,8 +95,8 @@ pub fn run() {
 
             let spawned = crate::ai::spawn_worker(
                 db_path,
-                Box::new(MockFaceProvider::default()),
-                Box::new(MockEyeProvider::default()),
+                face_provider,
+                eye_provider,
                 cancel,
                 analyzed,
                 failed,
@@ -88,7 +121,7 @@ pub fn run() {
             {
                 let mut s = state.lock().expect("state lock");
                 s.ai_worker = Some(spawned.handle);
-                s.ai_status = AiProviderStatus::Cpu;
+                s.ai_status = face_status;
             }
 
             Ok(())

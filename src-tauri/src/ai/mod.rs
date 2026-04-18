@@ -23,6 +23,21 @@ pub struct AiJob {
 
 pub use worker::{process_job, run_loop, WorkerHandle};
 
+const YUNET_BYTES: &[u8] = include_bytes!("models/yunet.onnx");
+
+/// Extract bundled ONNX models to ~/.photosift/models/ on first run.
+/// Currently only YuNet is bundled; eye-state classifier is mock-backed
+/// pending model sourcing (see docs/phase2-ai-qa.md).
+pub fn ensure_models_on_disk() -> anyhow::Result<std::path::PathBuf> {
+    let dir = crate::db::schema::photosift_home().join("models");
+    std::fs::create_dir_all(&dir)?;
+    let yunet = dir.join("yunet.onnx");
+    if !yunet.exists() {
+        std::fs::write(&yunet, YUNET_BYTES)?;
+    }
+    Ok(dir)
+}
+
 use crate::ai::eye::EyeStateProvider;
 use crate::ai::face::FaceProvider;
 use crate::db::schema::Database;

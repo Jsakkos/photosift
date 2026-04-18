@@ -3576,6 +3576,7 @@ dependencies = [
 name = "photosift"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "crossbeam-channel",
  "dirs 5.0.1",
