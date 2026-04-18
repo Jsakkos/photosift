@@ -65,6 +65,9 @@ export function Filmstrip() {
 
       if (currentView === "triage" && item.isGroupCover && item.groupMemberCount && item.groupId !== undefined) {
         const gid = item.groupId;
+        // Only one handler fires double-click. Wrapping it on the outer
+        // div AND the inner GroupStack caused both to run via bubbling,
+        // toggling the group expansion twice and net-zeroing the change.
         return (
           <div
             style={style}
@@ -74,7 +77,6 @@ export function Filmstrip() {
             aria-current={isCurrent ? "true" : undefined}
             className="flex items-center justify-center p-1"
             onClick={() => setCurrentIndex(index)}
-            onDoubleClick={() => handleGroupDoubleClick(index, gid)}
           >
             <GroupStack
               imageId={image.id}
