@@ -6,7 +6,7 @@ difference: `providerStatus = "cpu"`.
 
 ## Current shipping state (2026-04-16)
 
-- **Face detection**: YuNet loaded, CUDA→CPU fallback wired, but `detect()` body returns `Ok(vec![])` — no real face output yet. Anchor-decoder is follow-up work. AI panel and AI-pick badge will show empty results until that lands.
+- **Face detection**: **real** — YuNet 2023mar with full anchor decoder + NMS. CUDA→CPU fallback wired. Bundled ~230 KB model, extracted to `~/.photosift/models/` on first run. Live inference smoke test exists (`#[ignore]`-gated — needs `ORT_DYLIB_PATH` env var on Windows).
 - **Eye state (open/closed)**: mock provider — alternates 0/1 deterministically. Not representative.
 - **Whole-image sharpness**: **real** (Laplacian variance). The sort, filter, and heatmap surfaces all exercise real signal.
 - **Heatmap overlay**: real Laplacian tile grid, on-demand via `H`.
@@ -35,18 +35,16 @@ difference: `providerStatus = "cpu"`.
 
 ## 2. Loupe — AI panel (`F` key)
 
-Until real YuNet `detect()` lands, face-based checks return "No faces detected" or empty face lists. What you CAN test:
+YuNet face detection is live; eye open/closed remains mock.
 
-- [ ] Press `F` on any analyzed photo → panel appears showing "0 faces" + sharpness chip.
-- [ ] Press `F` again → panel hides.
-- [ ] Open a photo with `aiAnalyzedAt === null` (e.g. mid-analysis) → panel stays hidden even with `F` pressed.
-- [ ] When `providerStatus === "disabled"` → panel never renders (verify by deleting `~/.photosift/models/yunet.onnx`, restarting).
-
-After real face detection lands:
-
+- [ ] Press `F` on a portrait → panel shows face count + sharpness chip.
 - [ ] Photo with 1 face → one face row with thumb + eye indicators + sharpness numbers.
 - [ ] Photo with 2+ faces → up to 3 inline rows, "+N more" pill.
-- [ ] Eye open/closed indicators colored correctly (green=open, dashed red=closed).
+- [ ] Photo with 0 faces → panel hidden unless `F` is pressed to force-show.
+- [ ] Press `F` again → panel hides.
+- [ ] Open a photo with `aiAnalyzedAt === null` (mid-analysis) → panel stays hidden even with `F` pressed.
+- [ ] When `providerStatus === "disabled"` → panel never renders (verify by deleting `~/.photosift/models/yunet.onnx`, restarting).
+- [ ] Eye open/closed indicators show (currently alternating mock values — not semantically meaningful until eye classifier lands).
 
 ## 3. Loupe — heatmap overlay (`H` key)
 
@@ -118,10 +116,10 @@ Save under `docs/phase2-ai-screenshots/`:
 
 ## Known gaps (for follow-up work, not blockers for this checklist)
 
-- **YuNet output decoder** — `YuNetProvider::detect()` returns empty Vec. Face count always 0; AI panel shows "0 faces"; AI-pick badges never appear. Port OpenCV's `face_detect.cpp` anchor decoder and NMS when this lands.
 - **Eye classifier** — `MockEyeProvider` alternates deterministically. Once a real eye open/closed model is sourced, swap `OnnxEyeStateProvider` in `lib.rs`.
-- **Fixture-based face tests** — no `src-tauri/tests/fixtures/` yet. Add one portrait + one landscape JPEG with a `test_yunet_detects_known_face` once the decoder is real.
+- **Fixture-based face tests** — the live smoke test is `#[ignore]`-gated (runs with `cargo test -- --ignored`). A proper fixture pair (portrait with known face + landscape) asserting detection count would add regression coverage for the decoder — not blocking.
 - **Cross-platform inference** — Windows + CUDA/CPU only. macOS (CoreML) out of scope.
+- **ORT dylib on test hosts** — `load-dynamic` requires `ORT_DYLIB_PATH` or the onnxruntime DLL on PATH for live inference. Production builds work because Tauri bundles the DLL; `cargo test -- --ignored` from a fresh checkout may need `ORT_DYLIB_PATH` set.
 
 ## Exit criteria
 
