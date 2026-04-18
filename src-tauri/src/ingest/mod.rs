@@ -314,27 +314,25 @@ fn process_one_file(
         ImportMode::InPlace => src_path.to_path_buf(),
     };
 
-    // 5. Extract embedded JPEG bytes (always succeeds if the file is valid)
-    let preview_bytes = match preview::extract_jpeg_bytes(&raw_path) {
-        Ok(b) => b,
+    // 5-8. Extract primary JPEG bytes (kept for the disk preview) and
+    // also try to decode any embedded JPEG candidate (NEFs usually have
+    // a smaller standard-baseline preview that decodes even when the
+    // full-resolution JPEG uses arithmetic coding or 12-bit precision).
+    let (preview_bytes, decoded) = match preview::extract_and_decode(&raw_path) {
+        Ok(v) => v,
         Err(e) => {
             log::error!("JPEG extraction failed for {:?}: {}", raw_path, e);
             return ProcessedFile::Skipped;
         }
     };
 
-    // 6-8. Decode JPEG for thumbnail + pHash. Try mozjpeg first (handles
-    // arithmetic coding, DNL, non-standard DHT), fall back to image crate.
-    let (thumb_bytes, phash_val) = match preview::decode_jpeg_to_image(&preview_bytes) {
-        Ok(img) => {
+    let (thumb_bytes, phash_val) = match decoded {
+        Some(img) => {
             let thumb = thumbnail::make_thumb(&img).ok();
             let ph = Some(phash::compute_phash(&img));
             (thumb, ph)
         }
-        Err(e) => {
-            log::warn!("JPEG decode failed for {:?} (preview saved, no thumb/phash): {}", raw_path, e);
-            (None, None)
-        }
+        None => (None, None),
     };
 
     let _ = previews_dir;

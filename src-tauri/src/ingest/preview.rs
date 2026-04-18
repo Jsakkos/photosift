@@ -2,9 +2,52 @@ use crate::pipeline::embedded;
 use image::{DynamicImage, ImageBuffer, Rgb};
 use std::path::Path;
 
+/// Extract JPEG bytes suitable for saving as the preview file + decoding.
+/// Returns (preview_bytes_for_disk, decodable_image). The preview bytes
+/// are the largest embedded JPEG so the disk file retains full quality
+/// even if we couldn't decode it. The decodable image is whichever
+/// embedded JPEG successfully decoded (which may be a smaller
+/// standard-baseline thumbnail when the primary is arithmetic-coded).
+///
+/// For JPEG/TIFF source files, there's just one JPEG and both values
+/// come from it.
+pub fn extract_and_decode(path: &Path) -> Result<(Vec<u8>, Option<DynamicImage>), String> {
+    if embedded::is_raw_file(path) {
+        let candidates = embedded::extract_all_jpegs(path).map_err(|e| e.to_string())?;
+        let primary_bytes = candidates
+            .first()
+            .ok_or_else(|| "no embedded JPEG".to_string())?
+            .bytes
+            .clone();
+
+        // Walk candidates largest-first. On any successful decode, return
+        // the decoded image alongside the primary bytes. If every
+        // candidate fails, still return the primary bytes so the preview
+        // file gets saved — the caller tolerates a None image.
+        let mut last_err = String::new();
+        for cand in &candidates {
+            match decode_jpeg_to_image(&cand.bytes) {
+                Ok(img) => return Ok((primary_bytes, Some(img))),
+                Err(e) => last_err = e,
+            }
+        }
+        log::warn!(
+            "All {} embedded JPEG candidates for {:?} failed to decode. Last error: {}",
+            candidates.len(),
+            path,
+            last_err
+        );
+        Ok((primary_bytes, None))
+    } else {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let img = decode_jpeg_to_image(&bytes).ok();
+        Ok((bytes, img))
+    }
+}
+
 /// Extract the raw JPEG bytes from a file without decoding.
-/// For RAW files: extracts the embedded JPEG preview.
-/// For JPEG/TIFF: reads the file as-is.
+/// Kept for callers (including the protocol handler's re-extract
+/// path) that don't need the decoded image.
 pub fn extract_jpeg_bytes(path: &Path) -> Result<Vec<u8>, String> {
     if embedded::is_raw_file(path) {
         embedded::extract_embedded_jpeg(path).map_err(|e| e.to_string())
@@ -38,9 +81,14 @@ fn decode_with_zune(jpeg_bytes: &[u8]) -> Result<DynamicImage, String> {
     use zune_jpeg::zune_core::options::DecoderOptions;
     use zune_jpeg::JpegDecoder;
 
+    // Strict mode rejects the DNL marker + "extra bytes between headers"
+    // that Nikon NEFs routinely emit. Turning it off lets zune tolerate
+    // those variants while still catching genuine corruption.
     let mut decoder = JpegDecoder::new_with_options(
         jpeg_bytes,
-        DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB),
+        DecoderOptions::default()
+            .jpeg_set_out_colorspace(ColorSpace::RGB)
+            .set_strict_mode(false),
     );
     let pixels = decoder.decode().map_err(|e| e.to_string())?;
     let info = decoder
