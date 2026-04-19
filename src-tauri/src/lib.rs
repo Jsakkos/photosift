@@ -1,3 +1,4 @@
+mod ai;
 mod commands;
 mod db;
 mod ingest;
@@ -8,6 +9,7 @@ mod state;
 use pipeline::protocol;
 use state::AppState;
 use std::sync::Mutex;
+use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -34,9 +36,102 @@ pub fn run() {
                 }
             }
         })
+        .setup(|app| {
+            use crate::ai::eye::EyeStateProvider;
+            use crate::ai::face::{FaceProvider, YuNetProvider};
+            use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
+            use crate::ai::{ensure_models_on_disk, AiProviderStatus};
+            use std::sync::atomic::Ordering;
+
+            let state = app.state::<Mutex<AppState>>();
+            let db_path = crate::db::schema::global_db_path();
+
+            // Snapshot atomics we need to read from the progress callback.
+            let (cancel, analyzed, failed, total) = {
+                let s = state.lock().expect("state lock");
+                (
+                    s.ai_cancel.clone(),
+                    s.ai_analyzed.clone(),
+                    s.ai_failed.clone(),
+                    s.ai_total.clone(),
+                )
+            };
+
+            // Real face provider via YuNet with graceful fallback to mock if
+            // model extraction or ORT init fails (e.g. onnxruntime dylib
+            // missing). Surface the actual backend via ai_status so the UI
+            // can badge it.
+            let (face_provider, face_status): (Box<dyn FaceProvider>, AiProviderStatus) =
+                match ensure_models_on_disk() {
+                    Ok(dir) => match YuNetProvider::load(&dir.join("yunet.onnx"), true) {
+                        Ok((yunet, status)) => (Box::new(yunet), status),
+                        Err(e) => {
+                            log::error!(
+                                "YuNet load failed; disabling real face detection: {}",
+                                e
+                            );
+                            (
+                                Box::new(MockFaceProvider::default()),
+                                AiProviderStatus::Disabled,
+                            )
+                        }
+                    },
+                    Err(e) => {
+                        log::error!("Model extraction failed; disabling AI: {}", e);
+                        (
+                            Box::new(MockFaceProvider::default()),
+                            AiProviderStatus::Disabled,
+                        )
+                    }
+                };
+
+            // Eye provider stays mock-backed until a real classifier model is sourced.
+            let eye_provider: Box<dyn EyeStateProvider> = Box::new(MockEyeProvider::default());
+
+            let app_handle = app.handle().clone();
+            let analyzed_for_cb = analyzed.clone();
+            let failed_for_cb = failed.clone();
+            let total_for_cb = total.clone();
+
+            let spawned = crate::ai::spawn_worker(
+                db_path,
+                face_provider,
+                eye_provider,
+                cancel,
+                analyzed,
+                failed,
+                move |photo_id, ok| {
+                    let done = analyzed_for_cb.load(Ordering::SeqCst)
+                        + failed_for_cb.load(Ordering::SeqCst);
+                    let total_v = total_for_cb.load(Ordering::SeqCst);
+                    let failed_v = failed_for_cb.load(Ordering::SeqCst);
+                    let _ = app_handle.emit(
+                        "ai-progress",
+                        serde_json::json!({
+                            "photoId": photo_id,
+                            "ok": ok,
+                            "done": done,
+                            "total": total_v,
+                            "failed": failed_v,
+                        }),
+                    );
+                },
+            );
+
+            {
+                let mut s = state.lock().expect("state lock");
+                s.ai_worker = Some(spawned.handle);
+                s.ai_status = face_status;
+            }
+
+            log::info!("AI provider status: {:?}", face_status);
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::shoots::list_shoots,
             commands::shoots::get_shoot,
+            commands::shoots::delete_shoot,
             commands::import::start_import,
             commands::import::cancel_import,
             commands::image::get_image_list,
@@ -56,6 +151,12 @@ pub fn run() {
             commands::settings::update_settings,
             commands::settings::recluster_shoot,
             commands::export::export_xmp,
+            commands::ai::get_ai_status,
+            commands::ai::cancel_ai_analysis,
+            commands::ai::reanalyze_shoot,
+            commands::ai::get_faces_for_photo,
+            commands::ai::get_heatmap,
+            commands::ai::get_shoot_sharpness_percentiles,
         ]);
 
     let builder = protocol::register_protocol(builder);

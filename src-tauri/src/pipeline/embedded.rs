@@ -14,7 +14,26 @@ pub enum EmbeddedError {
 }
 
 /// Extract the largest embedded JPEG preview from a NEF (TIFF-based) file.
+/// Retained for callers that only need the primary preview bytes. For
+/// decode-capable callers, use `extract_all_jpegs` and try each in order.
 pub fn extract_embedded_jpeg(path: &Path) -> Result<Vec<u8>, EmbeddedError> {
+    let mut all = extract_all_jpegs(path)?;
+    if all.is_empty() {
+        return Err(EmbeddedError::NoJpeg);
+    }
+    Ok(all.remove(0).bytes)
+}
+
+pub struct EmbeddedJpeg {
+    pub bytes: Vec<u8>,
+}
+
+/// Extract every JPEG blob in the file, sorted largest-first. NEFs
+/// typically contain both a full-resolution preview (often in an
+/// exotic format Nikon invented — arithmetic coding, DNL markers,
+/// 12-bit precision) and a smaller standard-baseline thumbnail. When
+/// the primary won't decode, the smaller one usually will.
+pub fn extract_all_jpegs(path: &Path) -> Result<Vec<EmbeddedJpeg>, EmbeddedError> {
     let mut file = BufReader::new(File::open(path)?);
     let mut header = [0u8; 4];
     file.read_exact(&mut header)?;
@@ -32,25 +51,22 @@ pub fn extract_embedded_jpeg(path: &Path) -> Result<Vec<u8>, EmbeddedError> {
     let mut data = Vec::new();
     file.read_to_end(&mut data)?;
 
-    let mut best_jpeg: Option<Vec<u8>> = None;
+    let mut jpegs: Vec<EmbeddedJpeg> = Vec::new();
     let mut i = 0;
 
     while i < data.len().saturating_sub(4) {
-        // Real JPEG: FF D8 FF followed by a valid first marker
-        if data[i] == 0xFF && data[i + 1] == 0xD8 && data[i + 2] == 0xFF
+        if data[i] == 0xFF
+            && data[i + 1] == 0xD8
+            && data[i + 2] == 0xFF
             && is_valid_jpeg_first_marker(data[i + 3])
         {
             if let Some(end) = find_jpeg_end(&data, i) {
                 let jpeg_data = &data[i..=end];
-                // Only consider blobs > 10KB (skip tiny EXIF thumbnails)
+                // Only consider blobs > 10KB (skip tiny EXIF thumbnails).
                 if jpeg_data.len() > 10_000 {
-                    let is_larger = best_jpeg
-                        .as_ref()
-                        .map(|b| jpeg_data.len() > b.len())
-                        .unwrap_or(true);
-                    if is_larger {
-                        best_jpeg = Some(jpeg_data.to_vec());
-                    }
+                    jpegs.push(EmbeddedJpeg {
+                        bytes: jpeg_data.to_vec(),
+                    });
                 }
                 i = end + 1;
                 continue;
@@ -59,7 +75,11 @@ pub fn extract_embedded_jpeg(path: &Path) -> Result<Vec<u8>, EmbeddedError> {
         i += 1;
     }
 
-    best_jpeg.ok_or(EmbeddedError::NoJpeg)
+    if jpegs.is_empty() {
+        return Err(EmbeddedError::NoJpeg);
+    }
+    jpegs.sort_by(|a, b| b.bytes.len().cmp(&a.bytes.len()));
+    Ok(jpegs)
 }
 
 fn find_jpeg_end(data: &[u8], start: usize) -> Option<usize> {

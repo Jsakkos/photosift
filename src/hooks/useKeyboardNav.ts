@@ -117,6 +117,20 @@ export function useKeyboardNav() {
         return;
       }
 
+      // Shift+A: accept the AI-recommended photo as group cover.
+      if (e.shiftKey && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        useProjectStore.getState().acceptAiPick();
+        return;
+      }
+
+      // Alt+S: cycle AI sort (none → sharpness → faces → none).
+      if (e.altKey && (e.key === "s" || e.key === "S")) {
+        e.preventDefault();
+        useProjectStore.getState().cycleSortByAi();
+        return;
+      }
+
       switch (e.key) {
         case "ArrowRight":
           e.preventDefault();
@@ -214,6 +228,18 @@ export function useKeyboardNav() {
         case "z":
         case "Z":
           if (!e.ctrlKey) toggleZoom();
+          break;
+        case "f":
+        case "F":
+          if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            useProjectStore.getState().toggleAiPanel();
+          }
+          break;
+        case "h":
+        case "H":
+          if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            useProjectStore.getState().toggleHeatmap();
+          }
           break;
         case "g":
         case "G":

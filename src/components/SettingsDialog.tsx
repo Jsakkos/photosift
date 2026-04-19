@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
@@ -17,6 +18,11 @@ export function SettingsDialog() {
   const [libraryRootError, setLibraryRootError] = useState<string | null>(null);
   const [reclustering, setReclustering] = useState(false);
   const [reclusterMsg, setReclusterMsg] = useState<string | null>(null);
+  const [enableAi, setEnableAi] = useState(settings.enableAiOnImport);
+  const [eyeConfidence, setEyeConfidence] = useState(settings.eyeOpenConfidence);
+  const [hideSoft, setHideSoft] = useState(settings.hideSoftThreshold);
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [reanalyzeMsg, setReanalyzeMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -26,8 +32,12 @@ export function SettingsDialog() {
       setSelectPick(settings.selectRequiresPick);
       setRouteStar(settings.routeMinStar);
       setLibraryRoot(settings.libraryRoot);
+      setEnableAi(settings.enableAiOnImport);
+      setEyeConfidence(settings.eyeOpenConfidence);
+      setHideSoft(settings.hideSoftThreshold);
       setLibraryRootError(null);
       setReclusterMsg(null);
+      setReanalyzeMsg(null);
     }
   }, [isOpen, settings]);
 
@@ -63,6 +73,9 @@ export function SettingsDialog() {
         selectRequiresPick: selectPick,
         routeMinStar: routeStar,
         libraryRoot,
+        enableAiOnImport: enableAi,
+        eyeOpenConfidence: eyeConfidence,
+        hideSoftThreshold: hideSoft,
       });
     } catch (e) {
       setLibraryRootError(String(e));
@@ -90,6 +103,21 @@ export function SettingsDialog() {
       setReclusterMsg(`Error: ${e}`);
     } finally {
       setReclustering(false);
+    }
+  };
+
+  const handleReanalyze = async () => {
+    if (!currentShoot) return;
+    if (!window.confirm("Re-analyze this shoot? Existing AI data will be discarded.")) return;
+    setReanalyzing(true);
+    setReanalyzeMsg(null);
+    try {
+      await invoke("reanalyze_shoot", { shootId: currentShoot.id });
+      setReanalyzeMsg("Re-analysis queued.");
+    } catch (e) {
+      setReanalyzeMsg(`Error: ${e}`);
+    } finally {
+      setReanalyzing(false);
     }
   };
 
@@ -241,6 +269,76 @@ export function SettingsDialog() {
             )}
           </div>
         )}
+
+        <div className="mb-4 pt-4 border-t border-white/5">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
+            AI analysis
+          </h3>
+
+          <label className="flex items-center gap-2 text-sm text-[var(--text-primary)] cursor-pointer mb-3">
+            <input
+              type="checkbox"
+              checked={enableAi}
+              onChange={(e) => setEnableAi(e.target.checked)}
+              className="w-4 h-4"
+            />
+            Enable AI analysis on import
+          </label>
+          <p className="text-xs text-[var(--text-secondary)] -mt-2 ml-6 mb-3">
+            When on, each import kicks off face + eye + sharpness analysis in the background.
+          </p>
+
+          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+            Eye open/closed classifier confidence: {eyeConfidence.toFixed(2)}
+          </label>
+          <input
+            type="range"
+            min={0.5}
+            max={0.9}
+            step={0.05}
+            value={eyeConfidence}
+            onChange={(e) => setEyeConfidence(parseFloat(e.target.value))}
+            className="w-full mb-3"
+            aria-label="Eye open/closed classifier confidence"
+          />
+
+          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+            Hide-soft threshold: {hideSoft} {hideSoft === 0 ? "(disabled)" : ""}
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={hideSoft}
+            onChange={(e) => setHideSoft(parseInt(e.target.value))}
+            className="w-full"
+            aria-label="Hide-soft sharpness threshold"
+          />
+          <p className="text-xs text-[var(--text-secondary)] mt-1">
+            In Select and Route views, photos with sharpness below this are hidden. Photos still being analyzed are always shown.
+          </p>
+
+          {currentShoot && (
+            <div className="mt-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-[var(--text-secondary)]">
+                  Re-analyze this shoot with AI
+                </span>
+                <button
+                  onClick={handleReanalyze}
+                  disabled={reanalyzing}
+                  className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 text-[var(--text-primary)] text-xs transition-colors disabled:opacity-50"
+                >
+                  {reanalyzing ? "Queuing..." : "Re-analyze"}
+                </button>
+              </div>
+              {reanalyzeMsg && (
+                <p className="text-xs text-[var(--accent)] mt-2">{reanalyzeMsg}</p>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="flex justify-end gap-2">
           <button

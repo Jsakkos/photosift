@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { thumbUrl } from "../hooks/useImageLoader";
+import { AiPickBadge } from "./AiPickBadge";
 
 interface GroupStackProps {
   imageId: number;
@@ -8,9 +9,10 @@ interface GroupStackProps {
   isCurrent: boolean;
   onClick: () => void;
   onDoubleClick?: () => void;
+  isAiPick?: boolean;
 }
 
-export function GroupStack({ imageId, filename, count, isCurrent, onClick, onDoubleClick }: GroupStackProps) {
+export function GroupStack({ imageId, filename, count, isCurrent, onClick, onDoubleClick, isAiPick }: GroupStackProps) {
   const [loaded, setLoaded] = useState(false);
 
   return (
@@ -53,6 +55,8 @@ export function GroupStack({ imageId, filename, count, isCurrent, onClick, onDou
       <div className="absolute -top-1 -right-1 bg-[var(--accent)] text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full z-10 min-w-[20px] text-center">
         {count}
       </div>
+      {/* AI pick badge */}
+      {isAiPick && <AiPickBadge />}
     </div>
   );
 }

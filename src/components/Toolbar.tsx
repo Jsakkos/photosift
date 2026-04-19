@@ -3,6 +3,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { useNavigate } from "react-router-dom";
 import { ViewSelector } from "./ViewSelector";
 import { ProgressBar } from "./ProgressBar";
+import { AiProgressIndicator } from "./AiProgressIndicator";
 
 export function Toolbar() {
   const { currentShoot, displayItems, currentIndex, autoAdvance, toggleAutoAdvance, toggleShortcutHints } =
@@ -38,6 +39,7 @@ export function Toolbar() {
           </span>
         </div>
         <div className="flex items-center gap-3">
+          <AiProgressIndicator />
           <button
             onClick={toggleShortcutHints}
             title="Keyboard shortcuts (?)"

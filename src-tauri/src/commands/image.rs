@@ -19,6 +19,10 @@ pub struct ImageInfo {
     pub flag: String,
     pub destination: String,
     pub star_rating: i32,
+    pub face_count: Option<i32>,
+    pub eyes_open_count: Option<i32>,
+    pub sharpness_score: Option<f64>,
+    pub ai_analyzed_at: Option<String>,
 }
 
 impl From<PhotoRow> for ImageInfo {
@@ -37,6 +41,10 @@ impl From<PhotoRow> for ImageInfo {
             flag: row.flag,
             destination: row.destination,
             star_rating: row.star_rating,
+            face_count: row.face_count,
+            eyes_open_count: row.eyes_open_count,
+            sharpness_score: row.sharpness_score,
+            ai_analyzed_at: row.ai_analyzed_at,
         }
     }
 }

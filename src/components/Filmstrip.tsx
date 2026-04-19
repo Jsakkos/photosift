@@ -3,6 +3,7 @@ import { FixedSizeList as List } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { GroupStack } from "./GroupStack";
+import { AiPickBadge } from "./AiPickBadge";
 
 const THUMB_WIDTH = 100;
 const THUMB_HEIGHT = 80;
@@ -65,6 +66,9 @@ export function Filmstrip() {
 
       if (currentView === "triage" && item.isGroupCover && item.groupMemberCount && item.groupId !== undefined) {
         const gid = item.groupId;
+        // Only one handler fires double-click. Wrapping it on the outer
+        // div AND the inner GroupStack caused both to run via bubbling,
+        // toggling the group expansion twice and net-zeroing the change.
         return (
           <div
             style={style}
@@ -74,7 +78,6 @@ export function Filmstrip() {
             aria-current={isCurrent ? "true" : undefined}
             className="flex items-center justify-center p-1"
             onClick={() => setCurrentIndex(index)}
-            onDoubleClick={() => handleGroupDoubleClick(index, gid)}
           >
             <GroupStack
               imageId={image.id}
@@ -83,10 +86,26 @@ export function Filmstrip() {
               isCurrent={isCurrent}
               onClick={() => setCurrentIndex(index)}
               onDoubleClick={() => handleGroupDoubleClick(index, gid)}
+              isAiPick={item.isAiPick}
             />
           </div>
         );
       }
+
+      // Double-click behavior depends on context:
+      //  - Expanded group member in triage: toggle-collapse the group.
+      //  - Anything else: open loupe.
+      // This makes double-click symmetric — click a collapsed cover to
+      // expand, click any expanded member to collapse back.
+      const isExpandedMember =
+        currentView === "triage" && item.groupId !== undefined && !item.isGroupCover;
+      const onThumbDoubleClick = () => {
+        if (isExpandedMember && item.groupId !== undefined) {
+          toggleGroupExpansion(item.groupId);
+        } else {
+          openLoupe(index);
+        }
+      };
 
       return (
         <div
@@ -97,7 +116,7 @@ export function Filmstrip() {
           aria-current={isCurrent ? "true" : undefined}
           className="flex items-center justify-center p-1"
           onClick={() => setCurrentIndex(index)}
-          onDoubleClick={() => openLoupe(index)}
+          onDoubleClick={onThumbDoubleClick}
         >
           <div
             className={`relative cursor-pointer rounded overflow-hidden transition-all ${
@@ -114,6 +133,7 @@ export function Filmstrip() {
             {image.flag === "reject" && (
               <div className="absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full bg-red-500" />
             )}
+            {item.isAiPick && <AiPickBadge />}
             {image.starRating > 0 && (
               <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-0.5 bg-gradient-to-t from-black/60 to-transparent">
                 {Array.from({ length: image.starRating }, (_, i) => (
@@ -124,14 +144,21 @@ export function Filmstrip() {
                 ))}
               </div>
             )}
-            {currentView === "select" && item.groupId && (
-              <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[var(--accent)]" />
+            {/* Group affiliation bar. Appears for any non-cover group
+                member — in Select view this is always on, and in Triage
+                view it kicks in once the group is expanded (cover is
+                replaced by inline members). Thicker than the old 0.5px
+                treatment so it reads at thumbnail scale. */}
+            {item.groupId && !item.isGroupCover &&
+              (currentView === "select" ||
+                (currentView === "triage" && item.groupId !== undefined)) && (
+              <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--accent)]" />
             )}
           </div>
         </div>
       );
     },
-    [displayItems, currentIndex, setCurrentIndex, currentView, openLoupe, handleGroupDoubleClick],
+    [displayItems, currentIndex, setCurrentIndex, currentView, openLoupe, handleGroupDoubleClick, toggleGroupExpansion],
   );
 
   if (displayItems.length === 0) return null;

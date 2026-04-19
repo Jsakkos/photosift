@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { FixedSizeGrid as Grid, GridChildComponentProps } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
+import { AiPickBadge } from "./AiPickBadge";
 
 const SIZES = [100, 160, 240] as const;
 const CELL_GAP = 8;
@@ -191,21 +192,47 @@ export function GridView() {
         const index = rowIndex * columnCount + columnIndex;
         if (index >= displayItems.length) return null;
         const item = displayItems[index];
+        // An expanded-group member: has a groupId but isn't the cover.
+        // These get a shared background tint so adjacent members read as
+        // belonging to one group; alternating tints keep neighboring
+        // groups distinguishable.
+        const isGroupMember =
+          item.groupId !== undefined && !item.isGroupCover;
+        const tintClass = isGroupMember
+          ? item.groupId! % 2 === 0
+            ? "bg-[var(--accent)]/[0.06]"
+            : "bg-[var(--accent)]/[0.12]"
+          : "";
         return (
-          <div style={{ ...style, padding: CELL_GAP / 2 }}>
+          <div
+            style={{ ...style, padding: CELL_GAP / 2 }}
+            className={tintClass}
+          >
             <GridThumb
               item={item}
               index={index}
               isFocused={index === focusIndex}
               isSelected={selection.has(index)}
               isMulti={selection.size > 1}
+              showGroupBar={isGroupMember}
               onClick={handleClick}
               onDoubleClick={() => {
+                // Symmetric toggle: clicking a collapsed group cover
+                // expands it; clicking any expanded-group member
+                // collapses it back. Non-group photos open loupe.
+                const inExpandableView =
+                  currentView === "triage" || currentView === "select";
+                const isExpandedMember =
+                  inExpandableView &&
+                  item.groupId !== undefined &&
+                  !item.isGroupCover;
                 if (
                   item.isGroupCover &&
                   item.groupId !== undefined &&
-                  (currentView === "triage" || currentView === "select")
+                  inExpandableView
                 ) {
+                  toggleGroupExpansion(item.groupId);
+                } else if (isExpandedMember && item.groupId !== undefined) {
                   toggleGroupExpansion(item.groupId);
                 } else {
                   setCurrentIndex(index);
@@ -348,6 +375,7 @@ function GridThumb({
   isFocused,
   isSelected,
   isMulti,
+  showGroupBar,
   onClick,
   onDoubleClick,
   currentView: _currentView,
@@ -357,6 +385,7 @@ function GridThumb({
   isFocused: boolean;
   isSelected: boolean;
   isMulti: boolean;
+  showGroupBar: boolean;
   onClick: (index: number, e: React.MouseEvent) => void;
   onDoubleClick: () => void;
   currentView: string;
@@ -405,6 +434,15 @@ function GridThumb({
           if (e.currentTarget.naturalWidth > 1) setLoaded(true);
         }}
       />
+      {/* Expanded-group affiliation bar — left-edge accent visible inside
+          the rounded clip. Matches the Filmstrip treatment so switching
+          views preserves the visual cue. */}
+      {showGroupBar && (
+        <div
+          className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--accent)] pointer-events-none"
+          aria-hidden="true"
+        />
+      )}
       {/* Flag dot */}
       {image.flag === "pick" && (
         <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.5)]" />
@@ -412,14 +450,16 @@ function GridThumb({
       {image.flag === "reject" && (
         <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.5)]" />
       )}
+      {/* AI pick badge */}
+      {item.isAiPick && <AiPickBadge />}
       {/* Destination badge */}
       {image.destination === "edit" && (
-        <div className="absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30">
+        <div className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}>
           EDIT
         </div>
       )}
       {image.destination === "publish_direct" && (
-        <div className="absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30">
+        <div className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}>
           PUBLISH
         </div>
       )}

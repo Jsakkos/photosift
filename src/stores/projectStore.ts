@@ -9,6 +9,7 @@ import type {
   Group,
 } from "../types";
 import { useSettingsStore } from "./settingsStore";
+import { useAiStore } from "./aiStore";
 
 function triageExpand(): boolean {
   return useSettingsStore.getState().settings.triageExpandGroups;
@@ -21,6 +22,38 @@ function selectRequiresPick(): boolean {
 function routeMinStar(): number {
   return useSettingsStore.getState().settings.routeMinStar ?? 0;
 }
+
+function hideSoftThreshold(): number {
+  return useSettingsStore.getState().settings.hideSoftThreshold ?? 0;
+}
+
+/// Bundle the sort/filter/pick options that `computeDisplayItems` needs.
+/// Centralized so call sites don't have to remember to keep
+/// `useEyesInPick` gated on the eye provider kind — if the backend swaps
+/// to a real classifier, this helper picks it up automatically.
+function currentAiOptions(
+  sortByAi: "none" | "sharpness" | "faces",
+): AiDisplayOptions {
+  return {
+    sortByAi,
+    hideSoftThreshold: hideSoftThreshold(),
+    useEyesInPick: useAiStore.getState().eyeProvider === "onnx",
+  };
+}
+
+export interface AiDisplayOptions {
+  sortByAi: "none" | "sharpness" | "faces";
+  hideSoftThreshold: number; // 0 disables
+  /// When false, AI-pick scoring ignores the `eyes_open` term. Must be
+  /// false while the eye classifier is `MockEyeProvider`.
+  useEyesInPick: boolean;
+}
+
+const DEFAULT_AI_OPTIONS: AiDisplayOptions = {
+  sortByAi: "none",
+  hideSoftThreshold: 0,
+  useEyesInPick: false,
+};
 
 interface UndoEntry {
   imageId: number;
@@ -49,6 +82,42 @@ export function getGroupCover(group: Group): number {
   return cover ? cover.photoId : group.members[0].photoId;
 }
 
+/// Returns the id of the AI-recommended photo in the group, or null when
+/// fewer than 2 members have been analyzed.
+///
+/// Scoring: sharpness * (1 + eyes_open_count) when `useEyes` is true,
+/// otherwise sharpness alone. `useEyes` must be false while the eye
+/// classifier is `MockEyeProvider` — mock values corrupt the ranking.
+/// Ties broken by lower id.
+export function aiPickForGroup(
+  group: Group,
+  images: ImageEntry[],
+  useEyes: boolean = false,
+): number | null {
+  const analyzed = group.members
+    .map((m) => images.find((i) => i.id === m.photoId))
+    .filter((img): img is ImageEntry => !!img && img.aiAnalyzedAt != null);
+
+  if (analyzed.length < 2) return null;
+
+  const scoreOf = (img: ImageEntry): number => {
+    const sharp = img.sharpnessScore ?? 0;
+    return useEyes ? sharp * (1 + (img.eyesOpenCount ?? 0)) : sharp;
+  };
+
+  let bestId = analyzed[0].id;
+  let bestScore = scoreOf(analyzed[0]);
+
+  for (const img of analyzed.slice(1)) {
+    const score = scoreOf(img);
+    if (score > bestScore || (score === bestScore && img.id < bestId)) {
+      bestId = img.id;
+      bestScore = score;
+    }
+  }
+  return bestId;
+}
+
 export function computeDisplayItems(
   images: ImageEntry[],
   currentView: CullView,
@@ -57,18 +126,35 @@ export function computeDisplayItems(
   expandedGroupIds: Set<number> = new Set(),
   selectRequiresPickFilter: boolean = false,
   routeMinStarGate: number = 0,
+  aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   const photoGroupMap = buildPhotoGroupMap(groups);
 
   if (currentView === "triage") {
+    // Pre-compute AI pick per group so we can keep the recommended member
+    // visible in expanded display even after it's been flagged. Without
+    // this, the `★ AI` badge loses its target the moment the user picks
+    // or rejects the pick photo, since the default filter drops
+    // non-unreviewed members.
+    const triagePickCache = new Map<number, number | null>();
+    const pickForGroup = (g: Group): number | null => {
+      if (triagePickCache.has(g.id)) return triagePickCache.get(g.id)!;
+      const p = aiPickForGroup(g, images, aiOptions.useEyesInPick);
+      triagePickCache.set(g.id, p);
+      return p;
+    };
+
     if (triageExpandGroups) {
       // Every unreviewed image gets its own triage item, with groupId set
-      // so the filmstrip can still draw the blue affiliation bar.
+      // so the filmstrip can still draw the blue affiliation bar. The AI
+      // pick for a group stays visible even if flagged so the badge has
+      // somewhere to render.
       for (let i = 0; i < images.length; i++) {
         const img = images[i];
-        if (img.flag !== "unreviewed") continue;
         const group = photoGroupMap.get(img.id);
+        const isPinnedPick = !!group && pickForGroup(group) === img.id;
+        if (img.flag !== "unreviewed" && !isPinnedPick) continue;
         items.push({
           imageIndex: i,
           image: img,
@@ -88,11 +174,14 @@ export function computeDisplayItems(
           if (expandedGroupIds.has(group.id)) {
             // Per-group drill-down: emit each unreviewed member inline with
             // groupId set so the filmstrip still draws the blue affiliation bar.
+            // Also emit the AI pick member even if flagged, so the badge
+            // can render on the recommended shot wherever it is.
             for (const member of group.members) {
               const mi = images.findIndex((im) => im.id === member.photoId);
               if (mi < 0) continue;
               const memImg = images[mi];
-              if (memImg.flag !== "unreviewed") continue;
+              const isPinnedPick = pickForGroup(group) === memImg.id;
+              if (memImg.flag !== "unreviewed" && !isPinnedPick) continue;
               items.push({
                 imageIndex: mi,
                 image: memImg,
@@ -163,7 +252,63 @@ export function computeDisplayItems(
     }
   }
 
-  return items;
+  // AI filter: hideSoft (Select + Route only). Nulls pass through so images
+  // still being analyzed remain visible; the gate only evicts known-soft shots.
+  let result = items;
+  if (
+    aiOptions.hideSoftThreshold > 0 &&
+    (currentView === "select" || currentView === "route")
+  ) {
+    result = result.filter((it) => {
+      const s = it.image.sharpnessScore;
+      return s === null || s === undefined || s >= aiOptions.hideSoftThreshold;
+    });
+  }
+
+  // AI sort: stable sort, nulls/undefineds to the end.
+  if (aiOptions.sortByAi === "sharpness") {
+    result = [...result].sort((a, b) => {
+      const sa = a.image.sharpnessScore;
+      const sb = b.image.sharpnessScore;
+      const na = sa === null || sa === undefined;
+      const nb = sb === null || sb === undefined;
+      if (na && nb) return 0;
+      if (na) return 1;
+      if (nb) return -1;
+      return (sb as number) - (sa as number);
+    });
+  } else if (aiOptions.sortByAi === "faces") {
+    result = [...result].sort((a, b) => {
+      const fa = a.image.faceCount;
+      const fb = b.image.faceCount;
+      const na = fa === null || fa === undefined;
+      const nb = fb === null || fb === undefined;
+      if (na && nb) return 0;
+      if (na) return 1;
+      if (nb) return -1;
+      return (fb as number) - (fa as number);
+    });
+  }
+
+  // AI pick derivation: for each group with ≥2 analyzed members, mark the
+  // recommended photo. We memoize per groupId so the scoring runs once per
+  // group regardless of how many members are emitted in the display list.
+  const pickCache = new Map<number, number | null>();
+  for (const it of result) {
+    if (it.groupId === undefined) continue;
+    if (!pickCache.has(it.groupId)) {
+      const g = groups.find((gg) => gg.id === it.groupId);
+      pickCache.set(
+        it.groupId,
+        g ? aiPickForGroup(g, images, aiOptions.useEyesInPick) : null,
+      );
+    }
+    if (pickCache.get(it.groupId) === it.image.id) {
+      it.isAiPick = true;
+    }
+  }
+
+  return result;
 }
 
 interface ProjectState {
@@ -198,6 +343,8 @@ interface ProjectState {
   redo: () => Promise<void>;
   toggleMetadata: () => void;
   toggleShortcutHints: () => void;
+  aiPanelForced: boolean;
+  toggleAiPanel: () => void;
   toggleAutoAdvance: () => void;
   toggleZoom: () => void;
   setView: (view: CullView) => Promise<void>;
@@ -209,6 +356,7 @@ interface ProjectState {
   currentImage: () => ImageEntry | null;
   setFlagNoAutoReject: (flag: string) => Promise<void>;
   setGroupCover: (groupId: number, photoId: number) => Promise<void>;
+  acceptAiPick: () => Promise<void>;
   getGroupForCurrentItem: () => Group | null;
   comparisonPinnedId: number | null;
   comparisonCyclingId: number | null;
@@ -220,6 +368,13 @@ interface ProjectState {
   createGroupFromPhotos: (photoIds: number[]) => Promise<void>;
   ungroupPhotos: (photoIds: number[]) => Promise<void>;
   refreshDisplay: () => void;
+  patchImageAiData: (photoId: number) => Promise<void>;
+  sortByAi: "none" | "sharpness" | "faces";
+  cycleSortByAi: () => void;
+  heatmapOn: boolean;
+  heatmapCache: Map<number, number[]>;
+  toggleHeatmap: () => void;
+  getHeatmapData: (photoId: number) => number[] | null;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -230,6 +385,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   loadError: null,
   showMetadata: false,
   showShortcutHints: false,
+  aiPanelForced: false,
   autoAdvance: true,
   isZoomed: false,
   undoStack: [],
@@ -244,6 +400,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   comparisonPinnedId: null,
   comparisonCyclingId: null,
   comparisonGroupMembers: [],
+  sortByAi: "none" as const,
+  heatmapOn: false,
+  heatmapCache: new Map<number, number[]>(),
 
   currentImage: () => {
     const { displayItems, currentIndex } = get();
@@ -265,7 +424,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         viewName: "triage",
       }).catch(() => null);
 
-      const displayItems = computeDisplayItems(images, "triage", groups, triageExpand(), new Set<number>(), selectRequiresPick(), routeMinStar());
+      const displayItems = computeDisplayItems(
+        images,
+        "triage",
+        groups,
+        triageExpand(),
+        new Set<number>(),
+        selectRequiresPick(),
+        routeMinStar(),
+        currentAiOptions("none"),
+      );
 
       let startIndex = 0;
       if (cursor !== null) {
@@ -287,6 +455,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         expandedGroupIds: new Set<number>(),
         lastFlagAction: null,
       });
+
+      // Kick off the shoot's sharpness-percentile fetch so the face-panel
+      // badge has the right 1-10 scale ready by the time the user opens a
+      // photo. The fetch is cheap and the Rust side caches it.
+      useAiStore.getState().fetchPercentiles(shoot.id).catch(() => {});
     } catch (e) {
       console.error("Failed to load shoot:", e);
       set({ isLoading: false, loadError: String(e) });
@@ -334,6 +507,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
+      currentAiOptions(get().sortByAi),
     );
 
     set({
@@ -374,6 +548,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().expandedGroupIds,
             selectRequiresPick(),
             routeMinStar(),
+            currentAiOptions(get().sortByAi),
           ),
         });
       }
@@ -439,7 +614,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       affectedIds.push({ id: image.id, oldFlag });
     }
 
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      currentAiOptions(get().sortByAi),
+    );
 
     const flashColor =
       flag === "pick"
@@ -518,6 +702,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           get().expandedGroupIds,
           selectRequiresPick(),
           routeMinStar(),
+          currentAiOptions(get().sortByAi),
         ),
       });
     }
@@ -543,6 +728,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
+      currentAiOptions(get().sortByAi),
     );
 
     set({
@@ -587,6 +773,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().expandedGroupIds,
             selectRequiresPick(),
             routeMinStar(),
+            currentAiOptions(get().sortByAi),
           ),
         });
       }
@@ -623,6 +810,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
+      currentAiOptions(get().sortByAi),
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -682,6 +870,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
+      currentAiOptions(get().sortByAi),
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -724,7 +913,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }).catch(() => {});
     }
 
-    const newDisplayItems = computeDisplayItems(images, view, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const newDisplayItems = computeDisplayItems(
+      images,
+      view,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      currentAiOptions(get().sortByAi),
+    );
 
     let newIndex = 0;
     try {
@@ -776,6 +974,29 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   toggleMetadata: () => set((s) => ({ showMetadata: !s.showMetadata })),
   toggleShortcutHints: () =>
     set((s) => ({ showShortcutHints: !s.showShortcutHints })),
+  toggleAiPanel: () => set((s) => ({ aiPanelForced: !s.aiPanelForced })),
+  toggleHeatmap: () => set((s) => ({ heatmapOn: !s.heatmapOn })),
+
+  getHeatmapData: (photoId: number) => {
+    const cached = get().heatmapCache.get(photoId);
+    if (cached) return cached;
+    invoke<number[]>("get_heatmap", { photoId })
+      .then((grid) => {
+        const next = new Map(get().heatmapCache);
+        // Cap cache at 20 entries (FIFO eviction).
+        while (next.size >= 20) {
+          const firstKey = next.keys().next().value;
+          if (firstKey === undefined) break;
+          next.delete(firstKey);
+        }
+        next.set(photoId, grid);
+        set({ heatmapCache: next });
+      })
+      .catch(() => {
+        // Silently fail — the overlay just stays empty.
+      });
+    return null;
+  },
   toggleAutoAdvance: () => set((s) => ({ autoAdvance: !s.autoAdvance })),
   toggleZoom: () => set((s) => ({ isZoomed: !s.isZoomed })),
 
@@ -794,6 +1015,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       next,
       selectRequiresPick(),
       routeMinStar(),
+      currentAiOptions(get().sortByAi),
     );
 
     let newIndex = 0;
@@ -821,7 +1043,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, flag };
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      currentAiOptions(get().sortByAi),
+    );
 
     const flashColor = flag === "pick" ? "rgba(34, 197, 94, 0.15)" : flag === "reject" ? "rgba(239, 68, 68, 0.15)" : null;
 
@@ -849,7 +1080,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
         revertImages[idx] = { ...revertImages[idx], flag: oldFlag };
-        set({ images: revertImages, displayItems: computeDisplayItems(revertImages, get().currentView, get().groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()) });
+        set({
+          images: revertImages,
+          displayItems: computeDisplayItems(
+            revertImages,
+            get().currentView,
+            get().groups,
+            triageExpand(),
+            get().expandedGroupIds,
+            selectRequiresPick(),
+            routeMinStar(),
+            currentAiOptions(get().sortByAi),
+          ),
+        });
       }
     }
   },
@@ -873,6 +1116,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().setToast(`Set cover failed: ${e}`, "error");
       set({ groups });
     }
+  },
+
+  acceptAiPick: async () => {
+    const { groups, images, displayItems, currentIndex, setGroupCover } = get();
+    const item = displayItems[currentIndex];
+    if (!item?.groupId) return;
+    const group = groups.find((g) => g.id === item.groupId);
+    if (!group) return;
+    const pickId = aiPickForGroup(group, images);
+    if (pickId === null) return;
+    await setGroupCover(group.id, pickId);
   },
 
   getGroupForCurrentItem: () => {
@@ -959,7 +1213,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     updatedImages[pickIdx] = { ...updatedImages[pickIdx], flag: "pick" };
     updatedImages[rejectIdx] = { ...updatedImages[rejectIdx], flag: "reject" };
 
-    const newDisplayItems = computeDisplayItems(updatedImages, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const newDisplayItems = computeDisplayItems(
+      updatedImages,
+      currentView,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      currentAiOptions(get().sortByAi),
+    );
 
     set({
       images: updatedImages,
@@ -1016,7 +1279,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()),
+        displayItems: computeDisplayItems(
+          images,
+          currentView,
+          groups,
+          triageExpand(),
+          get().expandedGroupIds,
+          selectRequiresPick(),
+          routeMinStar(),
+          currentAiOptions(get().sortByAi),
+        ),
       });
     } catch (e) {
       console.error("Create group failed:", e);
@@ -1027,7 +1299,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   refreshDisplay: () => {
     const { images, currentView, groups, displayItems, currentIndex } = get();
     const currentPhotoId = displayItems[currentIndex]?.image.id;
-    const next = computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar());
+    const next = computeDisplayItems(
+      images,
+      currentView,
+      groups,
+      triageExpand(),
+      get().expandedGroupIds,
+      selectRequiresPick(),
+      routeMinStar(),
+      currentAiOptions(get().sortByAi),
+    );
     let nextIndex = currentIndex;
     if (currentPhotoId !== undefined) {
       const idx = next.findIndex((d) => d.image.id === currentPhotoId);
@@ -1035,6 +1316,40 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
     nextIndex = Math.min(nextIndex, Math.max(0, next.length - 1));
     set({ displayItems: next, currentIndex: nextIndex < 0 ? 0 : nextIndex });
+  },
+
+  // Called from the ai-progress listener: pulls the latest AI fields
+  // for one photo from the backend and patches the local images array
+  // so the UI reflects analysis results as they land. Without this,
+  // face_count / sharpness_score stay at whatever they were when
+  // loadShoot snapshotted the DB — typically null — and the panel,
+  // badges, and sort never see real data.
+  patchImageAiData: async (photoId: number) => {
+    const idx = get().images.findIndex((i) => i.id === photoId);
+    if (idx < 0) return; // photo not in the current shoot's view
+    try {
+      const fresh = await invoke<ImageEntry>("get_image_metadata", { imageId: photoId });
+      const updatedImages = [...get().images];
+      updatedImages[idx] = {
+        ...updatedImages[idx],
+        faceCount: fresh.faceCount,
+        eyesOpenCount: fresh.eyesOpenCount,
+        sharpnessScore: fresh.sharpnessScore,
+        aiAnalyzedAt: fresh.aiAnalyzedAt,
+      };
+      set({ images: updatedImages });
+      get().refreshDisplay();
+    } catch (e) {
+      console.error("patchImageAiData failed for", photoId, e);
+    }
+  },
+
+  cycleSortByAi: () => {
+    const cur = get().sortByAi;
+    const next: "none" | "sharpness" | "faces" =
+      cur === "none" ? "sharpness" : cur === "sharpness" ? "faces" : "none";
+    set({ sortByAi: next });
+    get().refreshDisplay();
   },
 
   ungroupPhotos: async (photoIds: number[]) => {
@@ -1047,7 +1362,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(images, currentView, groups, triageExpand(), get().expandedGroupIds, selectRequiresPick(), routeMinStar()),
+        displayItems: computeDisplayItems(
+          images,
+          currentView,
+          groups,
+          triageExpand(),
+          get().expandedGroupIds,
+          selectRequiresPick(),
+          routeMinStar(),
+          currentAiOptions(get().sortByAi),
+        ),
       });
     } catch (e) {
       console.error("Ungroup failed:", e);
@@ -1055,3 +1379,33 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 }));
+
+// Settings that feed `computeDisplayItems` are read lazily at call time
+// via the `triageExpand()` / `hideSoftThreshold()` helpers above — but
+// updating a setting in SettingsDialog only mutates `settingsStore`; it
+// doesn't trigger a re-compute here. Subscribe so the user sees the
+// filter / sort take effect as soon as they adjust the slider.
+let lastHideSoft = useSettingsStore.getState().settings.hideSoftThreshold;
+let lastTriageExpand = useSettingsStore.getState().settings.triageExpandGroups;
+let lastSelectRequiresPick = useSettingsStore.getState().settings.selectRequiresPick;
+let lastRouteMinStar = useSettingsStore.getState().settings.routeMinStar;
+useSettingsStore.subscribe((state) => {
+  const {
+    hideSoftThreshold: hs,
+    triageExpandGroups: te,
+    selectRequiresPick: sr,
+    routeMinStar: rm,
+  } = state.settings;
+  if (
+    hs !== lastHideSoft ||
+    te !== lastTriageExpand ||
+    sr !== lastSelectRequiresPick ||
+    rm !== lastRouteMinStar
+  ) {
+    lastHideSoft = hs;
+    lastTriageExpand = te;
+    lastSelectRequiresPick = sr;
+    lastRouteMinStar = rm;
+    useProjectStore.getState().refreshDisplay();
+  }
+});

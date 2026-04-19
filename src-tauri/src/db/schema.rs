@@ -2,7 +2,7 @@ use rusqlite::{params, Connection, OptionalExtension, Result};
 use std::path::{Path, PathBuf};
 
 pub struct Database {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -36,6 +36,11 @@ pub struct PhotoRow {
     pub flag: String,
     pub destination: String,
     pub star_rating: i32,
+    // AI enrichment — populated by the background worker.
+    pub face_count: Option<i32>,
+    pub eyes_open_count: Option<i32>,
+    pub sharpness_score: Option<f64>,
+    pub ai_analyzed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -74,6 +79,9 @@ pub struct Settings {
     /// Absolute path to the root of the photo library (used for copy-mode imports).
     /// `None` falls back to the system Pictures directory.
     pub library_root: Option<String>,
+    pub enable_ai_on_import: bool,
+    pub hide_soft_threshold: i32,
+    pub eye_open_confidence: f64,
 }
 
 impl Default for Settings {
@@ -85,8 +93,44 @@ impl Default for Settings {
             select_requires_pick: true,
             route_min_star: 3,
             library_root: None,
+            enable_ai_on_import: true,
+            hide_soft_threshold: 30,
+            eye_open_confidence: 0.7,
         }
     }
+}
+
+/// Percentile buckets of the `sharpness_score` column across a shoot's
+/// analyzed photos. Used by the frontend to map raw Laplacian-variance
+/// scores into a 1-10 scale that's meaningful *relative to the current
+/// shoot* (D750 previews vary 2x in raw variance depending on detail
+/// density, so any absolute calibration is guesswork).
+///
+/// `analyzed_max_ts` is the MAX(ai_analyzed_at) over the shoot at the
+/// time of computation — the cache key used by callers to decide whether
+/// a new computation is needed.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharpnessPercentiles {
+    pub p10: f64,
+    pub p30: f64,
+    pub p50: f64,
+    pub p70: f64,
+    pub p90: f64,
+    pub analyzed_count: i64,
+    pub analyzed_max_ts: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceRow {
+    pub photo_id: i64,
+    pub bbox_x: f64, pub bbox_y: f64, pub bbox_w: f64, pub bbox_h: f64,
+    pub left_eye_x: f64, pub left_eye_y: f64,
+    pub right_eye_x: f64, pub right_eye_y: f64,
+    pub left_eye_open: i32, pub right_eye_open: i32,
+    pub left_eye_sharpness: f64, pub right_eye_sharpness: f64,
+    pub detection_confidence: f64,
 }
 
 #[derive(Debug)]
@@ -228,6 +272,38 @@ impl Database {
         self.ensure_column("settings", "route_min_star", "INTEGER NOT NULL DEFAULT 3")?;
         self.ensure_column("settings", "library_root", "TEXT")?;
         self.ensure_column("shoots", "import_mode", "TEXT NOT NULL DEFAULT 'copy'")?;
+        // Phase 2 AI
+        self.ensure_column("photos", "face_count", "INTEGER")?;
+        self.ensure_column("photos", "eyes_open_count", "INTEGER")?;
+        self.ensure_column("photos", "ai_analyzed_at", "TEXT")?;
+        self.create_faces_table()?;
+        self.ensure_column("settings", "enable_ai_on_import", "INTEGER NOT NULL DEFAULT 1")?;
+        self.ensure_column("settings", "hide_soft_threshold", "INTEGER NOT NULL DEFAULT 30")?;
+        self.ensure_column("settings", "eye_open_confidence", "REAL NOT NULL DEFAULT 0.7")?;
+        Ok(())
+    }
+
+    fn create_faces_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS faces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+                bbox_x REAL NOT NULL,
+                bbox_y REAL NOT NULL,
+                bbox_w REAL NOT NULL,
+                bbox_h REAL NOT NULL,
+                left_eye_x REAL NOT NULL,
+                left_eye_y REAL NOT NULL,
+                right_eye_x REAL NOT NULL,
+                right_eye_y REAL NOT NULL,
+                left_eye_open INTEGER NOT NULL,
+                right_eye_open INTEGER NOT NULL,
+                left_eye_sharpness REAL NOT NULL,
+                right_eye_sharpness REAL NOT NULL,
+                detection_confidence REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);",
+        )?;
         Ok(())
     }
 
@@ -405,7 +481,8 @@ impl Database {
         self.conn.query_row(
             "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
-                    iso, flag, destination, star_rating
+                    iso, flag, destination, star_rating,
+                    face_count, eyes_open_count, sharpness_score, ai_analyzed_at
              FROM photos WHERE id = ?1",
             params![photo_id],
             row_to_photo,
@@ -416,7 +493,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
-                    iso, flag, destination, star_rating
+                    iso, flag, destination, star_rating,
+                    face_count, eyes_open_count, sharpness_score, ai_analyzed_at
              FROM photos
              WHERE shoot_id = ?1
              ORDER BY exif_date ASC NULLS LAST, id ASC",
@@ -612,6 +690,206 @@ impl Database {
         rows.collect()
     }
 
+    // ---- AI: Faces + Aggregates ----
+
+    pub fn insert_faces_batch(&mut self, faces: &[FaceRow]) -> Result<()> {
+        if faces.is_empty() { return Ok(()); }
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO faces (
+                    photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                    left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+                    left_eye_open, right_eye_open,
+                    left_eye_sharpness, right_eye_sharpness,
+                    detection_confidence
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            )?;
+            for f in faces {
+                stmt.execute(params![
+                    f.photo_id, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
+                    f.left_eye_x, f.left_eye_y, f.right_eye_x, f.right_eye_y,
+                    f.left_eye_open, f.right_eye_open,
+                    f.left_eye_sharpness, f.right_eye_sharpness,
+                    f.detection_confidence,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_faces_for_photo(&self, photo_id: i64) -> Result<Vec<FaceRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                    left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+                    left_eye_open, right_eye_open,
+                    left_eye_sharpness, right_eye_sharpness, detection_confidence
+             FROM faces WHERE photo_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![photo_id], |r| Ok(FaceRow {
+            photo_id: r.get(0)?,
+            bbox_x: r.get(1)?, bbox_y: r.get(2)?, bbox_w: r.get(3)?, bbox_h: r.get(4)?,
+            left_eye_x: r.get(5)?, left_eye_y: r.get(6)?,
+            right_eye_x: r.get(7)?, right_eye_y: r.get(8)?,
+            left_eye_open: r.get(9)?, right_eye_open: r.get(10)?,
+            left_eye_sharpness: r.get(11)?, right_eye_sharpness: r.get(12)?,
+            detection_confidence: r.get(13)?,
+        }))?;
+        rows.collect()
+    }
+
+    pub fn delete_faces_for_photo(&self, photo_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM faces WHERE photo_id = ?1", params![photo_id])?;
+        Ok(())
+    }
+
+    /// Write AI aggregates + timestamp in a single call. Pass None for face_count
+    /// to mark a photo as "attempted but failed" (ai_analyzed_at set, face_count null).
+    pub fn mark_ai_analyzed(
+        &self,
+        photo_id: i64,
+        face_count: Option<i32>,
+        eyes_open_count: Option<i32>,
+        sharpness_score: Option<f64>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE photos SET face_count = ?2, eyes_open_count = ?3,
+                               sharpness_score = ?4,
+                               ai_analyzed_at = datetime('now')
+             WHERE id = ?1",
+            params![photo_id, face_count, eyes_open_count, sharpness_score],
+        )?;
+        Ok(())
+    }
+
+    /// Atomically write AI results for a photo: delete any existing face rows,
+    /// insert new ones, and update the aggregate columns. All in one transaction
+    /// so a crash between statements cannot leave inconsistent state.
+    pub fn write_ai_result(
+        &mut self,
+        photo_id: i64,
+        faces: &[FaceRow],
+        face_count: Option<i32>,
+        eyes_open_count: Option<i32>,
+        sharpness_score: Option<f64>,
+    ) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM faces WHERE photo_id = ?1", params![photo_id])?;
+        if !faces.is_empty() {
+            let mut stmt = tx.prepare(
+                "INSERT INTO faces (
+                    photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                    left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+                    left_eye_open, right_eye_open,
+                    left_eye_sharpness, right_eye_sharpness,
+                    detection_confidence
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            )?;
+            for f in faces {
+                stmt.execute(params![
+                    f.photo_id, f.bbox_x, f.bbox_y, f.bbox_w, f.bbox_h,
+                    f.left_eye_x, f.left_eye_y, f.right_eye_x, f.right_eye_y,
+                    f.left_eye_open, f.right_eye_open,
+                    f.left_eye_sharpness, f.right_eye_sharpness,
+                    f.detection_confidence,
+                ])?;
+            }
+        }
+        tx.execute(
+            "UPDATE photos SET face_count = ?2, eyes_open_count = ?3,
+                               sharpness_score = ?4,
+                               ai_analyzed_at = datetime('now')
+             WHERE id = ?1",
+            params![photo_id, face_count, eyes_open_count, sharpness_score],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn clear_ai_for_shoot(&mut self, shoot_id: i64) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "UPDATE photos SET face_count = NULL, eyes_open_count = NULL,
+                               sharpness_score = NULL, ai_analyzed_at = NULL
+             WHERE shoot_id = ?1",
+            params![shoot_id],
+        )?;
+        tx.execute(
+            "DELETE FROM faces WHERE photo_id IN
+                (SELECT id FROM photos WHERE shoot_id = ?1)",
+            params![shoot_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Compute 10/30/50/70/90 percentile cutoffs for `sharpness_score` across
+    /// all analyzed photos in a shoot. Returns zeros when no photos have been
+    /// analyzed; callers should check `analyzed_count` before trusting the
+    /// values. `analyzed_max_ts` is the cache-invalidation signal.
+    pub fn sharpness_percentiles_for_shoot(
+        &self,
+        shoot_id: i64,
+    ) -> Result<SharpnessPercentiles> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sharpness_score FROM photos
+             WHERE shoot_id = ?1 AND sharpness_score IS NOT NULL
+             ORDER BY sharpness_score ASC",
+        )?;
+        let values: Vec<f64> = stmt
+            .query_map(params![shoot_id], |r| r.get::<_, f64>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let analyzed_max_ts: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT MAX(ai_analyzed_at) FROM photos
+                 WHERE shoot_id = ?1 AND ai_analyzed_at IS NOT NULL",
+                params![shoot_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+
+        let count = values.len() as i64;
+        if values.is_empty() {
+            return Ok(SharpnessPercentiles {
+                p10: 0.0,
+                p30: 0.0,
+                p50: 0.0,
+                p70: 0.0,
+                p90: 0.0,
+                analyzed_count: 0,
+                analyzed_max_ts,
+            });
+        }
+
+        let pct = |q: f64| -> f64 {
+            let idx = (q * (values.len() as f64 - 1.0)).round() as usize;
+            values[idx.min(values.len() - 1)]
+        };
+
+        Ok(SharpnessPercentiles {
+            p10: pct(0.10),
+            p30: pct(0.30),
+            p50: pct(0.50),
+            p70: pct(0.70),
+            p90: pct(0.90),
+            analyzed_count: count,
+            analyzed_max_ts,
+        })
+    }
+
+    pub fn photos_needing_ai(&self, shoot_id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM photos WHERE shoot_id = ?1 AND ai_analyzed_at IS NULL ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![shoot_id], |r| r.get::<_, i64>(0))?;
+        rows.collect()
+    }
+
     // ---- Flag / Destination ----
 
     pub fn set_flag(&self, photo_id: i64, flag: &str) -> Result<String> {
@@ -708,7 +986,8 @@ impl Database {
         self.conn
             .query_row(
                 "SELECT near_dup_threshold, related_threshold, triage_expand_groups,
-                        select_requires_pick, route_min_star, library_root
+                        select_requires_pick, route_min_star, library_root,
+                        enable_ai_on_import, hide_soft_threshold, eye_open_confidence
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
@@ -719,6 +998,9 @@ impl Database {
                         select_requires_pick: row.get::<_, i32>(3)? != 0,
                         route_min_star: row.get(4)?,
                         library_root: row.get(5)?,
+                        enable_ai_on_import: row.get::<_, i32>(6)? != 0,
+                        hide_soft_threshold: row.get(7)?,
+                        eye_open_confidence: row.get(8)?,
                     })
                 },
             )
@@ -728,15 +1010,19 @@ impl Database {
     pub fn update_settings(&self, s: &Settings) -> Result<()> {
         self.conn.execute(
             "INSERT INTO settings (id, near_dup_threshold, related_threshold, triage_expand_groups,
-                                   select_requires_pick, route_min_star, library_root)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                                   select_requires_pick, route_min_star, library_root,
+                                   enable_ai_on_import, hide_soft_threshold, eye_open_confidence)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
                 triage_expand_groups = excluded.triage_expand_groups,
                 select_requires_pick = excluded.select_requires_pick,
                 route_min_star = excluded.route_min_star,
-                library_root = excluded.library_root",
+                library_root = excluded.library_root,
+                enable_ai_on_import = excluded.enable_ai_on_import,
+                hide_soft_threshold = excluded.hide_soft_threshold,
+                eye_open_confidence = excluded.eye_open_confidence",
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
@@ -744,6 +1030,9 @@ impl Database {
                 s.select_requires_pick as i32,
                 s.route_min_star,
                 s.library_root,
+                s.enable_ai_on_import as i32,
+                s.hide_soft_threshold,
+                s.eye_open_confidence,
             ],
         )?;
         Ok(())
@@ -791,6 +1080,10 @@ fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {
         flag: row.get(13)?,
         destination: row.get(14)?,
         star_rating: row.get(15)?,
+        face_count: row.get(16)?,
+        eyes_open_count: row.get(17)?,
+        sharpness_score: row.get(18)?,
+        ai_analyzed_at: row.get(19)?,
     })
 }
 
@@ -814,7 +1107,7 @@ pub fn shoot_cache_dir(shoot_id: i64) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use tempfile::tempdir;
 
@@ -843,6 +1136,10 @@ mod tests {
             initial_flag: None,
             initial_star_rating: None,
         }
+    }
+
+    pub(crate) fn sample_insert_for_test(hash_byte: u8, filename: &str) -> PhotoInsert {
+        sample_insert(hash_byte, filename)
     }
 
     #[test]
@@ -1010,6 +1307,168 @@ mod tests {
         assert_eq!(live, expected);
     }
 
+    #[test]
+    fn test_ai_columns_present_after_migration() {
+        let (db, _dir) = test_db();
+        for col in &["face_count", "eyes_open_count", "ai_analyzed_at"] {
+            assert!(
+                db.column_exists("photos", col).unwrap(),
+                "photos.{} should be present after migration",
+                col
+            );
+        }
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='faces'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "faces table should exist");
+    }
+
+    #[test]
+    fn test_migration_is_idempotent() {
+        let (db, _dir) = test_db();
+        // Re-run migration — should be a no-op, not error.
+        db.run_migrations().unwrap();
+        assert!(db.column_exists("photos", "face_count").unwrap());
+    }
+
+    #[test]
+    fn test_faces_roundtrip() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
+        let ids = db
+            .insert_photos_batch(shoot_id, &[sample_insert(1, "a.nef")])
+            .unwrap();
+
+        let face = FaceRow {
+            photo_id: ids[0],
+            bbox_x: 0.1, bbox_y: 0.1, bbox_w: 0.2, bbox_h: 0.3,
+            left_eye_x: 0.15, left_eye_y: 0.18,
+            right_eye_x: 0.22, right_eye_y: 0.18,
+            left_eye_open: 1, right_eye_open: 1,
+            left_eye_sharpness: 78.0, right_eye_sharpness: 81.0,
+            detection_confidence: 0.92,
+        };
+        db.insert_faces_batch(&[face.clone()]).unwrap();
+
+        let got = db.get_faces_for_photo(ids[0]).unwrap();
+        assert_eq!(got.len(), 1);
+        assert!((got[0].bbox_x - 0.1).abs() < 1e-6);
+        assert_eq!(got[0].left_eye_open, 1);
+        assert!((got[0].detection_confidence - 0.92).abs() < 1e-6);
+
+        // Cascade delete
+        db.delete_shoot(shoot_id).unwrap();
+        let gone = db.get_faces_for_photo(ids[0]).unwrap();
+        assert_eq!(gone.len(), 0);
+    }
+
+    #[test]
+    fn test_sharpness_percentiles_empty_shoot() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("E", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+        // No photos at all.
+        let p = db.sharpness_percentiles_for_shoot(shoot_id).unwrap();
+        assert_eq!(p.analyzed_count, 0);
+        assert_eq!(p.p50, 0.0);
+        assert!(p.analyzed_max_ts.is_none());
+
+        // Photos present but none analyzed — same shape.
+        db.insert_photos_batch(shoot_id, &[sample_insert(1, "a.nef")])
+            .unwrap();
+        let p = db.sharpness_percentiles_for_shoot(shoot_id).unwrap();
+        assert_eq!(p.analyzed_count, 0);
+        assert!(p.analyzed_max_ts.is_none());
+    }
+
+    #[test]
+    fn test_sharpness_percentiles_uniform() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("U", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+        let ids = db
+            .insert_photos_batch(
+                shoot_id,
+                &[
+                    sample_insert(1, "a.nef"),
+                    sample_insert(2, "b.nef"),
+                    sample_insert(3, "c.nef"),
+                ],
+            )
+            .unwrap();
+        for id in &ids {
+            db.mark_ai_analyzed(*id, Some(0), Some(0), Some(50.0))
+                .unwrap();
+        }
+        let p = db.sharpness_percentiles_for_shoot(shoot_id).unwrap();
+        assert_eq!(p.analyzed_count, 3);
+        // All values equal → all percentiles equal to that value.
+        assert!((p.p10 - 50.0).abs() < 1e-6);
+        assert!((p.p50 - 50.0).abs() < 1e-6);
+        assert!((p.p90 - 50.0).abs() < 1e-6);
+        assert!(p.analyzed_max_ts.is_some());
+    }
+
+    #[test]
+    fn test_sharpness_percentiles_populated() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("P", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+        // 11 photos with sharpness 0..=100 in steps of 10.
+        let mut inserts = Vec::new();
+        for i in 0..11u8 {
+            inserts.push(sample_insert(i + 10, &format!("{}.nef", i)));
+        }
+        let ids = db.insert_photos_batch(shoot_id, &inserts).unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            let score = (i as f64) * 10.0; // 0, 10, 20, ..., 100
+            db.mark_ai_analyzed(*id, Some(0), Some(0), Some(score))
+                .unwrap();
+        }
+
+        let p = db.sharpness_percentiles_for_shoot(shoot_id).unwrap();
+        assert_eq!(p.analyzed_count, 11);
+        // round(0.1*(11-1)) = 1 → values[1] = 10
+        assert!((p.p10 - 10.0).abs() < 1e-6);
+        // round(0.5*10) = 5 → values[5] = 50
+        assert!((p.p50 - 50.0).abs() < 1e-6);
+        // round(0.9*10) = 9 → values[9] = 90
+        assert!((p.p90 - 90.0).abs() < 1e-6);
+        assert!(p.analyzed_max_ts.is_some());
+    }
+
+    #[test]
+    fn test_clear_ai_for_shoot() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
+        let ids = db
+            .insert_photos_batch(shoot_id, &[sample_insert(1, "a.nef"), sample_insert(2, "b.nef")])
+            .unwrap();
+        db.mark_ai_analyzed(ids[0], Some(0), Some(0), Some(50.0)).unwrap();
+        db.mark_ai_analyzed(ids[1], Some(1), Some(2), Some(75.0)).unwrap();
+
+        db.clear_ai_for_shoot(shoot_id).unwrap();
+
+        for id in &ids {
+            let row: (Option<i32>, Option<i32>, Option<f64>, Option<String>) = db.conn.query_row(
+                "SELECT face_count, eyes_open_count, sharpness_score, ai_analyzed_at FROM photos WHERE id = ?1",
+                params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            ).unwrap();
+            assert_eq!(row.0, None, "face_count should be NULL");
+            assert_eq!(row.1, None, "eyes_open_count should be NULL");
+            assert_eq!(row.2, None, "sharpness_score should be NULL");
+            assert_eq!(row.3, None, "ai_analyzed_at should be NULL");
+        }
+    }
+
     /// Mutex-poison resilience: the XmpWriteQueue must not deadlock or crash
     /// when a poisoned lock is encountered. This simulates a panic in one
     /// thread while holding the pending map, then verifies the queue still
@@ -1035,5 +1494,76 @@ mod tests {
         // Must not panic — poison-tolerant lock returns the inner guard.
         queue.enqueue(2, &PathBuf::from("/nonexistent/b.xmp"), 5);
         queue.drain(); // writes to bogus paths will fail gracefully via log::error
+    }
+
+    /// End-to-end: 3 photos through the full AI pipeline (mock-backed), DB
+    /// closed and reopened, aggregates + face rows must survive. Catches
+    /// regressions in transaction ordering, FK cascade, and file-based
+    /// persistence that purely in-memory tests miss.
+    #[test]
+    fn test_ai_full_pipeline_mock_provider_reopens_clean() {
+        use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
+        use crate::ai::worker::process_job;
+        use crate::ai::AiJob;
+        use image::{ImageBuffer, Luma};
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("e2e.db");
+
+        let ids = {
+            let mut db = Database::open(&db_path).unwrap();
+            let shoot_id = db
+                .insert_shoot("E2E", "2026-04-15", "/s", "/d", "copy")
+                .unwrap();
+            let ids = db
+                .insert_photos_batch(
+                    shoot_id,
+                    &[
+                        sample_insert(1, "a.nef"),
+                        sample_insert(2, "b.nef"),
+                        sample_insert(3, "c.nef"),
+                    ],
+                )
+                .unwrap();
+
+            let face_p = MockFaceProvider::default();
+            let eye_p = MockEyeProvider::default();
+
+            for id in &ids {
+                let preview = dir.path().join(format!("{}.jpg", id));
+                let img: ImageBuffer<Luma<u8>, Vec<u8>> = ImageBuffer::from_fn(128, 128, |x, y| {
+                    Luma([if (x / 4 + y / 4) % 2 == 0 { 0 } else { 255 }])
+                });
+                img.save(&preview).unwrap();
+
+                let job = AiJob {
+                    shoot_id,
+                    photo_id: *id,
+                    preview_path: preview.to_string_lossy().into_owned(),
+                };
+                process_job(&mut db, &job, &face_p, &eye_p).unwrap();
+            }
+            ids
+        };
+
+        // Reopen — everything must survive on disk.
+        let db = Database::open(&db_path).unwrap();
+        for id in &ids {
+            let (fc, oc, ts): (Option<i32>, Option<i32>, Option<String>) = db
+                .conn
+                .query_row(
+                    "SELECT face_count, eyes_open_count, ai_analyzed_at FROM photos WHERE id = ?1",
+                    rusqlite::params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(fc, Some(1), "photo {} face_count should survive reopen", id);
+            assert!(oc.is_some(), "photo {} eyes_open_count should survive", id);
+            assert!(ts.is_some(), "photo {} ai_analyzed_at should survive", id);
+
+            let faces = db.get_faces_for_photo(*id).unwrap();
+            assert_eq!(faces.len(), 1, "photo {} face row should survive", id);
+        }
     }
 }
