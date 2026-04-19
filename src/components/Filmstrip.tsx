@@ -1,17 +1,17 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from "react";
-import { VariableSizeList as List } from "react-window";
+import { FixedSizeList as List } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { GroupStack } from "./GroupStack";
-import { GroupTray } from "./GroupTray";
 import { AiPickBadge } from "./AiPickBadge";
-import { groupTrayPosition } from "../lib/groupTray";
+import { computeDisplayItems } from "../stores/projectStore";
+import { useSettingsStore } from "../stores/settingsStore";
+import { useAiStore } from "../stores/aiStore";
 
 const RAIL_WIDTH = 240;
 const THUMB_W = 180;
 const THUMB_H = 110;
-const BASE_CELL_H = THUMB_H + 8;
-const HEADER_ROW_H = 28;
+const CELL_H = THUMB_H + 10;
 
 function Thumbnail({ imageId, filename }: { imageId: number; filename: string }) {
   const [loaded, setLoaded] = useState(false);
@@ -30,23 +30,29 @@ function Thumbnail({ imageId, filename }: { imageId: number; filename: string })
   );
 }
 
+/// The **outer** rail: always shows a groups-collapsed view of every
+/// eligible photo. Double-click a group cover to open the InnerStrip
+/// for that group. Selection here tracks the user's position in the
+/// outer list — when the InnerStrip is open, navigation flows through
+/// the inner-group members instead (driven by `displayItems`).
 export function Filmstrip() {
-  const {
-    displayItems,
-    currentIndex,
-    setCurrentIndex,
-    currentView,
-    setViewMode,
-    toggleGroupExpansion,
-    groups,
-  } = useProjectStore();
+  const images = useProjectStore((s) => s.images);
+  const groups = useProjectStore((s) => s.groups);
+  const currentView = useProjectStore((s) => s.currentView);
+  const displayItems = useProjectStore((s) => s.displayItems);
+  const currentIndex = useProjectStore((s) => s.currentIndex);
+  const activeInnerGroupId = useProjectStore((s) => s.activeInnerGroupId);
+  const sortByAi = useProjectStore((s) => s.sortByAi);
+  const setCurrentIndex = useProjectStore((s) => s.setCurrentIndex);
+  const setViewMode = useProjectStore((s) => s.setViewMode);
+  const setActiveInnerGroup = useProjectStore((s) => s.setActiveInnerGroup);
+  const settings = useSettingsStore((s) => s.settings);
+  const eyeProvider = useAiStore((s) => s.eyeProvider);
+
   const listRef = useRef<List>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [listHeight, setListHeight] = useState<number>(0);
 
-  // Measure the available height for the list. Parent drives height via
-  // flex; we resize-observe to keep the virtualized list in sync on
-  // viewport changes.
   useLayoutEffect(() => {
     if (!containerRef.current) return;
     const el = containerRef.current;
@@ -57,63 +63,111 @@ export function Filmstrip() {
     return () => ro.disconnect();
   }, []);
 
-  const groupById = useMemo(() => {
-    const m = new Map<number, { count: number }>();
-    for (const g of groups) m.set(g.id, { count: g.members.length });
-    return m;
-  }, [groups]);
+  // Outer-rail items: always-collapsed, regardless of active inner
+  // group. Derived locally so the store's `displayItems` can remain the
+  // loupe/keyboard cycle target (which *does* change when drilled in).
+  const outerItems = useMemo(() => {
+    const aiOptions = {
+      sortByAi,
+      hideSoftThreshold: settings.hideSoftThreshold ?? 0,
+      useEyesInPick: eyeProvider === "onnx",
+    };
+    return computeDisplayItems(
+      images,
+      currentView,
+      groups,
+      settings.triageExpandGroups,
+      new Set<number>(),
+      settings.selectRequiresPick ?? false,
+      settings.routeMinStar ?? 0,
+      aiOptions,
+    );
+  }, [
+    images,
+    groups,
+    currentView,
+    settings.triageExpandGroups,
+    settings.selectRequiresPick,
+    settings.routeMinStar,
+    settings.hideSoftThreshold,
+    sortByAi,
+    eyeProvider,
+  ]);
 
-  const itemSize = useCallback(
-    (index: number) => {
-      const pos = groupTrayPosition(displayItems, index);
-      return pos === "first" || pos === "solo"
-        ? BASE_CELL_H + HEADER_ROW_H
-        : BASE_CELL_H;
-    },
-    [displayItems],
-  );
-
-  // VariableSizeList caches measured sizes. Reset when the item list
-  // changes so cell heights reflect the current group-run structure.
-  useEffect(() => {
-    listRef.current?.resetAfterIndex(0, false);
-  }, [displayItems]);
+  // The outer rail's "highlighted" index:
+  //  - If no inner strip is open, use the store's currentIndex (which
+  //    indexes into `outerItems`).
+  //  - If drilled in, surface the active group's cover so the user
+  //    sees where they are in the outer view. The group cover always
+  //    carries `isGroupCover: true` plus a matching groupId.
+  const highlightIndex = useMemo(() => {
+    if (activeInnerGroupId == null) return currentIndex;
+    return outerItems.findIndex(
+      (di) => di.isGroupCover && di.groupId === activeInnerGroupId,
+    );
+  }, [activeInnerGroupId, outerItems, currentIndex]);
 
   const openLoupe = useCallback(
-    (index: number) => {
-      setCurrentIndex(index);
+    (outerIdx: number) => {
+      // Clicking an outer thumb while drilled in: exit the inner strip,
+      // then align the store's index to the outer item.
+      if (activeInnerGroupId != null) setActiveInnerGroup(null);
+      // `setCurrentIndex` works against `displayItems`, which after the
+      // inner-group clear will equal `outerItems`.
+      setCurrentIndex(outerIdx);
       setViewMode("sequential");
     },
-    [setCurrentIndex, setViewMode],
+    [activeInnerGroupId, setActiveInnerGroup, setCurrentIndex, setViewMode],
   );
 
-  const handleGroupDoubleClick = useCallback(
-    (index: number, groupId: number) => {
-      if (currentView === "triage") {
-        setCurrentIndex(index);
-        toggleGroupExpansion(groupId);
+  const onCellClick = useCallback(
+    (outerIdx: number) => {
+      const item = outerItems[outerIdx];
+      if (!item) return;
+      if (activeInnerGroupId != null) {
+        // Switching outer selection while drilled in also closes the
+        // inner strip, so the loupe cycle realigns to the outer target.
+        setActiveInnerGroup(null);
+      }
+      // Find this photo in the post-close displayItems (which will
+      // equal outerItems). For safety we search by id rather than
+      // assuming indices match.
+      const idx = displayItems.findIndex((d) => d.image.id === item.image.id);
+      setCurrentIndex(idx >= 0 ? idx : outerIdx);
+    },
+    [outerItems, displayItems, activeInnerGroupId, setActiveInnerGroup, setCurrentIndex],
+  );
+
+  const onGroupDoubleClick = useCallback(
+    (groupId: number, outerIdx: number) => {
+      if (currentView === "triage" || currentView === "select") {
+        // Select-then-drill feels natural — the user clicked this
+        // cover on purpose; keep the outer highlight in sync with the
+        // group they just opened.
+        setCurrentIndex(outerIdx);
+        setActiveInnerGroup(groupId);
       } else {
-        openLoupe(index);
+        openLoupe(outerIdx);
       }
     },
-    [currentView, setCurrentIndex, toggleGroupExpansion, openLoupe],
+    [currentView, setActiveInnerGroup, setCurrentIndex, openLoupe],
   );
 
   useEffect(() => {
-    if (listRef.current && displayItems.length > 0) {
-      listRef.current.scrollToItem(currentIndex, "center");
+    if (listRef.current && outerItems.length > 0 && highlightIndex >= 0) {
+      listRef.current.scrollToItem(highlightIndex, "center");
     }
-  }, [currentIndex, displayItems.length]);
+  }, [highlightIndex, outerItems.length]);
 
   const ThumbnailItem = useCallback(
     ({ index, style }: { index: number; style: React.CSSProperties }) => {
-      const item = displayItems[index];
+      const item = outerItems[index];
       if (!item) return null;
 
       const image = item.image;
-      const isCurrent = index === currentIndex;
+      const isCurrent = index === highlightIndex;
 
-      if (currentView === "triage" && item.isGroupCover && item.groupMemberCount && item.groupId !== undefined) {
+      if (item.isGroupCover && item.groupMemberCount && item.groupId !== undefined) {
         const gid = item.groupId;
         return (
           <div
@@ -123,94 +177,20 @@ export function Filmstrip() {
             aria-label={`Group cover ${image.filename}, ${item.groupMemberCount} photos`}
             aria-current={isCurrent ? "true" : undefined}
             className="flex items-center justify-center p-1"
-            onClick={() => setCurrentIndex(index)}
+            onClick={() => onCellClick(index)}
           >
             <GroupStack
               imageId={image.id}
               filename={image.filename}
               count={item.groupMemberCount}
               isCurrent={isCurrent}
-              onClick={() => setCurrentIndex(index)}
-              onDoubleClick={() => handleGroupDoubleClick(index, gid)}
+              onClick={() => onCellClick(index)}
+              onDoubleClick={() => onGroupDoubleClick(gid, index)}
               isAiPick={item.isAiPick}
             />
           </div>
         );
       }
-
-      const isExpandedMember =
-        currentView === "triage" && item.groupId !== undefined && !item.isGroupCover;
-      const onThumbDoubleClick = () => {
-        if (isExpandedMember && item.groupId !== undefined) {
-          toggleGroupExpansion(item.groupId);
-        } else {
-          openLoupe(index);
-        }
-      };
-
-      const trayPos = groupTrayPosition(displayItems, index);
-      const inTray = trayPos !== "none";
-      const memberCount =
-        inTray && item.groupId !== undefined
-          ? groupById.get(item.groupId)?.count ?? 0
-          : 0;
-
-      const thumbBlock = (
-        <div
-          role="button"
-          tabIndex={-1}
-          aria-label={image.filename}
-          aria-current={isCurrent ? "true" : undefined}
-          className="flex items-center justify-center"
-          onClick={() => setCurrentIndex(index)}
-          onDoubleClick={onThumbDoubleClick}
-        >
-          <div
-            className={`relative cursor-pointer rounded overflow-hidden transition-all ${
-              isCurrent
-                ? "ring-2 ring-[var(--accent)] brightness-100"
-                : "brightness-75 hover:brightness-90"
-            }`}
-            style={{ width: THUMB_W, height: THUMB_H }}
-          >
-            <Thumbnail imageId={image.id} filename={image.filename} />
-            {image.flag === "pick" && (
-              <div className="absolute top-1 left-1 w-3 h-3 rounded-full bg-green-500" />
-            )}
-            {image.flag === "reject" && (
-              <div className="absolute top-1 left-1 w-3 h-3 rounded-full bg-red-500" />
-            )}
-            {item.isAiPick && <AiPickBadge />}
-            {image.starRating > 0 && (
-              <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-1 bg-gradient-to-t from-black/60 to-transparent">
-                {Array.from({ length: image.starRating }, (_, i) => (
-                  <div
-                    key={i}
-                    className="w-1.5 h-1.5 rounded-full bg-[var(--star-filled)]"
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      );
-
-      if (inTray) {
-        return (
-          <div style={style} className="px-2">
-            <GroupTray position={trayPos} memberCount={memberCount}>
-              {thumbBlock}
-            </GroupTray>
-          </div>
-        );
-      }
-
-      // Standalone photo: Select-view group affiliation stripe still
-      // applies (photos that belong to a group but aren't being rendered
-      // in a tray because they're a cover handled above, or the view
-      // isn't triage). Keep the original 3px left bar treatment.
-      const showSelectBar =
-        currentView === "select" && item.groupId !== undefined && !item.isGroupCover;
 
       return (
         <div
@@ -220,8 +200,8 @@ export function Filmstrip() {
           aria-label={image.filename}
           aria-current={isCurrent ? "true" : undefined}
           className="flex items-center justify-center p-1"
-          onClick={() => setCurrentIndex(index)}
-          onDoubleClick={onThumbDoubleClick}
+          onClick={() => onCellClick(index)}
+          onDoubleClick={() => openLoupe(index)}
         >
           <div
             className={`relative cursor-pointer rounded overflow-hidden transition-all ${
@@ -249,17 +229,14 @@ export function Filmstrip() {
                 ))}
               </div>
             )}
-            {showSelectBar && (
-              <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--accent)]" />
-            )}
           </div>
         </div>
       );
     },
-    [displayItems, currentIndex, setCurrentIndex, currentView, openLoupe, handleGroupDoubleClick, toggleGroupExpansion, groupById],
+    [outerItems, highlightIndex, onCellClick, onGroupDoubleClick, openLoupe],
   );
 
-  if (displayItems.length === 0) return null;
+  if (outerItems.length === 0) return null;
 
   return (
     <div
@@ -272,8 +249,8 @@ export function Filmstrip() {
           ref={listRef}
           height={listHeight}
           width={RAIL_WIDTH}
-          itemCount={displayItems.length}
-          itemSize={itemSize}
+          itemCount={outerItems.length}
+          itemSize={CELL_H}
           layout="vertical"
           overscanCount={5}
         >

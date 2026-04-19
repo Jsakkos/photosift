@@ -4,6 +4,7 @@ import { useProjectStore } from "../stores/projectStore";
 import { useKeyboardNav } from "../hooks/useKeyboardNav";
 import { LoupeView } from "../components/LoupeView";
 import { Filmstrip } from "../components/Filmstrip";
+import { InnerStrip } from "../components/InnerStrip";
 import { Toolbar } from "../components/Toolbar";
 import { RatingBar } from "../components/RatingBar";
 import { MetadataOverlay } from "../components/MetadataOverlay";
@@ -125,6 +126,7 @@ export function CullPage() {
       ) : (
         <div className="flex-1 flex overflow-hidden">
           <Filmstrip />
+          <InnerStrip />
           <div className="flex-1 flex flex-col">
             <LoupeRow />
             <GroupStrip />

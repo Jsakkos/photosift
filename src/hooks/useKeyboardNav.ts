@@ -30,7 +30,7 @@ export function useKeyboardNav() {
     exitComparison,
     cycleComparison,
     comparisonQuickPick,
-    toggleGroupExpansion,
+    setActiveInnerGroup,
   } = useProjectStore();
   const openSettings = useSettingsStore((s) => s.openDialog);
   const setToast = useProjectStore((s) => s.setToast);
@@ -293,8 +293,16 @@ export function useKeyboardNav() {
               (currentView === "triage" || currentView === "select")
             ) {
               e.preventDefault();
-              toggleGroupExpansion(focused.groupId);
+              setActiveInnerGroup(focused.groupId);
             }
+          }
+          break;
+        case "Escape":
+          // Esc closes the inner strip if one is open. Doesn't compete
+          // with the Grid-mode ExitPlanMode-ish escapes elsewhere.
+          if (useProjectStore.getState().activeInnerGroupId != null) {
+            e.preventDefault();
+            setActiveInnerGroup(null);
           }
           break;
       }
@@ -331,6 +339,6 @@ export function useKeyboardNav() {
     openSettings,
     setToast,
     currentShoot,
-    toggleGroupExpansion,
+    setActiveInnerGroup,
   ]);
 }

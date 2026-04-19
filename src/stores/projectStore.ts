@@ -67,6 +67,44 @@ interface UndoEntry {
   }[];
 }
 
+/// Adapter between the new single-valued `activeInnerGroupId` state
+/// and `computeDisplayItems`, which still takes a Set for historical
+/// reasons (it used to support expanding multiple groups at once — the
+/// Narrative-Select UX only needs one active drilldown at a time).
+function expandedSet(activeInnerGroupId: number | null): Set<number> {
+  return activeInnerGroupId != null ? new Set([activeInnerGroupId]) : new Set<number>();
+}
+
+/// Wrapper around `computeDisplayItems` that applies the Narrative-
+/// Select drill-down filter: when an inner group is active, the
+/// visible (keyboard-navigable) set shrinks to just that group's
+/// members. Outside a drill-down this is a no-op passthrough.
+function computeDisplayItemsFiltered(
+  images: ImageEntry[],
+  currentView: CullView,
+  groups: Group[],
+  triageExpandGroups: boolean,
+  activeInnerGroupId: number | null,
+  selectRequiresPickFilter: boolean,
+  routeMinStarGate: number,
+  aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
+): DisplayItem[] {
+  const base = computeDisplayItems(
+    images,
+    currentView,
+    groups,
+    triageExpandGroups,
+    expandedSet(activeInnerGroupId),
+    selectRequiresPickFilter,
+    routeMinStarGate,
+    aiOptions,
+  );
+  if (activeInnerGroupId == null) return base;
+  return base.filter(
+    (di) => di.groupId === activeInnerGroupId && !di.isGroupCover,
+  );
+}
+
 export function buildPhotoGroupMap(groups: Group[]): Map<number, Group> {
   const map = new Map<number, Group>();
   for (const g of groups) {
@@ -329,12 +367,15 @@ interface ProjectState {
   viewMode: ViewMode;
   groups: Group[];
   displayItems: DisplayItem[];
-  expandedGroupIds: Set<number>;
+  activeInnerGroupId: number | null;
   lastFlagAction: { color: string; timestamp: number } | null;
   toast: { message: string; kind: "info" | "error"; timestamp: number } | null;
 
   loadShoot: (shootId: number) => Promise<void>;
-  toggleGroupExpansion: (groupId: number) => void;
+  /// Narrative-Select-style drilldown. Pass a groupId to open the inner
+  /// strip for that group; pass the same id to toggle closed; pass null
+  /// to clear. Only one group can be active at a time.
+  setActiveInnerGroup: (groupId: number | null) => void;
   setCurrentIndex: (index: number) => void;
   navigateNext: () => void;
   navigatePrev: () => void;
@@ -396,7 +437,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   viewMode: "sequential",
   groups: [],
   displayItems: [],
-  expandedGroupIds: new Set<number>(),
+  activeInnerGroupId: null,
   lastFlagAction: null,
   toast: null,
   comparisonPinnedId: null,
@@ -431,12 +472,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         viewName: resumeView,
       }).catch(() => null);
 
-      const displayItems = computeDisplayItems(
+      const displayItems = computeDisplayItemsFiltered(
         images,
         resumeView,
         groups,
         triageExpand(),
-        new Set<number>(),
+        null,
         selectRequiresPick(),
         routeMinStar(),
         currentAiOptions("none"),
@@ -459,7 +500,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         viewMode: "sequential",
         groups,
         displayItems,
-        expandedGroupIds: new Set<number>(),
+        activeInnerGroupId: null,
         lastFlagAction: null,
       });
 
@@ -506,12 +547,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, starRating: rating };
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       updatedImages,
       get().currentView,
       get().groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -547,12 +588,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         revertImages[idx] = { ...revertImages[idx], starRating: oldRating };
         set({
           images: revertImages,
-          displayItems: computeDisplayItems(
+          displayItems: computeDisplayItemsFiltered(
             revertImages,
             get().currentView,
             get().groups,
             triageExpand(),
-            get().expandedGroupIds,
+            get().activeInnerGroupId,
             selectRequiresPick(),
             routeMinStar(),
             currentAiOptions(get().sortByAi),
@@ -621,12 +662,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       affectedIds.push({ id: image.id, oldFlag });
     }
 
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       updatedImages,
       currentView,
       groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -701,12 +742,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
       set({
         images: revertImages,
-        displayItems: computeDisplayItems(
+        displayItems: computeDisplayItemsFiltered(
           revertImages,
           get().currentView,
           get().groups,
           triageExpand(),
-          get().expandedGroupIds,
+          get().activeInnerGroupId,
           selectRequiresPick(),
           routeMinStar(),
           currentAiOptions(get().sortByAi),
@@ -727,12 +768,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, destination: dest };
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       updatedImages,
       currentView,
       groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -772,12 +813,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         revertImages[idx] = { ...revertImages[idx], destination: oldDest };
         set({
           images: revertImages,
-          displayItems: computeDisplayItems(
+          displayItems: computeDisplayItemsFiltered(
             revertImages,
             get().currentView,
             get().groups,
             triageExpand(),
-            get().expandedGroupIds,
+            get().activeInnerGroupId,
             selectRequiresPick(),
             routeMinStar(),
             currentAiOptions(get().sortByAi),
@@ -809,12 +850,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     }
 
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       updatedImages,
       currentView,
       groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -869,12 +910,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     }
 
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       updatedImages,
       currentView,
       groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -920,12 +961,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }).catch(() => {});
     }
 
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       images,
       view,
       groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -1007,19 +1048,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   toggleAutoAdvance: () => set((s) => ({ autoAdvance: !s.autoAdvance })),
   toggleZoom: () => set((s) => ({ isZoomed: !s.isZoomed })),
 
-  toggleGroupExpansion: (groupId: number) => {
-    const { expandedGroupIds, images, currentView, groups, displayItems, currentIndex } = get();
-    const next = new Set(expandedGroupIds);
-    if (next.has(groupId)) next.delete(groupId);
-    else next.add(groupId);
+  setActiveInnerGroup: (groupId: number | null) => {
+    const { activeInnerGroupId, images, currentView, groups, displayItems, currentIndex } = get();
+    // Toggle: passing the already-active id closes the inner strip.
+    const nextActive = groupId === activeInnerGroupId ? null : groupId;
 
     const currentPhotoId = displayItems[currentIndex]?.image.id;
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       images,
       currentView,
       groups,
       triageExpand(),
-      next,
+      nextActive,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -1033,7 +1073,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     newIndex = Math.min(newIndex, Math.max(0, newDisplayItems.length - 1));
 
     set({
-      expandedGroupIds: next,
+      activeInnerGroupId: nextActive,
       displayItems: newDisplayItems,
       currentIndex: newIndex < 0 ? 0 : newIndex,
     });
@@ -1050,12 +1090,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, flag };
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       updatedImages,
       currentView,
       groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -1089,12 +1129,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         revertImages[idx] = { ...revertImages[idx], flag: oldFlag };
         set({
           images: revertImages,
-          displayItems: computeDisplayItems(
+          displayItems: computeDisplayItemsFiltered(
             revertImages,
             get().currentView,
             get().groups,
             triageExpand(),
-            get().expandedGroupIds,
+            get().activeInnerGroupId,
             selectRequiresPick(),
             routeMinStar(),
             currentAiOptions(get().sortByAi),
@@ -1220,12 +1260,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     updatedImages[pickIdx] = { ...updatedImages[pickIdx], flag: "pick" };
     updatedImages[rejectIdx] = { ...updatedImages[rejectIdx], flag: "reject" };
 
-    const newDisplayItems = computeDisplayItems(
+    const newDisplayItems = computeDisplayItemsFiltered(
       updatedImages,
       currentView,
       groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -1286,12 +1326,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(
+        displayItems: computeDisplayItemsFiltered(
           images,
           currentView,
           groups,
           triageExpand(),
-          get().expandedGroupIds,
+          get().activeInnerGroupId,
           selectRequiresPick(),
           routeMinStar(),
           currentAiOptions(get().sortByAi),
@@ -1306,12 +1346,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   refreshDisplay: () => {
     const { images, currentView, groups, displayItems, currentIndex } = get();
     const currentPhotoId = displayItems[currentIndex]?.image.id;
-    const next = computeDisplayItems(
+    const next = computeDisplayItemsFiltered(
       images,
       currentView,
       groups,
       triageExpand(),
-      get().expandedGroupIds,
+      get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
@@ -1369,12 +1409,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       set({
         groups,
-        displayItems: computeDisplayItems(
+        displayItems: computeDisplayItemsFiltered(
           images,
           currentView,
           groups,
           triageExpand(),
-          get().expandedGroupIds,
+          get().activeInnerGroupId,
           selectRequiresPick(),
           routeMinStar(),
           currentAiOptions(get().sortByAi),

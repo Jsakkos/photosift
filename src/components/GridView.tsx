@@ -16,7 +16,7 @@ export function GridView() {
     currentView,
     createGroupFromPhotos,
     ungroupPhotos,
-    toggleGroupExpansion,
+    setActiveInnerGroup,
   } = useProjectStore();
   const [colWidth, setColWidth] = useState<(typeof SIZES)[number]>(160);
   const [selection, setSelection] = useState<Set<number>>(new Set());
@@ -82,7 +82,7 @@ export function GridView() {
               focused.groupId !== undefined &&
               (currentView === "triage" || currentView === "select")
             ) {
-              toggleGroupExpansion(focused.groupId);
+              setActiveInnerGroup(focused.groupId);
             } else {
               setCurrentIndex(focusIndex);
               setViewMode("sequential");
@@ -105,7 +105,7 @@ export function GridView() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, currentView, toggleGroupExpansion]);
+  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, currentView, setActiveInnerGroup]);
 
   const handleClick = useCallback(
     (index: number, e: React.MouseEvent) => {
@@ -232,9 +232,9 @@ export function GridView() {
                   item.groupId !== undefined &&
                   inExpandableView
                 ) {
-                  toggleGroupExpansion(item.groupId);
+                  setActiveInnerGroup(item.groupId);
                 } else if (isExpandedMember && item.groupId !== undefined) {
-                  toggleGroupExpansion(item.groupId);
+                  setActiveInnerGroup(item.groupId);
                 } else {
                   setCurrentIndex(index);
                   setViewMode("sequential");
@@ -254,7 +254,7 @@ export function GridView() {
       setCurrentIndex,
       setViewMode,
       currentView,
-      toggleGroupExpansion,
+      setActiveInnerGroup,
     ],
   );
 
