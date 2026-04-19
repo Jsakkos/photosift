@@ -56,10 +56,17 @@ pub struct GroupResult {
     pub member_indices: Vec<usize>,
 }
 
-/// Two-tier disjoint clustering with configurable thresholds.
-/// - Near-duplicate: hamming distance <= near_dup_threshold
-/// - Related: hamming distance near_dup_threshold+1..=related_threshold
-///   (only emitted if a group spans multiple near-dup clusters)
+/// Disjoint clustering by perceptual-hash distance. Every photo belongs
+/// to at most one emitted group.
+///
+/// - A group forms whenever two photos are within `related_threshold`
+///   hamming distance (transitive closure).
+/// - Each emitted group is labelled `"near_duplicate"` when *all* of
+///   its members share the same near-duplicate root (i.e. no
+///   intra-group hop exceeds `near_dup_threshold`). Otherwise it's
+///   labelled `"related"`. This collapses the old two-tier scheme —
+///   which emitted the tight near-dup group *and* a looser related
+///   group covering the same photos — into a single set.
 pub fn cluster_phashes(
     phashes: &[(i64, [u8; 8])],
     near_dup_threshold: u32,
@@ -86,29 +93,24 @@ pub fn cluster_phashes(
     }
 
     let mut results = Vec::new();
-
-    // Emit near-duplicate groups
-    for component in nd_uf.components() {
-        results.push(GroupResult {
-            group_type: "near_duplicate",
-            member_indices: component,
-        });
-    }
-
-    // Emit related groups that span multiple near-dup roots
-    let rel_components = rel_uf.components();
-    for component in rel_components {
-        let mut nd_roots: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for component in rel_uf.components() {
+        // Classify by near-dup cohesion: if all members share the same
+        // near-dup root, the cluster is tight enough to call
+        // "near_duplicate". Otherwise it's a broader "related" cluster.
+        let mut nd_roots: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
         for &idx in &component {
             nd_roots.insert(nd_uf.find(idx));
         }
-        // Only emit if the related group spans at least two distinct near-dup clusters (or singletons)
-        if nd_roots.len() >= 2 {
-            results.push(GroupResult {
-                group_type: "related",
-                member_indices: component,
-            });
-        }
+        let group_type = if nd_roots.len() == 1 {
+            "near_duplicate"
+        } else {
+            "related"
+        };
+        results.push(GroupResult {
+            group_type,
+            member_indices: component,
+        });
     }
 
     results
@@ -136,7 +138,13 @@ mod tests {
     }
 
     #[test]
-    fn test_two_tier_clustering() {
+    fn test_overlap_merges_into_single_related_group() {
+        // Three photos: h0 and h1 are identical (near-dup), h2 is 8 bits
+        // away — within the related threshold (12) but beyond the near-
+        // dup threshold (4). With the old two-tier emit this produced
+        // both a near-dup group {0,1} and a related group {0,1,2}. The
+        // merged scheme emits a single "related" group containing all
+        // three, so no photo lives in two groups at once.
         let h0 = [0x00u8; 8];
         let h1 = [0x00u8; 8];
         let mut h2 = [0x00u8; 8];
@@ -145,19 +153,36 @@ mod tests {
         let phashes = vec![(1, h0), (2, h1), (3, h2)];
         let groups = default_cluster(&phashes);
 
-        let nd_groups: Vec<_> = groups
-            .iter()
-            .filter(|g| g.group_type == "near_duplicate")
-            .collect();
-        let rel_groups: Vec<_> = groups
-            .iter()
-            .filter(|g| g.group_type == "related")
-            .collect();
+        assert_eq!(groups.len(), 1, "expected exactly one merged group");
+        assert_eq!(groups[0].group_type, "related");
+        assert_eq!(groups[0].member_indices.len(), 3);
+    }
 
-        assert_eq!(nd_groups.len(), 1);
-        assert_eq!(nd_groups[0].member_indices.len(), 2);
-        assert_eq!(rel_groups.len(), 1);
-        assert_eq!(rel_groups[0].member_indices.len(), 3);
+    #[test]
+    fn test_every_photo_belongs_to_at_most_one_group() {
+        // Regression guard for the user-reported "a photo appears in
+        // two groups" bug. Constructs a cluster where the tight and
+        // loose tiers overlap, then checks the invariant across the
+        // full output.
+        let h0 = [0x00u8; 8];
+        let h1 = [0x00u8; 8];
+        let mut h2 = [0x00u8; 8];
+        h2[0] = 0x0F; // 4 bits — right at the near-dup threshold
+        let mut h3 = [0x00u8; 8];
+        h3[0] = 0xFF; // 8 bits — related only
+
+        let phashes = vec![(1, h0), (2, h1), (3, h2), (4, h3)];
+        let groups = default_cluster(&phashes);
+
+        let mut seen = std::collections::HashSet::new();
+        for g in &groups {
+            for &idx in &g.member_indices {
+                assert!(
+                    seen.insert(idx),
+                    "photo index {idx} appeared in more than one group",
+                );
+            }
+        }
     }
 
     #[test]
