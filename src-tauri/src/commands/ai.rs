@@ -1,4 +1,4 @@
-use crate::ai::sharpness::tiled_laplacian;
+use crate::ai::sharpness::tiled_tenengrad;
 use crate::ai::{AiProviderStatus, EyeProviderKind};
 use crate::db::schema::{FaceRow, SharpnessPercentiles};
 use crate::state::AppState;
@@ -142,10 +142,16 @@ pub fn get_heatmap(
     };
     let img = image::open(&preview_path).map_err(|e| e.to_string())?;
     let gray = img.to_luma8();
-    let grid = tiled_laplacian(&gray, 32, 32);
+    // 48 cols × 32 rows: finer horizontal resolution to match a 3:2
+    // frame. Tenengrad (Sobel gradient magnitude) replaces the former
+    // Laplacian variance because variance conflates "low-frequency
+    // texture" with "soft focus" — visibly-in-focus foliage scored
+    // identically to a blurred wall. Gradient magnitude tracks edge
+    // strength directly.
+    let grid = tiled_tenengrad(&gray, 48, 32);
 
     // Per-image normalization: map `[p5, p95]` of this photo's tile
-    // variances to `[0, 100]`. Using 5th/95th percentiles rather than
+    // scores to `[0, 100]`. Using 5th/95th percentiles rather than
     // raw min/max so a single very-dark or very-bright tile doesn't
     // collapse the rest of the range. This decouples the heatmap from
     // the absolute `CALIBRATION_FULL_SCALE` used for sort/filter.

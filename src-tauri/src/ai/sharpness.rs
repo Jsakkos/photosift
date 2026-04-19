@@ -25,6 +25,54 @@ pub fn laplacian_variance(img: &GrayImage) -> f64 {
     (sum_sq / n) - (mean * mean)
 }
 
+/// Tenengrad: mean of squared Sobel gradient magnitude over the image,
+/// skipping the 1px border to avoid kernel overhang. Responds to edge
+/// *strength* regardless of local-window variance, so partially-focused
+/// low-variance textures (tree foliage, feathers, distant foliage) score
+/// meaningfully where `laplacian_variance` would collapse them into the
+/// noise floor.
+pub fn tenengrad(img: &GrayImage) -> f64 {
+    let (w, h) = img.dimensions();
+    if w < 3 || h < 3 {
+        return 0.0;
+    }
+    let get = |x: u32, y: u32| img.get_pixel(x, y).0[0] as f64;
+    let n = ((w - 2) * (h - 2)) as f64;
+    let mut sum = 0.0_f64;
+    for y in 1..h - 1 {
+        for x in 1..w - 1 {
+            // Sobel Gx = [[-1,0,1],[-2,0,2],[-1,0,1]]
+            let gx = -get(x - 1, y - 1) + get(x + 1, y - 1)
+                + -2.0 * get(x - 1, y) + 2.0 * get(x + 1, y)
+                + -get(x - 1, y + 1) + get(x + 1, y + 1);
+            // Sobel Gy = [[-1,-2,-1],[0,0,0],[1,2,1]]
+            let gy = -get(x - 1, y - 1) - 2.0 * get(x, y - 1) - get(x + 1, y - 1)
+                + get(x - 1, y + 1) + 2.0 * get(x, y + 1) + get(x + 1, y + 1);
+            sum += gx * gx + gy * gy;
+        }
+    }
+    sum / n
+}
+
+/// Per-tile Tenengrad over a `cols × rows` grid. Mirrors
+/// `tiled_laplacian`'s row-major layout so the heatmap consumer is
+/// interchangeable.
+pub fn tiled_tenengrad(img: &GrayImage, cols: u32, rows: u32) -> Vec<f64> {
+    let (w, h) = img.dimensions();
+    let tw = w / cols;
+    let th = h / rows;
+    let mut out = Vec::with_capacity((cols * rows) as usize);
+    for ry in 0..rows {
+        for cx in 0..cols {
+            let x0 = cx * tw;
+            let y0 = ry * th;
+            let sub = image::imageops::crop_imm(img, x0, y0, tw, th).to_image();
+            out.push(tenengrad(&sub));
+        }
+    }
+    out
+}
+
 /// Compute Laplacian variance for each tile in a `cols × rows` grid.
 /// Returns row-major flat vec, length `cols * rows`.
 pub fn tiled_laplacian(img: &GrayImage, cols: u32, rows: u32) -> Vec<f64> {
@@ -113,5 +161,57 @@ mod tests {
         assert_eq!(normalize_sharpness(-5.0), 0.0);
         assert!((normalize_sharpness(CALIBRATION_FULL_SCALE) - 100.0).abs() < 1.0);
         assert_eq!(normalize_sharpness(CALIBRATION_FULL_SCALE * 10.0), 100.0);
+    }
+
+    fn vertical_step_edge(w: u32, h: u32) -> GrayImage {
+        ImageBuffer::from_fn(w, h, |x, _| {
+            Luma([if x < w / 2 { 0 } else { 255 }])
+        })
+    }
+
+    #[test]
+    fn test_tenengrad_zero_on_flat_image() {
+        let img = flat(64, 64, 128);
+        let s = tenengrad(&img);
+        assert!(s.abs() < 1e-6, "flat image should have ~0 tenengrad, got {}", s);
+    }
+
+    #[test]
+    fn test_tenengrad_detects_edges() {
+        let flat_img = flat(64, 64, 128);
+        let edge_img = vertical_step_edge(64, 64);
+        let s_flat = tenengrad(&flat_img);
+        let s_edge = tenengrad(&edge_img);
+        assert!(
+            s_edge > s_flat + 100.0,
+            "step-edge tenengrad ({}) should far exceed flat ({})",
+            s_edge,
+            s_flat
+        );
+    }
+
+    #[test]
+    fn test_tenengrad_higher_for_sharp_than_soft_checkerboard() {
+        let sharp = checkerboard(64, 64, 2);
+        let softer = checkerboard(64, 64, 16);
+        let s_sharp = tenengrad(&sharp);
+        let s_softer = tenengrad(&softer);
+        assert!(
+            s_sharp > s_softer,
+            "2px checkerboard tenengrad ({}) should exceed 16px ({})",
+            s_sharp,
+            s_softer,
+        );
+    }
+
+    #[test]
+    fn test_tiled_tenengrad_dimensions() {
+        // 48 cols * 32 rows matches the target grid for the heatmap path.
+        let img = checkerboard(192, 128, 2);
+        let grid = tiled_tenengrad(&img, 48, 32);
+        assert_eq!(grid.len(), 48 * 32);
+        for v in &grid {
+            assert!(*v >= 0.0, "tenengrad must be non-negative, got {}", v);
+        }
     }
 }
