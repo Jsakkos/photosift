@@ -42,7 +42,8 @@ export function useKeyboardNav() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
         e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
       ) {
         return;
       }
@@ -76,7 +77,7 @@ export function useKeyboardNav() {
             return;
           case "z":
           case "Z":
-            if (!e.ctrlKey) toggleZoom();
+            if (!e.ctrlKey && !e.metaKey) toggleZoom();
             return;
         }
         return;
@@ -84,24 +85,24 @@ export function useKeyboardNav() {
 
       if (mode === "grid") return;
 
-      if (e.ctrlKey && e.key === "z" && !e.shiftKey) {
+      // Cross-platform primary modifier: Ctrl on Windows/Linux, Cmd on
+      // macOS. The shortcut hints still say "Ctrl" (current UI is
+      // Windows-first) but the handler accepts either so Mac testers
+      // don't get blank-keystroke surprises.
+      const primaryMod = e.ctrlKey || e.metaKey;
+
+      if (primaryMod && e.key === "z" && !e.shiftKey) {
         e.preventDefault();
         undo();
         return;
       }
-      if (e.ctrlKey && (e.key === "Z" || (e.shiftKey && e.key === "z"))) {
+      if (primaryMod && (e.key === "Z" || (e.shiftKey && e.key === "z"))) {
         e.preventDefault();
         redo();
         return;
       }
 
-      if (e.ctrlKey && e.key === "o") {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent("photosift:open-folder"));
-        return;
-      }
-
-      if (e.ctrlKey && (e.key === "e" || e.key === "E")) {
+      if (primaryMod && (e.key === "e" || e.key === "E")) {
         e.preventDefault();
         if (currentShoot) {
           invoke<number>("export_xmp", { shootId: currentShoot.id, filter: "picks" })
@@ -185,12 +186,12 @@ export function useKeyboardNav() {
         case "3":
         case "4":
         case "5":
-          if (viewMode !== "comparison") {
+          if (currentView === "select") {
             setRating(parseInt(e.key));
           }
           break;
         case "0":
-          setRating(0);
+          if (currentView === "select") setRating(0);
           break;
         case "p":
           if (currentView !== "route") setFlag("pick");
@@ -227,7 +228,7 @@ export function useKeyboardNav() {
           break;
         case "z":
         case "Z":
-          if (!e.ctrlKey) toggleZoom();
+          if (!e.ctrlKey && !e.metaKey) toggleZoom();
           break;
         case "f":
         case "F":
@@ -243,7 +244,12 @@ export function useKeyboardNav() {
           break;
         case "g":
         case "G":
-          setViewMode(mode === "grid" ? "sequential" : "grid");
+          // Bare G toggles grid. Ctrl/Cmd+G is reserved for grouping
+          // inside GridView, so don't hijack it here even though grid
+          // mode has its own handler — stopping here keeps the two from
+          // fighting when a press lands just before the mode switch.
+          if (!e.ctrlKey && !e.metaKey)
+            setViewMode(mode === "grid" ? "sequential" : "grid");
           break;
         case "Tab":
           if (!e.shiftKey && currentView === "select") {

@@ -168,10 +168,11 @@ export function GridView() {
     const onKey = (e: KeyboardEvent) => {
       if (
         e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
       )
         return;
-      if (!e.ctrlKey) return;
+      if (!e.ctrlKey && !e.metaKey) return;
       if (e.key === "g" || e.key === "G") {
         if (selectedPhotoIds.length === 0) return;
         e.preventDefault();

@@ -1,5 +1,47 @@
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, OptionalExtension, Result, Row};
 use std::path::{Path, PathBuf};
+
+// Aggregates flag counts per shoot and picks the most recent view_cursor
+// so the shoot card can render a "Continue [view]" CTA. Column order must
+// match `row_to_shoot`. The two queries share a column projection but
+// differ in filtering/ordering, so they're inlined rather than composed.
+const SHOOT_SUMMARY_SQL_LIST: &str =
+    "SELECT s.id, s.slug, s.date, s.source_path, s.dest_path, s.photo_count, s.imported_at, s.import_mode, \
+       COALESCE(SUM(CASE WHEN p.flag = 'pick' THEN 1 ELSE 0 END), 0) AS picks, \
+       COALESCE(SUM(CASE WHEN p.flag = 'reject' THEN 1 ELSE 0 END), 0) AS rejects, \
+       COALESCE(SUM(CASE WHEN p.flag = 'unreviewed' THEN 1 ELSE 0 END), 0) AS unreviewed, \
+       (SELECT view_name FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_view, \
+       (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at \
+     FROM shoots s LEFT JOIN photos p ON p.shoot_id = s.id \
+     GROUP BY s.id ORDER BY s.date DESC, s.id DESC";
+
+const SHOOT_SUMMARY_SQL_ONE: &str =
+    "SELECT s.id, s.slug, s.date, s.source_path, s.dest_path, s.photo_count, s.imported_at, s.import_mode, \
+       COALESCE(SUM(CASE WHEN p.flag = 'pick' THEN 1 ELSE 0 END), 0) AS picks, \
+       COALESCE(SUM(CASE WHEN p.flag = 'reject' THEN 1 ELSE 0 END), 0) AS rejects, \
+       COALESCE(SUM(CASE WHEN p.flag = 'unreviewed' THEN 1 ELSE 0 END), 0) AS unreviewed, \
+       (SELECT view_name FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_view, \
+       (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at \
+     FROM shoots s LEFT JOIN photos p ON p.shoot_id = s.id \
+     WHERE s.id = ?1 GROUP BY s.id";
+
+fn row_to_shoot(row: &Row<'_>) -> Result<ShootRow> {
+    Ok(ShootRow {
+        id: row.get(0)?,
+        slug: row.get(1)?,
+        date: row.get(2)?,
+        source_path: row.get(3)?,
+        dest_path: row.get(4)?,
+        photo_count: row.get(5)?,
+        imported_at: row.get(6)?,
+        import_mode: row.get(7)?,
+        picks: row.get(8)?,
+        rejects: row.get(9)?,
+        unreviewed: row.get(10)?,
+        last_view: row.get(11)?,
+        last_opened_at: row.get(12)?,
+    })
+}
 
 pub struct Database {
     pub(crate) conn: Connection,
@@ -16,6 +58,17 @@ pub struct ShootRow {
     pub photo_count: i64,
     pub imported_at: String,
     pub import_mode: String,
+    // Cull-progress aggregates — computed fresh from the photos table on
+    // each list_shoots call so the shoot list reflects reality without
+    // needing a separate refresh path when flags change mid-session.
+    pub picks: i64,
+    pub rejects: i64,
+    pub unreviewed: i64,
+    // Most recent view_cursor for this shoot, so the shoot card can offer
+    // a "Continue [view]" CTA that jumps straight back to where the user
+    // left off. Null when the user has never opened the shoot.
+    pub last_view: Option<String>,
+    pub last_opened_at: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -361,44 +414,18 @@ impl Database {
     }
 
     pub fn list_shoots(&self) -> Result<Vec<ShootRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, slug, date, source_path, dest_path, photo_count, imported_at, import_mode
-             FROM shoots ORDER BY date DESC, id DESC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ShootRow {
-                id: row.get(0)?,
-                slug: row.get(1)?,
-                date: row.get(2)?,
-                source_path: row.get(3)?,
-                dest_path: row.get(4)?,
-                photo_count: row.get(5)?,
-                imported_at: row.get(6)?,
-                import_mode: row.get(7)?,
-            })
-        })?;
+        // Single query: aggregate flag counts per shoot via GROUP BY, and
+        // fetch the most recent view_cursor via a correlated subquery so
+        // the shoot card can offer a "Continue" CTA without a second
+        // round-trip.
+        let mut stmt = self.conn.prepare(SHOOT_SUMMARY_SQL_LIST)?;
+        let rows = stmt.query_map([], row_to_shoot)?;
         rows.collect()
     }
 
     pub fn get_shoot(&self, shoot_id: i64) -> Result<Option<ShootRow>> {
         self.conn
-            .query_row(
-                "SELECT id, slug, date, source_path, dest_path, photo_count, imported_at, import_mode
-                 FROM shoots WHERE id = ?1",
-                params![shoot_id],
-                |row| {
-                    Ok(ShootRow {
-                        id: row.get(0)?,
-                        slug: row.get(1)?,
-                        date: row.get(2)?,
-                        source_path: row.get(3)?,
-                        dest_path: row.get(4)?,
-                        photo_count: row.get(5)?,
-                        imported_at: row.get(6)?,
-                        import_mode: row.get(7)?,
-                    })
-                },
-            )
+            .query_row(SHOOT_SUMMARY_SQL_ONE, params![shoot_id], row_to_shoot)
             .optional()
     }
 
@@ -1173,6 +1200,51 @@ pub(crate) mod tests {
 
         let listed = db.list_shoots().unwrap();
         assert_eq!(listed.len(), 1);
+    }
+
+    #[test]
+    fn test_list_shoots_aggregates_progress() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("Greece", "2026-06-01", "/s", "/d", "copy")
+            .unwrap();
+
+        // Start empty: every count is zero and no view_cursor is set.
+        let fresh = &db.list_shoots().unwrap()[0];
+        assert_eq!(fresh.picks, 0);
+        assert_eq!(fresh.rejects, 0);
+        assert_eq!(fresh.unreviewed, 0);
+        assert!(fresh.last_view.is_none());
+        assert!(fresh.last_opened_at.is_none());
+
+        // Insert 4 photos, flip two to pick and one to reject; the fourth
+        // stays unreviewed so we cover all three flag branches.
+        let photos = vec![
+            sample_insert(1, "a.nef"),
+            sample_insert(2, "b.nef"),
+            sample_insert(3, "c.nef"),
+            sample_insert(4, "d.nef"),
+        ];
+        let ids = db.insert_photos_batch(shoot_id, &photos).unwrap();
+        db.set_flag(ids[0], "pick").unwrap();
+        db.set_flag(ids[1], "pick").unwrap();
+        db.set_flag(ids[2], "reject").unwrap();
+
+        // Record a view_cursor so the "last opened" projection kicks in.
+        db.set_view_cursor(shoot_id, "select", ids[0]).unwrap();
+
+        let summary = db.list_shoots().unwrap().into_iter().next().unwrap();
+        assert_eq!(summary.picks, 2);
+        assert_eq!(summary.rejects, 1);
+        assert_eq!(summary.unreviewed, 1);
+        assert_eq!(summary.last_view.as_deref(), Some("select"));
+        assert!(summary.last_opened_at.is_some());
+
+        // get_shoot should surface the same aggregates so the resume logic
+        // in loadShoot can read them off a single invoke.
+        let one = db.get_shoot(shoot_id).unwrap().unwrap();
+        assert_eq!(one.picks, 2);
+        assert_eq!(one.last_view.as_deref(), Some("select"));
     }
 
     #[test]

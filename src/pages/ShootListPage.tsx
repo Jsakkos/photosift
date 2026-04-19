@@ -4,6 +4,32 @@ import { listen } from "@tauri-apps/api/event";
 import { useShootListStore } from "../stores/shootListStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { ImportDialog } from "../components/ImportDialog";
+import type { CullView } from "../types";
+
+/// Compact relative-time formatter. Buckets into "just now / Xm ago /
+/// Xh ago / Xd ago / ISO date". Good enough for a shoot card — no need
+/// to pull in a date library for five buckets.
+function relativeTime(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return null;
+  const diffMs = Date.now() - then;
+  if (diffMs < 0) return "just now";
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 14) return `${days}d ago`;
+  return new Date(iso).toISOString().slice(0, 10);
+}
+
+function viewLabel(v: CullView | null | undefined): string {
+  if (v === "select") return "Select";
+  if (v === "route") return "Route";
+  return "Triage";
+}
 
 export function ShootListPage() {
   const { shoots, isLoading, refresh, deleteShoot } = useShootListStore();
@@ -13,7 +39,12 @@ export function ShootListPage() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      )
+        return;
       if (e.key === ",") {
         e.preventDefault();
         openSettings();
@@ -94,6 +125,14 @@ export function ShootListPage() {
                   window.alert(`Delete failed: ${err}`);
                 }
               };
+
+              const picks = shoot.picks ?? 0;
+              const rejects = shoot.rejects ?? 0;
+              const unreviewed = shoot.unreviewed ?? shoot.photoCount;
+              const reviewed = picks + rejects;
+              const opened = relativeTime(shoot.lastOpenedAt);
+              const resumeLabel = viewLabel(shoot.lastView);
+
               return (
                 <div
                   key={shoot.id}
@@ -106,17 +145,53 @@ export function ShootListPage() {
                       open();
                     }
                   }}
-                  className="relative text-left p-4 rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-white/5 hover:border-white/10 transition-colors cursor-pointer"
+                  className="relative text-left p-4 rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-white/5 hover:border-white/10 transition-colors cursor-pointer flex flex-col gap-2"
                 >
-                  <div className="font-medium text-[var(--text-primary)] text-lg mb-1 pr-8">
-                    {shoot.slug}
+                  <div>
+                    <div className="font-medium text-[var(--text-primary)] text-lg pr-8 leading-tight">
+                      {shoot.slug}
+                    </div>
+                    <div className="text-[var(--text-secondary)] text-sm">
+                      {shoot.date}
+                    </div>
                   </div>
-                  <div className="text-[var(--text-secondary)] text-sm mb-2">
-                    {shoot.date}
+
+                  {/* Progress breakdown — spec's at-a-glance status line.
+                      Dots use the same pick/reject/unreviewed colors used
+                      on thumbnails so the vocabulary is consistent. */}
+                  <div className="text-[var(--text-secondary)] text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span>{shoot.photoCount} photos</span>
+                    <span className="text-[var(--text-secondary)]/60">·</span>
+                    <span>{reviewed} reviewed</span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                      {picks}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                      {rejects}
+                    </span>
+                    <span className="flex items-center gap-1 text-[var(--text-secondary)]/70">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--text-secondary)]/40" />
+                      {unreviewed}
+                    </span>
                   </div>
-                  <div className="text-[var(--text-secondary)] text-xs">
-                    {shoot.photoCount} photos
-                  </div>
+
+                  {opened ? (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); open(); }}
+                      className="self-start mt-1 px-3 py-1.5 rounded bg-[var(--accent)]/15 hover:bg-[var(--accent)]/25 border border-[var(--accent)]/30 text-[var(--accent)] text-xs font-medium transition-colors"
+                      title={`Last opened ${opened}`}
+                    >
+                      Continue {resumeLabel} · {opened}
+                    </button>
+                  ) : (
+                    <span className="self-start mt-1 text-[11px] text-[var(--text-secondary)]/60">
+                      Not yet opened
+                    </span>
+                  )}
+
                   <button
                     type="button"
                     onClick={handleDelete}

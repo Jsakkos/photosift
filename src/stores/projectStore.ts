@@ -419,14 +419,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         shootId,
       }).catch(() => [] as Group[]);
 
+      // Resume in whichever view the user last opened for this shoot.
+      // Falls back to triage for first-time opens so the standard flow
+      // still kicks off on ingest.
+      const resumeView: CullView = shoot.lastView ?? "triage";
+
       const cursor = await invoke<number | null>("get_view_cursor", {
         shootId,
-        viewName: "triage",
+        viewName: resumeView,
       }).catch(() => null);
 
       const displayItems = computeDisplayItems(
         images,
-        "triage",
+        resumeView,
         groups,
         triageExpand(),
         new Set<number>(),
@@ -448,7 +453,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         isLoading: false,
         undoStack: [],
         redoStack: [],
-        currentView: "triage",
+        currentView: resumeView,
         viewMode: "sequential",
         groups,
         displayItems,

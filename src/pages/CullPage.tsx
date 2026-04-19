@@ -13,6 +13,7 @@ import { GridView } from "../components/GridView";
 import { ComparisonView } from "../components/ComparisonView";
 import { AiPanel } from "../components/AiPanel";
 import { HeatmapOverlay } from "../components/HeatmapOverlay";
+import { EmptyViewState } from "../components/EmptyViewState";
 
 function useAiPanelVisibility() {
   const currentItem = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
@@ -61,7 +62,8 @@ function HeatmapHost() {
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { currentShoot, isLoading, loadError, loadShoot, viewMode } = useProjectStore();
+  const { currentShoot, isLoading, loadError, loadShoot, viewMode, currentView } = useProjectStore();
+  const displayCount = useProjectStore((s) => s.displayItems.length);
   useKeyboardNav();
 
   useEffect(() => {
@@ -111,15 +113,24 @@ export function CullPage() {
     <div className="h-screen w-screen flex flex-col bg-[var(--bg-primary)]">
       <Toolbar />
       {viewMode === "grid" ? (
-        <GridView />
+        displayCount === 0 ? (
+          <EmptyViewState view={currentView} />
+        ) : (
+          <GridView />
+        )
       ) : viewMode === "comparison" ? (
         <ComparisonView />
+      ) : displayCount === 0 ? (
+        <EmptyViewState view={currentView} />
       ) : (
         <>
           <LoupeRow />
           <GroupStrip />
           <Filmstrip />
-          <RatingBar />
+          {/* Star rating is a Select-pass concept per spec — keep it out
+              of Triage (where P/X is the only decision) and Route (where
+              stars are a read-only filter gate, not an input). */}
+          {currentView === "select" && <RatingBar />}
         </>
       )}
     </div>

@@ -27,6 +27,17 @@ export interface ShootSummary {
   destPath: string;
   photoCount: number;
   importedAt: string;
+  // Cull-progress aggregates — backend computes these fresh on each
+  // list_shoots call. Older backend responses may omit them; treat as
+  // optional and default to 0 when rendering.
+  picks?: number;
+  rejects?: number;
+  unreviewed?: number;
+  // Most recent view_cursor row for this shoot, so the shoot card can
+  // offer a "Continue [view]" CTA. Null/undefined when the user has
+  // never opened the shoot.
+  lastView?: CullView | null;
+  lastOpenedAt?: string | null;
 }
 
 export type CullView = "triage" | "select" | "route";
