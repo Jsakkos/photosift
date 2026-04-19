@@ -123,15 +123,17 @@ export function CullPage() {
       ) : displayCount === 0 ? (
         <EmptyViewState view={currentView} />
       ) : (
-        <>
-          <LoupeRow />
-          <GroupStrip />
+        <div className="flex-1 flex overflow-hidden">
           <Filmstrip />
-          {/* Star rating is a Select-pass concept per spec — keep it out
-              of Triage (where P/X is the only decision) and Route (where
-              stars are a read-only filter gate, not an input). */}
-          {currentView === "select" && <RatingBar />}
-        </>
+          <div className="flex-1 flex flex-col">
+            <LoupeRow />
+            <GroupStrip />
+            {/* Star rating is a Select-pass concept per spec — keep it
+                out of Triage (where P/X is the only decision) and Route
+                (where stars are a read-only filter gate, not an input). */}
+            {currentView === "select" && <RatingBar />}
+          </div>
+        </div>
       )}
     </div>
   );
