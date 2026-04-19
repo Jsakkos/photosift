@@ -109,7 +109,7 @@ describe("ungroupPhotos", () => {
 });
 
 describe("setActiveInnerGroup", () => {
-  test("activating + deactivating a group toggles its inline expansion in displayItems", () => {
+  test("activating opens the inner strip; passing null closes it; repeating same id is a no-op", () => {
     const img1 = makeImage({ id: 1, flag: "unreviewed" });
     const img2 = makeImage({ id: 2, flag: "unreviewed" });
     const img3 = makeImage({ id: 3, flag: "unreviewed" });
@@ -136,8 +136,14 @@ describe("setActiveInnerGroup", () => {
     // Drilled-in: 3 member rows
     expect(useProjectStore.getState().displayItems).toHaveLength(3);
 
-    // Calling again with the same id toggles closed.
+    // Calling with the SAME id is a no-op (supports single-click-to-expand
+    // without a repeated click accidentally collapsing).
     useProjectStore.getState().setActiveInnerGroup(group.id);
+    expect(useProjectStore.getState().activeInnerGroupId).toBe(group.id);
+    expect(useProjectStore.getState().displayItems).toHaveLength(3);
+
+    // Passing null explicitly contracts.
+    useProjectStore.getState().setActiveInnerGroup(null);
     expect(useProjectStore.getState().activeInnerGroupId).toBeNull();
     expect(useProjectStore.getState().displayItems).toHaveLength(1);
   });

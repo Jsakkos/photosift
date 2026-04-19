@@ -1043,8 +1043,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   setActiveInnerGroup: (groupId: number | null) => {
     const { activeInnerGroupId, images, currentView, groups, displayItems, currentIndex } = get();
-    // Toggle: passing the already-active id closes the inner strip.
-    const nextActive = groupId === activeInnerGroupId ? null : groupId;
+    // Always-set semantics: passing the already-active id is a no-op,
+    // not a toggle. Callers that want to close the inner strip pass
+    // `null` explicitly. This keeps "single-click to expand" from
+    // accidentally collapsing when the user taps the same cover twice.
+    if (groupId === activeInnerGroupId) return;
+    const nextActive = groupId;
 
     const currentPhotoId = displayItems[currentIndex]?.image.id;
     const newDisplayItems = computeDisplayItemsFiltered(

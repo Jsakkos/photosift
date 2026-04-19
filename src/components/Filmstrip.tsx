@@ -122,33 +122,42 @@ export function Filmstrip() {
     (outerIdx: number) => {
       const item = outerItems[outerIdx];
       if (!item) return;
+
+      if (item.isGroupCover && item.groupId !== undefined &&
+          (currentView === "triage" || currentView === "select")) {
+        // Single-click on a group cover expands it into the inner
+        // strip. `setActiveInnerGroup` is non-toggling, so repeated
+        // single-clicks on the same cover are no-ops — contracting
+        // happens on double-click.
+        setCurrentIndex(outerIdx);
+        setActiveInnerGroup(item.groupId);
+        return;
+      }
+
+      // Non-cover cell clicked. If drilled in, close the inner strip so
+      // the loupe cycle realigns to the outer selection.
       if (activeInnerGroupId != null) {
-        // Switching outer selection while drilled in also closes the
-        // inner strip, so the loupe cycle realigns to the outer target.
         setActiveInnerGroup(null);
       }
-      // Find this photo in the post-close displayItems (which will
-      // equal outerItems). For safety we search by id rather than
-      // assuming indices match.
       const idx = displayItems.findIndex((d) => d.image.id === item.image.id);
       setCurrentIndex(idx >= 0 ? idx : outerIdx);
     },
-    [outerItems, displayItems, activeInnerGroupId, setActiveInnerGroup, setCurrentIndex],
+    [outerItems, displayItems, activeInnerGroupId, currentView, setActiveInnerGroup, setCurrentIndex],
   );
 
-  const onGroupDoubleClick = useCallback(
-    (groupId: number, outerIdx: number) => {
+  const onCoverDoubleClick = useCallback(
+    (_groupId: number, outerIdx: number) => {
       if (currentView === "triage" || currentView === "select") {
-        // Select-then-drill feels natural — the user clicked this
-        // cover on purpose; keep the outer highlight in sync with the
-        // group they just opened.
-        setCurrentIndex(outerIdx);
-        setActiveInnerGroup(groupId);
+        // Double-click contracts the inner strip. The preceding
+        // single-click already expanded it; double-click is the
+        // "go back" gesture. User confirmed this is the less-common
+        // action, so we dedicate the slower gesture to it.
+        setActiveInnerGroup(null);
       } else {
         openLoupe(outerIdx);
       }
     },
-    [currentView, setActiveInnerGroup, setCurrentIndex, openLoupe],
+    [currentView, setActiveInnerGroup, openLoupe],
   );
 
   useEffect(() => {
@@ -183,7 +192,7 @@ export function Filmstrip() {
               count={item.groupMemberCount}
               isCurrent={isCurrent}
               onClick={() => onCellClick(index)}
-              onDoubleClick={() => onGroupDoubleClick(gid, index)}
+              onDoubleClick={() => onCoverDoubleClick(gid, index)}
               isAiPick={item.isAiPick}
               coverW={THUMB_W - 8}
               coverH={THUMB_H - 8}
@@ -233,7 +242,7 @@ export function Filmstrip() {
         </div>
       );
     },
-    [outerItems, highlightIndex, onCellClick, onGroupDoubleClick, openLoupe],
+    [outerItems, highlightIndex, onCellClick, onCoverDoubleClick, openLoupe],
   );
 
   if (outerItems.length === 0) return null;
