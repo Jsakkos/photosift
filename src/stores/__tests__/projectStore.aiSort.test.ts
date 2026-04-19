@@ -35,6 +35,7 @@ describe("computeDisplayItems AI sort + filter", () => {
     const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0, {
       sortByAi: "sharpness",
       hideSoftThreshold: 0,
+      useEyesInPick: false,
     });
     expect(items.map((i) => i.image.id)).toEqual([2, 1, 3]);
   });
@@ -44,6 +45,7 @@ describe("computeDisplayItems AI sort + filter", () => {
     const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0, {
       sortByAi: "faces",
       hideSoftThreshold: 0,
+      useEyesInPick: false,
     });
     expect(items.map((i) => i.image.id)).toEqual([2, 1, 3]);
   });
@@ -53,6 +55,7 @@ describe("computeDisplayItems AI sort + filter", () => {
     const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0, {
       sortByAi: "none",
       hideSoftThreshold: 30,
+      useEyesInPick: false,
     });
     expect(items.map((i) => i.image.id).sort()).toEqual([2, 3]);
   });
@@ -65,6 +68,7 @@ describe("computeDisplayItems AI sort + filter", () => {
     const items = computeDisplayItems(images, "triage", g, false, new Set(), false, 0, {
       sortByAi: "none",
       hideSoftThreshold: 30,
+      useEyesInPick: false,
     });
     // Both still visible in triage — threshold only applies in select/route.
     expect(items.length).toBe(2);
@@ -75,6 +79,7 @@ describe("computeDisplayItems AI sort + filter", () => {
     const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0, {
       sortByAi: "none",
       hideSoftThreshold: 0,
+      useEyesInPick: false,
     });
     expect(items.map((i) => i.image.id)).toEqual([1, 2]);
   });

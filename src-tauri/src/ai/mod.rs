@@ -14,6 +14,17 @@ pub enum AiProviderStatus {
     Disabled,
 }
 
+/// Which eye open/closed classifier is in use. `Mock` means deterministic
+/// alternating 0/1 — not a real signal. The frontend checks this to hide
+/// eye indicators and drop the `(1 + eyes_open)` weighting from the
+/// AI-pick score so mock values don't corrupt ranking.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EyeProviderKind {
+    Mock,
+    Onnx,
+}
+
 #[derive(Debug, Clone)]
 pub struct AiJob {
     pub shoot_id: i64,

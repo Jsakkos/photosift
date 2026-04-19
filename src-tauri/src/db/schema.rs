@@ -100,6 +100,27 @@ impl Default for Settings {
     }
 }
 
+/// Percentile buckets of the `sharpness_score` column across a shoot's
+/// analyzed photos. Used by the frontend to map raw Laplacian-variance
+/// scores into a 1-10 scale that's meaningful *relative to the current
+/// shoot* (D750 previews vary 2x in raw variance depending on detail
+/// density, so any absolute calibration is guesswork).
+///
+/// `analyzed_max_ts` is the MAX(ai_analyzed_at) over the shoot at the
+/// time of computation — the cache key used by callers to decide whether
+/// a new computation is needed.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharpnessPercentiles {
+    pub p10: f64,
+    pub p30: f64,
+    pub p50: f64,
+    pub p70: f64,
+    pub p90: f64,
+    pub analyzed_count: i64,
+    pub analyzed_max_ts: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FaceRow {
@@ -803,6 +824,64 @@ impl Database {
         Ok(())
     }
 
+    /// Compute 10/30/50/70/90 percentile cutoffs for `sharpness_score` across
+    /// all analyzed photos in a shoot. Returns zeros when no photos have been
+    /// analyzed; callers should check `analyzed_count` before trusting the
+    /// values. `analyzed_max_ts` is the cache-invalidation signal.
+    pub fn sharpness_percentiles_for_shoot(
+        &self,
+        shoot_id: i64,
+    ) -> Result<SharpnessPercentiles> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sharpness_score FROM photos
+             WHERE shoot_id = ?1 AND sharpness_score IS NOT NULL
+             ORDER BY sharpness_score ASC",
+        )?;
+        let values: Vec<f64> = stmt
+            .query_map(params![shoot_id], |r| r.get::<_, f64>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let analyzed_max_ts: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT MAX(ai_analyzed_at) FROM photos
+                 WHERE shoot_id = ?1 AND ai_analyzed_at IS NOT NULL",
+                params![shoot_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+
+        let count = values.len() as i64;
+        if values.is_empty() {
+            return Ok(SharpnessPercentiles {
+                p10: 0.0,
+                p30: 0.0,
+                p50: 0.0,
+                p70: 0.0,
+                p90: 0.0,
+                analyzed_count: 0,
+                analyzed_max_ts,
+            });
+        }
+
+        let pct = |q: f64| -> f64 {
+            let idx = (q * (values.len() as f64 - 1.0)).round() as usize;
+            values[idx.min(values.len() - 1)]
+        };
+
+        Ok(SharpnessPercentiles {
+            p10: pct(0.10),
+            p30: pct(0.30),
+            p50: pct(0.50),
+            p70: pct(0.70),
+            p90: pct(0.90),
+            analyzed_count: count,
+            analyzed_max_ts,
+        })
+    }
+
     pub fn photos_needing_ai(&self, shoot_id: i64) -> Result<Vec<i64>> {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM photos WHERE shoot_id = ?1 AND ai_analyzed_at IS NULL ORDER BY id",
@@ -1286,6 +1365,84 @@ pub(crate) mod tests {
         db.delete_shoot(shoot_id).unwrap();
         let gone = db.get_faces_for_photo(ids[0]).unwrap();
         assert_eq!(gone.len(), 0);
+    }
+
+    #[test]
+    fn test_sharpness_percentiles_empty_shoot() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("E", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+        // No photos at all.
+        let p = db.sharpness_percentiles_for_shoot(shoot_id).unwrap();
+        assert_eq!(p.analyzed_count, 0);
+        assert_eq!(p.p50, 0.0);
+        assert!(p.analyzed_max_ts.is_none());
+
+        // Photos present but none analyzed — same shape.
+        db.insert_photos_batch(shoot_id, &[sample_insert(1, "a.nef")])
+            .unwrap();
+        let p = db.sharpness_percentiles_for_shoot(shoot_id).unwrap();
+        assert_eq!(p.analyzed_count, 0);
+        assert!(p.analyzed_max_ts.is_none());
+    }
+
+    #[test]
+    fn test_sharpness_percentiles_uniform() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("U", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+        let ids = db
+            .insert_photos_batch(
+                shoot_id,
+                &[
+                    sample_insert(1, "a.nef"),
+                    sample_insert(2, "b.nef"),
+                    sample_insert(3, "c.nef"),
+                ],
+            )
+            .unwrap();
+        for id in &ids {
+            db.mark_ai_analyzed(*id, Some(0), Some(0), Some(50.0))
+                .unwrap();
+        }
+        let p = db.sharpness_percentiles_for_shoot(shoot_id).unwrap();
+        assert_eq!(p.analyzed_count, 3);
+        // All values equal → all percentiles equal to that value.
+        assert!((p.p10 - 50.0).abs() < 1e-6);
+        assert!((p.p50 - 50.0).abs() < 1e-6);
+        assert!((p.p90 - 50.0).abs() < 1e-6);
+        assert!(p.analyzed_max_ts.is_some());
+    }
+
+    #[test]
+    fn test_sharpness_percentiles_populated() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("P", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+        // 11 photos with sharpness 0..=100 in steps of 10.
+        let mut inserts = Vec::new();
+        for i in 0..11u8 {
+            inserts.push(sample_insert(i + 10, &format!("{}.nef", i)));
+        }
+        let ids = db.insert_photos_batch(shoot_id, &inserts).unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            let score = (i as f64) * 10.0; // 0, 10, 20, ..., 100
+            db.mark_ai_analyzed(*id, Some(0), Some(0), Some(score))
+                .unwrap();
+        }
+
+        let p = db.sharpness_percentiles_for_shoot(shoot_id).unwrap();
+        assert_eq!(p.analyzed_count, 11);
+        // round(0.1*(11-1)) = 1 → values[1] = 10
+        assert!((p.p10 - 10.0).abs() < 1e-6);
+        // round(0.5*10) = 5 → values[5] = 50
+        assert!((p.p50 - 50.0).abs() < 1e-6);
+        // round(0.9*10) = 9 → values[9] = 90
+        assert!((p.p90 - 90.0).abs() < 1e-6);
+        assert!(p.analyzed_max_ts.is_some());
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { FixedSizeList as List } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { GroupStack } from "./GroupStack";
+import { AiPickBadge } from "./AiPickBadge";
 
 const THUMB_WIDTH = 100;
 const THUMB_HEIGHT = 80;
@@ -132,6 +133,7 @@ export function Filmstrip() {
             {image.flag === "reject" && (
               <div className="absolute top-0.5 left-0.5 w-2.5 h-2.5 rounded-full bg-red-500" />
             )}
+            {item.isAiPick && <AiPickBadge />}
             {image.starRating > 0 && (
               <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-0.5 bg-gradient-to-t from-black/60 to-transparent">
                 {Array.from({ length: image.starRating }, (_, i) => (
@@ -142,8 +144,15 @@ export function Filmstrip() {
                 ))}
               </div>
             )}
-            {currentView === "select" && item.groupId && (
-              <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-[var(--accent)]" />
+            {/* Group affiliation bar. Appears for any non-cover group
+                member — in Select view this is always on, and in Triage
+                view it kicks in once the group is expanded (cover is
+                replaced by inline members). Thicker than the old 0.5px
+                treatment so it reads at thumbnail scale. */}
+            {item.groupId && !item.isGroupCover &&
+              (currentView === "select" ||
+                (currentView === "triage" && item.groupId !== undefined)) && (
+              <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--accent)]" />
             )}
           </div>
         </div>

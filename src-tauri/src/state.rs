@@ -1,5 +1,5 @@
-use crate::ai::{worker::WorkerHandle, AiProviderStatus};
-use crate::db::schema::{self, Database};
+use crate::ai::{worker::WorkerHandle, AiProviderStatus, EyeProviderKind};
+use crate::db::schema::{self, Database, SharpnessPercentiles};
 use crate::metadata::xmp_queue::XmpWriteQueue;
 use crate::pipeline::cache::ImageCache;
 use crate::pipeline::prefetch::PrefetchManager;
@@ -20,10 +20,16 @@ pub struct AppState {
     pub import_cancel: Arc<AtomicBool>,
     pub ai_worker: Option<WorkerHandle>,
     pub ai_status: AiProviderStatus,
+    pub ai_eye_provider: EyeProviderKind,
     pub ai_cancel: Arc<AtomicBool>,
     pub ai_analyzed: Arc<AtomicUsize>,
     pub ai_failed: Arc<AtomicUsize>,
     pub ai_total: Arc<AtomicUsize>,
+    /// Percentile cache keyed on (shoot_id, analyzed_max_ts). Recomputed
+    /// only when the shoot's MAX(ai_analyzed_at) advances — which happens
+    /// exactly when a new analysis result lands — so panel navigation
+    /// queries hit the cache without issuing SQL.
+    pub percentile_cache: Option<(i64, Option<String>, SharpnessPercentiles)>,
 }
 
 impl AppState {
@@ -57,10 +63,12 @@ impl AppState {
             import_cancel: Arc::new(AtomicBool::new(false)),
             ai_worker: None,
             ai_status: AiProviderStatus::Disabled,
+            ai_eye_provider: EyeProviderKind::Mock,
             ai_cancel: Arc::new(AtomicBool::new(false)),
             ai_analyzed: Arc::new(AtomicUsize::new(0)),
             ai_failed: Arc::new(AtomicUsize::new(0)),
             ai_total: Arc::new(AtomicUsize::new(0)),
+            percentile_cache: None,
         }
     }
 

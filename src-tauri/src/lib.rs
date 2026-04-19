@@ -156,6 +156,7 @@ pub fn run() {
             commands::ai::reanalyze_shoot,
             commands::ai::get_faces_for_photo,
             commands::ai::get_heatmap,
+            commands::ai::get_shoot_sharpness_percentiles,
         ]);
 
     let builder = protocol::register_protocol(builder);

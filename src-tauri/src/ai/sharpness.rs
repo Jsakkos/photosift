@@ -43,10 +43,15 @@ pub fn tiled_laplacian(img: &GrayImage, cols: u32, rows: u32) -> Vec<f64> {
     out
 }
 
-/// Empirical constant tuned against D750 NEF previews — a Laplacian variance
-/// of 500 on a 1024px image is "pretty sharp." Revisit during manual QA
-/// (Task 22) if real fixtures indicate a different range.
-pub const CALIBRATION_FULL_SCALE: f64 = 500.0;
+/// Empirical constant. Measured on a real D750 shoot on 2026-04-18:
+/// full-resolution embedded-JPEG previews top out at raw Laplacian
+/// variance ~75 for tack-sharp portraits (rare spikes to 300+ on
+/// high-detail scenes like foliage), moderate 15-30, soft/OOF 2-8.
+/// Mapping variance=50 to sharpness=100 gives a useful culling spread:
+/// tack-sharp photos saturate near 100, sharp 60-80, moderate 30-50,
+/// soft 0-15. Users can then set hideSoftThreshold around 20-30 and
+/// meaningfully filter.
+pub const CALIBRATION_FULL_SCALE: f64 = 50.0;
 
 pub fn normalize_sharpness(variance: f64) -> f64 {
     if variance <= 0.0 {

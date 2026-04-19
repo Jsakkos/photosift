@@ -58,7 +58,15 @@ pub fn process_job(
     }
 
     // Whole-image sharpness on the already-decoded gray image.
-    let whole = normalize_sharpness(laplacian_variance(&gray));
+    let raw = laplacian_variance(&gray);
+    let whole = normalize_sharpness(raw);
+    log::debug!(
+        "ai::worker photo={} faces={} raw_sharp={:.1} norm_sharp={:.1}",
+        job.photo_id,
+        faces.len(),
+        raw,
+        whole
+    );
 
     db.write_ai_result(
         job.photo_id,

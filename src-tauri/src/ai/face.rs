@@ -5,6 +5,7 @@ use image::GrayImage;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
@@ -40,6 +41,16 @@ const INPUT_SIDE: usize = 640;
 const STRIDES: [u32; 3] = [8, 16, 32];
 const CONF_THRESHOLD: f32 = 0.6;
 const NMS_IOU_THRESHOLD: f32 = 0.3;
+
+/// Emits one `log::info!` the first time `detect()` observes the output
+/// tensor ranges — tells us whether cls/obj are post-sigmoid (values in
+/// `[0,1]`) or raw logits (can be far outside that range).
+static DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[inline]
+fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
 
 impl YuNetProvider {
     /// Load the ONNX model. Tries CUDA execution provider first when
@@ -173,6 +184,7 @@ fn decode_level(
     bbox: &[f32],
     kps: &[f32],
     stride: u32,
+    apply_sigmoid: bool,
 ) -> Vec<RawDetection> {
     let grid_side = INPUT_SIDE as u32 / stride;
     let n_anchors = (grid_side * grid_side) as usize;
@@ -186,8 +198,14 @@ fn decode_level(
     for row in 0..grid_side {
         for col in 0..grid_side {
             let i = (row * grid_side + col) as usize;
-            let score = cls[i] * obj[i];
-            if score < CONF_THRESHOLD {
+            let (c, o) = if apply_sigmoid {
+                (sigmoid(cls[i]), sigmoid(obj[i]))
+            } else {
+                (cls[i], obj[i])
+            };
+            let score = c * o;
+            if !(score >= CONF_THRESHOLD) {
+                // `!(score >= T)` also rejects NaN, unlike `score < T`.
                 continue;
             }
             let bbase = i * 4;
@@ -369,12 +387,45 @@ impl FaceProvider for YuNetProvider {
             heads
         };
 
-        let mut candidates: Vec<RawDetection> = Vec::new();
-        for (stride, cls, obj, bbox, kps) in &head_data {
-            candidates.extend(decode_level(cls, obj, bbox, kps, *stride));
+        // YuNet exports vary: some bake sigmoid into the cls/obj heads
+        // (values in `[0,1]`), others emit raw logits. The opencv_zoo
+        // 2023mar model we bundle is the logit variant — confirmed by
+        // reading OpenCV's `FaceDetectorYN::Impl::postProcess_*`, which
+        // applies sigmoid before multiplying cls × obj. We auto-detect
+        // instead of hard-coding so a swap to a post-sigmoid export
+        // keeps working without another fix.
+        let global_max_cls = head_data
+            .iter()
+            .flat_map(|(_, cls, _, _, _)| cls.iter().copied())
+            .fold(f32::NEG_INFINITY, f32::max);
+        let global_max_obj = head_data
+            .iter()
+            .flat_map(|(_, _, obj, _, _)| obj.iter().copied())
+            .fold(f32::NEG_INFINITY, f32::max);
+        let apply_sigmoid = global_max_cls > 1.5 || global_max_obj > 1.5;
+
+        if !DIAG_LOGGED.swap(true, Ordering::SeqCst) {
+            log::info!(
+                "ai::face YuNet diag: max_cls={:.4} max_obj={:.4} apply_sigmoid={} conf_threshold={}",
+                global_max_cls,
+                global_max_obj,
+                apply_sigmoid,
+                CONF_THRESHOLD
+            );
         }
 
+        let mut candidates: Vec<RawDetection> = Vec::new();
+        for (stride, cls, obj, bbox, kps) in &head_data {
+            candidates.extend(decode_level(cls, obj, bbox, kps, *stride, apply_sigmoid));
+        }
         let kept = nms(candidates, NMS_IOU_THRESHOLD);
+        log::debug!(
+            "ai::face {}x{} -> {} faces (sigmoid={})",
+            src_w,
+            src_h,
+            kept.len(),
+            apply_sigmoid
+        );
         Ok(kept
             .into_iter()
             .map(|d| finalize(d, &lb, src_w, src_h))
@@ -409,8 +460,42 @@ mod tests {
         let obj = vec![0.0_f32; n];
         let bbox = vec![0.0_f32; n * 4];
         let kps = vec![0.0_f32; n * 10];
-        let dets = decode_level(&cls, &obj, &bbox, &kps, 8);
+        let dets = decode_level(&cls, &obj, &bbox, &kps, 8, false);
         assert!(dets.is_empty());
+    }
+
+    #[test]
+    fn test_decode_level_accepts_strong_sigmoid_anchor() {
+        // One anchor with cls=obj=1.0 (post-sigmoid) → score 1.0 > 0.6.
+        let n = (INPUT_SIDE / 8) * (INPUT_SIDE / 8);
+        let mut cls = vec![0.0_f32; n];
+        let mut obj = vec![0.0_f32; n];
+        cls[0] = 1.0;
+        obj[0] = 1.0;
+        let bbox = vec![0.0_f32; n * 4];
+        let kps = vec![0.0_f32; n * 10];
+        let dets = decode_level(&cls, &obj, &bbox, &kps, 8, false);
+        assert_eq!(dets.len(), 1);
+    }
+
+    #[test]
+    fn test_decode_level_applies_sigmoid_to_logits() {
+        // Strong positive logits → sigmoid drives product close to 1.
+        let n = (INPUT_SIDE / 8) * (INPUT_SIDE / 8);
+        let mut cls = vec![-10.0_f32; n];
+        let mut obj = vec![-10.0_f32; n];
+        cls[0] = 6.0;
+        obj[0] = 6.0;
+        let bbox = vec![0.0_f32; n * 4];
+        let kps = vec![0.0_f32; n * 10];
+        let dets = decode_level(&cls, &obj, &bbox, &kps, 8, true);
+        assert_eq!(dets.len(), 1, "anchor with logit=6 should pass after sigmoid");
+
+        let dets_raw = decode_level(&cls, &obj, &bbox, &kps, 8, false);
+        // Without sigmoid, logit=6 × logit=6 = 36 (passes), but most
+        // anchors are cls=-10, obj=-10, product=100 (also passes).
+        // This demonstrates why the raw-logit path requires sigmoid.
+        assert!(dets_raw.len() > 100, "raw logits produce junk — most anchors pass");
     }
 
     #[test]

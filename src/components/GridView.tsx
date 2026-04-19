@@ -192,14 +192,29 @@ export function GridView() {
         const index = rowIndex * columnCount + columnIndex;
         if (index >= displayItems.length) return null;
         const item = displayItems[index];
+        // An expanded-group member: has a groupId but isn't the cover.
+        // These get a shared background tint so adjacent members read as
+        // belonging to one group; alternating tints keep neighboring
+        // groups distinguishable.
+        const isGroupMember =
+          item.groupId !== undefined && !item.isGroupCover;
+        const tintClass = isGroupMember
+          ? item.groupId! % 2 === 0
+            ? "bg-[var(--accent)]/[0.06]"
+            : "bg-[var(--accent)]/[0.12]"
+          : "";
         return (
-          <div style={{ ...style, padding: CELL_GAP / 2 }}>
+          <div
+            style={{ ...style, padding: CELL_GAP / 2 }}
+            className={tintClass}
+          >
             <GridThumb
               item={item}
               index={index}
               isFocused={index === focusIndex}
               isSelected={selection.has(index)}
               isMulti={selection.size > 1}
+              showGroupBar={isGroupMember}
               onClick={handleClick}
               onDoubleClick={() => {
                 // Symmetric toggle: clicking a collapsed group cover
@@ -360,6 +375,7 @@ function GridThumb({
   isFocused,
   isSelected,
   isMulti,
+  showGroupBar,
   onClick,
   onDoubleClick,
   currentView: _currentView,
@@ -369,6 +385,7 @@ function GridThumb({
   isFocused: boolean;
   isSelected: boolean;
   isMulti: boolean;
+  showGroupBar: boolean;
   onClick: (index: number, e: React.MouseEvent) => void;
   onDoubleClick: () => void;
   currentView: string;
@@ -417,6 +434,15 @@ function GridThumb({
           if (e.currentTarget.naturalWidth > 1) setLoaded(true);
         }}
       />
+      {/* Expanded-group affiliation bar — left-edge accent visible inside
+          the rounded clip. Matches the Filmstrip treatment so switching
+          views preserves the visual cue. */}
+      {showGroupBar && (
+        <div
+          className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--accent)] pointer-events-none"
+          aria-hidden="true"
+        />
+      )}
       {/* Flag dot */}
       {image.flag === "pick" && (
         <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.5)]" />

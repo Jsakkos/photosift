@@ -9,6 +9,7 @@ import type {
   Group,
 } from "../types";
 import { useSettingsStore } from "./settingsStore";
+import { useAiStore } from "./aiStore";
 
 function triageExpand(): boolean {
   return useSettingsStore.getState().settings.triageExpandGroups;
@@ -26,14 +27,32 @@ function hideSoftThreshold(): number {
   return useSettingsStore.getState().settings.hideSoftThreshold ?? 0;
 }
 
+/// Bundle the sort/filter/pick options that `computeDisplayItems` needs.
+/// Centralized so call sites don't have to remember to keep
+/// `useEyesInPick` gated on the eye provider kind — if the backend swaps
+/// to a real classifier, this helper picks it up automatically.
+function currentAiOptions(
+  sortByAi: "none" | "sharpness" | "faces",
+): AiDisplayOptions {
+  return {
+    sortByAi,
+    hideSoftThreshold: hideSoftThreshold(),
+    useEyesInPick: useAiStore.getState().eyeProvider === "onnx",
+  };
+}
+
 export interface AiDisplayOptions {
   sortByAi: "none" | "sharpness" | "faces";
   hideSoftThreshold: number; // 0 disables
+  /// When false, AI-pick scoring ignores the `eyes_open` term. Must be
+  /// false while the eye classifier is `MockEyeProvider`.
+  useEyesInPick: boolean;
 }
 
 const DEFAULT_AI_OPTIONS: AiDisplayOptions = {
   sortByAi: "none",
   hideSoftThreshold: 0,
+  useEyesInPick: false,
 };
 
 interface UndoEntry {
@@ -66,10 +85,14 @@ export function getGroupCover(group: Group): number {
 /// Returns the id of the AI-recommended photo in the group, or null when
 /// fewer than 2 members have been analyzed.
 ///
-/// Scoring: sharpness * (1 + eyes_open_count). Ties broken by lower id.
+/// Scoring: sharpness * (1 + eyes_open_count) when `useEyes` is true,
+/// otherwise sharpness alone. `useEyes` must be false while the eye
+/// classifier is `MockEyeProvider` — mock values corrupt the ranking.
+/// Ties broken by lower id.
 export function aiPickForGroup(
   group: Group,
   images: ImageEntry[],
+  useEyes: boolean = false,
 ): number | null {
   const analyzed = group.members
     .map((m) => images.find((i) => i.id === m.photoId))
@@ -77,13 +100,16 @@ export function aiPickForGroup(
 
   if (analyzed.length < 2) return null;
 
+  const scoreOf = (img: ImageEntry): number => {
+    const sharp = img.sharpnessScore ?? 0;
+    return useEyes ? sharp * (1 + (img.eyesOpenCount ?? 0)) : sharp;
+  };
+
   let bestId = analyzed[0].id;
-  let bestScore =
-    (analyzed[0].sharpnessScore ?? 0) * (1 + (analyzed[0].eyesOpenCount ?? 0));
+  let bestScore = scoreOf(analyzed[0]);
 
   for (const img of analyzed.slice(1)) {
-    const score =
-      (img.sharpnessScore ?? 0) * (1 + (img.eyesOpenCount ?? 0));
+    const score = scoreOf(img);
     if (score > bestScore || (score === bestScore && img.id < bestId)) {
       bestId = img.id;
       bestScore = score;
@@ -106,13 +132,29 @@ export function computeDisplayItems(
   const photoGroupMap = buildPhotoGroupMap(groups);
 
   if (currentView === "triage") {
+    // Pre-compute AI pick per group so we can keep the recommended member
+    // visible in expanded display even after it's been flagged. Without
+    // this, the `★ AI` badge loses its target the moment the user picks
+    // or rejects the pick photo, since the default filter drops
+    // non-unreviewed members.
+    const triagePickCache = new Map<number, number | null>();
+    const pickForGroup = (g: Group): number | null => {
+      if (triagePickCache.has(g.id)) return triagePickCache.get(g.id)!;
+      const p = aiPickForGroup(g, images, aiOptions.useEyesInPick);
+      triagePickCache.set(g.id, p);
+      return p;
+    };
+
     if (triageExpandGroups) {
       // Every unreviewed image gets its own triage item, with groupId set
-      // so the filmstrip can still draw the blue affiliation bar.
+      // so the filmstrip can still draw the blue affiliation bar. The AI
+      // pick for a group stays visible even if flagged so the badge has
+      // somewhere to render.
       for (let i = 0; i < images.length; i++) {
         const img = images[i];
-        if (img.flag !== "unreviewed") continue;
         const group = photoGroupMap.get(img.id);
+        const isPinnedPick = !!group && pickForGroup(group) === img.id;
+        if (img.flag !== "unreviewed" && !isPinnedPick) continue;
         items.push({
           imageIndex: i,
           image: img,
@@ -132,11 +174,14 @@ export function computeDisplayItems(
           if (expandedGroupIds.has(group.id)) {
             // Per-group drill-down: emit each unreviewed member inline with
             // groupId set so the filmstrip still draws the blue affiliation bar.
+            // Also emit the AI pick member even if flagged, so the badge
+            // can render on the recommended shot wherever it is.
             for (const member of group.members) {
               const mi = images.findIndex((im) => im.id === member.photoId);
               if (mi < 0) continue;
               const memImg = images[mi];
-              if (memImg.flag !== "unreviewed") continue;
+              const isPinnedPick = pickForGroup(group) === memImg.id;
+              if (memImg.flag !== "unreviewed" && !isPinnedPick) continue;
               items.push({
                 imageIndex: mi,
                 image: memImg,
@@ -253,7 +298,10 @@ export function computeDisplayItems(
     if (it.groupId === undefined) continue;
     if (!pickCache.has(it.groupId)) {
       const g = groups.find((gg) => gg.id === it.groupId);
-      pickCache.set(it.groupId, g ? aiPickForGroup(g, images) : null);
+      pickCache.set(
+        it.groupId,
+        g ? aiPickForGroup(g, images, aiOptions.useEyesInPick) : null,
+      );
     }
     if (pickCache.get(it.groupId) === it.image.id) {
       it.isAiPick = true;
@@ -384,7 +432,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         new Set<number>(),
         selectRequiresPick(),
         routeMinStar(),
-        { sortByAi: "none", hideSoftThreshold: hideSoftThreshold() },
+        currentAiOptions("none"),
       );
 
       let startIndex = 0;
@@ -407,6 +455,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         expandedGroupIds: new Set<number>(),
         lastFlagAction: null,
       });
+
+      // Kick off the shoot's sharpness-percentile fetch so the face-panel
+      // badge has the right 1-10 scale ready by the time the user opens a
+      // photo. The fetch is cheap and the Rust side caches it.
+      useAiStore.getState().fetchPercentiles(shoot.id).catch(() => {});
     } catch (e) {
       console.error("Failed to load shoot:", e);
       set({ isLoading: false, loadError: String(e) });
@@ -454,7 +507,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
 
     set({
@@ -495,7 +548,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().expandedGroupIds,
             selectRequiresPick(),
             routeMinStar(),
-            { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+            currentAiOptions(get().sortByAi),
           ),
         });
       }
@@ -569,7 +622,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
 
     const flashColor =
@@ -649,7 +702,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           get().expandedGroupIds,
           selectRequiresPick(),
           routeMinStar(),
-          { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+          currentAiOptions(get().sortByAi),
         ),
       });
     }
@@ -675,7 +728,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
 
     set({
@@ -720,7 +773,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().expandedGroupIds,
             selectRequiresPick(),
             routeMinStar(),
-            { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+            currentAiOptions(get().sortByAi),
           ),
         });
       }
@@ -757,7 +810,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -817,7 +870,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
     const displayIdx = newDisplayItems.findIndex(
       (d) => d.image.id === entry.imageId,
@@ -868,7 +921,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
 
     let newIndex = 0;
@@ -962,7 +1015,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       next,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
 
     let newIndex = 0;
@@ -998,7 +1051,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
 
     const flashColor = flag === "pick" ? "rgba(34, 197, 94, 0.15)" : flag === "reject" ? "rgba(239, 68, 68, 0.15)" : null;
@@ -1037,7 +1090,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             get().expandedGroupIds,
             selectRequiresPick(),
             routeMinStar(),
-            { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+            currentAiOptions(get().sortByAi),
           ),
         });
       }
@@ -1168,7 +1221,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
 
     set({
@@ -1234,7 +1287,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           get().expandedGroupIds,
           selectRequiresPick(),
           routeMinStar(),
-          { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+          currentAiOptions(get().sortByAi),
         ),
       });
     } catch (e) {
@@ -1254,7 +1307,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().expandedGroupIds,
       selectRequiresPick(),
       routeMinStar(),
-      { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+      currentAiOptions(get().sortByAi),
     );
     let nextIndex = currentIndex;
     if (currentPhotoId !== undefined) {
@@ -1317,7 +1370,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           get().expandedGroupIds,
           selectRequiresPick(),
           routeMinStar(),
-          { sortByAi: get().sortByAi, hideSoftThreshold: hideSoftThreshold() },
+          currentAiOptions(get().sortByAi),
         ),
       });
     } catch (e) {
@@ -1326,3 +1379,33 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 }));
+
+// Settings that feed `computeDisplayItems` are read lazily at call time
+// via the `triageExpand()` / `hideSoftThreshold()` helpers above — but
+// updating a setting in SettingsDialog only mutates `settingsStore`; it
+// doesn't trigger a re-compute here. Subscribe so the user sees the
+// filter / sort take effect as soon as they adjust the slider.
+let lastHideSoft = useSettingsStore.getState().settings.hideSoftThreshold;
+let lastTriageExpand = useSettingsStore.getState().settings.triageExpandGroups;
+let lastSelectRequiresPick = useSettingsStore.getState().settings.selectRequiresPick;
+let lastRouteMinStar = useSettingsStore.getState().settings.routeMinStar;
+useSettingsStore.subscribe((state) => {
+  const {
+    hideSoftThreshold: hs,
+    triageExpandGroups: te,
+    selectRequiresPick: sr,
+    routeMinStar: rm,
+  } = state.settings;
+  if (
+    hs !== lastHideSoft ||
+    te !== lastTriageExpand ||
+    sr !== lastSelectRequiresPick ||
+    rm !== lastRouteMinStar
+  ) {
+    lastHideSoft = hs;
+    lastTriageExpand = te;
+    lastSelectRequiresPick = sr;
+    lastRouteMinStar = rm;
+    useProjectStore.getState().refreshDisplay();
+  }
+});

@@ -14,13 +14,42 @@ import { ComparisonView } from "../components/ComparisonView";
 import { AiPanel } from "../components/AiPanel";
 import { HeatmapOverlay } from "../components/HeatmapOverlay";
 
-function AiPanelHost() {
+function useAiPanelVisibility() {
   const currentItem = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
   const aiPanelForced = useProjectStore((s) => s.aiPanelForced);
   const faceCount = currentItem?.image.faceCount ?? 0;
-  const visible = faceCount > 0 || aiPanelForced;
-  if (!currentItem) return null;
-  return <AiPanel photoId={currentItem.image.id} visible={visible} />;
+  const visible = currentItem != null && (faceCount > 0 || aiPanelForced);
+  return { visible, photoId: currentItem?.image.id };
+}
+
+function AiPanelHost() {
+  const { visible, photoId } = useAiPanelVisibility();
+  if (!photoId) return null;
+  return <AiPanel photoId={photoId} visible={visible} />;
+}
+
+/// Main loupe row: image area flex-grows, AI panel docks into a right
+/// column when visible so face tiles never cover the photo. The width
+/// transition keeps the reflow from snapping when `F` is pressed.
+function LoupeRow() {
+  const { visible } = useAiPanelVisibility();
+  return (
+    <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 relative overflow-hidden transition-[width] duration-150">
+        <LoupeView />
+        <HeatmapHost />
+        <MetadataOverlay />
+        <ShortcutHints />
+      </div>
+      <div
+        className="transition-[width] duration-150 border-l border-white/10 bg-[rgba(20,20,20,0.92)] overflow-hidden"
+        style={{ width: visible ? 380 : 0 }}
+        aria-hidden={!visible}
+      >
+        {visible && <AiPanelHost />}
+      </div>
+    </div>
+  );
 }
 
 function HeatmapHost() {
@@ -87,13 +116,7 @@ export function CullPage() {
         <ComparisonView />
       ) : (
         <>
-          <div className="flex-1 relative overflow-hidden">
-            <LoupeView />
-            <HeatmapHost />
-            <MetadataOverlay />
-            <AiPanelHost />
-            <ShortcutHints />
-          </div>
+          <LoupeRow />
           <GroupStrip />
           <Filmstrip />
           <RatingBar />

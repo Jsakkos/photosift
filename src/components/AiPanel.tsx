@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../stores/projectStore";
-import { useAiStore } from "../stores/aiStore";
-import { thumbUrl } from "../hooks/useImageLoader";
+import { useAiStore, sharpnessBadgeScore } from "../stores/aiStore";
+import { FaceThumb } from "./FaceThumb";
+import { AiSharpnessBadge } from "./AiSharpnessBadge";
+import { AiEyeIcon } from "./AiEyeIcon";
 import type { Face } from "../types";
+
+const TILE_PX = 160;
+const MAX_VISIBLE = 6;
 
 interface Props {
   photoId: number;
@@ -15,6 +20,8 @@ export function AiPanel({ photoId, visible }: Props) {
     s.images.find((i) => i.id === photoId) ?? null,
   );
   const provider = useAiStore((s) => s.provider);
+  const eyeProvider = useAiStore((s) => s.eyeProvider);
+  const percentiles = useAiStore((s) => s.percentiles);
   const [faces, setFaces] = useState<Face[] | null>(null);
 
   useEffect(() => {
@@ -39,79 +46,71 @@ export function AiPanel({ photoId, visible }: Props) {
   if (!visible) return null;
   if (!image?.aiAnalyzedAt) return null;
 
-  const faceCount = image.faceCount ?? 0;
-  // If the photo has zero faces AND the panel wasn't force-opened, hide.
-  // The caller's `visible` prop already mixes force-open in, so reaching
-  // here with faceCount=0 means the user explicitly pressed F.
-  const sharpness = image.sharpnessScore ?? 0;
+  const badge = sharpnessBadgeScore(image.sharpnessScore, percentiles);
+  const showEyes = eyeProvider === "onnx";
+  const visibleFaces = faces ? faces.slice(0, MAX_VISIBLE) : [];
+  const overflow = faces ? Math.max(0, faces.length - MAX_VISIBLE) : 0;
+  const hasFaces = !!faces && faces.length > 0;
 
   return (
     <div
       role="complementary"
       aria-label="AI analysis panel"
-      className="absolute top-3 right-3 w-[220px] bg-[rgba(20,20,20,0.92)] border border-white/10 rounded-md p-2 backdrop-blur-sm text-[11px] text-[var(--text-primary)] z-10 pointer-events-auto"
+      className="flex flex-col gap-2 p-2 text-[12px] text-[var(--text-primary)] overflow-y-auto"
     >
-      <div className="flex items-center justify-between mb-2 text-[10px] uppercase tracking-wider text-[var(--text-secondary)]">
-        <span>
-          {faceCount} {faceCount === 1 ? "face" : "faces"}
-        </span>
-        <span>sharp {Math.round(sharpness)}</span>
-      </div>
-      {faces && faces.length === 0 && faceCount === 0 && (
-        <div className="text-[10px] text-[var(--text-secondary)] py-1">
-          No faces detected.
+      {hasFaces && (
+        <div className="grid grid-cols-2 gap-2">
+          {visibleFaces.map((f, i) => (
+            <FaceTile
+              key={i}
+              face={f}
+              photoId={photoId}
+              sharpnessScore={badge}
+              showEyes={showEyes}
+            />
+          ))}
+          {overflow > 0 && (
+            <div
+              className="flex items-center justify-center rounded bg-black/40 text-[var(--text-secondary)] text-[11px]"
+              style={{ width: TILE_PX, height: TILE_PX }}
+              aria-label={`${overflow} more faces not shown`}
+            >
+              +{overflow} more
+            </div>
+          )}
         </div>
       )}
-      {faces &&
-        faces.slice(0, 3).map((f, i) => (
-          <FaceRow key={i} face={f} photoId={photoId} />
-        ))}
-      {faces && faces.length > 3 && (
-        <div className="text-[10px] text-[var(--text-secondary)] mt-1">
-          +{faces.length - 3} more
+      {!hasFaces && (
+        <div className="text-center text-[var(--text-secondary)] text-[11px] py-8">
+          No faces detected
+          <div className="mt-1 text-[10px]">Sharpness {badge}/10</div>
         </div>
       )}
     </div>
   );
 }
 
-function FaceRow({ face, photoId }: { face: Face; photoId: number }) {
-  const lOpen = face.leftEyeOpen === 1;
-  const rOpen = face.rightEyeOpen === 1;
-  const borderClass = (open: boolean) =>
-    open ? "border-green-500" : "border-dashed border-red-500";
-
+function FaceTile({
+  face,
+  photoId,
+  sharpnessScore,
+  showEyes,
+}: {
+  face: Face;
+  photoId: number;
+  sharpnessScore: number;
+  showEyes: boolean;
+}) {
   return (
-    <div className="flex items-center gap-2 mb-1.5 bg-black/30 rounded p-1">
-      <div className="w-10 h-10 relative overflow-hidden rounded bg-black/40 flex-shrink-0">
-        <img
-          src={thumbUrl(photoId)}
-          alt=""
-          aria-hidden="true"
-          className="absolute object-none"
-          style={{
-            width: `${100 / face.bboxW}%`,
-            height: `${100 / face.bboxH}%`,
-            left: `${(-face.bboxX * 100) / face.bboxW}%`,
-            top: `${(-face.bboxY * 100) / face.bboxH}%`,
-          }}
+    <div className="relative" style={{ width: TILE_PX, height: TILE_PX }}>
+      <FaceThumb face={face} photoId={photoId} sizePx={TILE_PX} />
+      {showEyes && (
+        <AiEyeIcon
+          leftOpen={face.leftEyeOpen === 1}
+          rightOpen={face.rightEyeOpen === 1}
         />
-      </div>
-      <div className="flex-1">
-        <div className="flex gap-1">
-          <div
-            className={`w-5 h-3 rounded-sm border ${borderClass(lOpen)} bg-black/30`}
-            aria-label={lOpen ? "Left eye open" : "Left eye closed"}
-          />
-          <div
-            className={`w-5 h-3 rounded-sm border ${borderClass(rOpen)} bg-black/30`}
-            aria-label={rOpen ? "Right eye open" : "Right eye closed"}
-          />
-        </div>
-        <div className="text-[9px] text-[var(--text-secondary)] mt-0.5">
-          {Math.round(face.leftEyeSharpness)} · {Math.round(face.rightEyeSharpness)}
-        </div>
-      </div>
+      )}
+      <AiSharpnessBadge score={sharpnessScore} />
     </div>
   );
 }

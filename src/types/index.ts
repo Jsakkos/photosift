@@ -67,10 +67,36 @@ export interface Face {
 
 export type AiProviderStatus = "cuda" | "cpu" | "disabled";
 
+/// Which eye open/closed classifier the backend is running. `mock`
+/// alternates deterministic 0/1 — not real signal, so the UI hides eye
+/// indicators and ranks groups by sharpness alone until a real model ships.
+export type EyeProviderKind = "mock" | "onnx";
+
+export interface AiStatusResponse {
+  provider: AiProviderStatus;
+  eyeProvider: EyeProviderKind;
+  analyzed: number;
+  failed: number;
+  total: number;
+}
+
 export interface AiProgressEvent {
   photoId: number;
   ok: boolean;
   done: number;
   total: number;
   failed: number;
+}
+
+/// Sharpness percentile cutoffs for the current shoot. Mapped into the
+/// 1-10 display badge in AiPanel so raw Laplacian scores remain
+/// meaningful across shoots with different detail density.
+export interface SharpnessPercentiles {
+  p10: number;
+  p30: number;
+  p50: number;
+  p70: number;
+  p90: number;
+  analyzedCount: number;
+  analyzedMaxTs: string | null;
 }
