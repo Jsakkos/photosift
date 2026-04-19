@@ -9,6 +9,7 @@ use image::GenericImageView;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 pub struct WorkerHandle {
     pub sender: Sender<AiJob>,
@@ -23,13 +24,24 @@ pub fn process_job(
     eyes_provider: &dyn EyeStateProvider,
 ) -> Result<()> {
     let preview_path = Path::new(&job.preview_path);
+    let t_start = Instant::now();
     let img = image::open(preview_path)
         .with_context(|| format!("open preview {}", job.preview_path))?;
     let (img_w, img_h) = img.dimensions();
+    let t_decode = t_start.elapsed();
+    // Face detection runs on RGB (YuNet was trained on BGR but the provider
+    // handles the channel swap internally). Eye classification and sharpness
+    // then reuse a grayscale copy derived from the same decoded pixels, so
+    // we're still at one disk read + one JPEG decode per photo.
+    let rgb = img.to_rgb8();
     let gray = img.to_luma8();
+    let t_convert = t_start.elapsed() - t_decode;
 
-    let faces = faces_provider.detect(&gray)?;
+    let t_face_start = Instant::now();
+    let faces = faces_provider.detect(&rgb)?;
+    let t_faces = t_face_start.elapsed();
 
+    let t_eye_start = Instant::now();
     let mut face_rows = Vec::with_capacity(faces.len());
     let mut open_count = 0;
     for face in &faces {
@@ -60,12 +72,29 @@ pub fn process_job(
     // Whole-image sharpness on the already-decoded gray image.
     let raw = laplacian_variance(&gray);
     let whole = normalize_sharpness(raw);
-    log::debug!(
-        "ai::worker photo={} faces={} raw_sharp={:.1} norm_sharp={:.1}",
+    let t_eye_sharp = t_eye_start.elapsed();
+    let t_total = t_start.elapsed();
+
+    // Composite quality score (0-100). Sharpness-dominant today with a
+    // small face-presence bump; when the mock eye classifier is swapped
+    // for a real ONNX model we'll factor in eye-open ratio, and mouth/smile
+    // when D1 unblocks. Ranking is within a group so the absolute scale
+    // doesn't matter much — relative order does.
+    let face_bonus = if !faces.is_empty() { 15.0 } else { 0.0 };
+    let quality = (whole * 0.85 + face_bonus).clamp(0.0, 100.0);
+
+    log::info!(
+        "ai::worker photo={} dims={}x{} faces={} total={:.1}ms (decode={:.1}ms cvt={:.1}ms face={:.1}ms eye+sharp={:.1}ms) sharp={:.1}",
         job.photo_id,
+        img_w,
+        img_h,
         faces.len(),
-        raw,
-        whole
+        t_total.as_secs_f64() * 1000.0,
+        t_decode.as_secs_f64() * 1000.0,
+        t_convert.as_secs_f64() * 1000.0,
+        t_faces.as_secs_f64() * 1000.0,
+        t_eye_sharp.as_secs_f64() * 1000.0,
+        whole,
     );
 
     db.write_ai_result(
@@ -74,6 +103,7 @@ pub fn process_job(
         Some(faces.len() as i32),
         Some(open_count),
         Some(whole),
+        Some(quality),
     )?;
     Ok(())
 }

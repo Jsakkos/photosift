@@ -9,6 +9,10 @@ export interface ImageEntry {
   aperture: number | null;
   shutterSpeed: string | null;
   iso: number | null;
+  /// EXIF orientation (1–8). The preview and thumbnail on disk are
+  /// already pre-rotated at ingest, so UI code only needs this for
+  /// surfacing a "rotated" hint in the metadata overlay.
+  orientation?: number | null;
   flag: string;
   destination: string;
   starRating: number;
@@ -16,6 +20,9 @@ export interface ImageEntry {
   faceCount?: number | null;
   eyesOpenCount?: number | null;
   sharpnessScore?: number | null;
+  /// Composite 0-100 quality score used for within-group ranking.
+  /// Higher = better. Null when AI hasn't analyzed this photo yet.
+  qualityScore?: number | null;
   aiAnalyzedAt?: string | null;
 }
 
@@ -38,6 +45,9 @@ export interface ShootSummary {
   // never opened the shoot.
   lastView?: CullView | null;
   lastOpenedAt?: string | null;
+  /// Photo id chosen as the shoot's cover thumbnail; shows up on the
+  /// shoot list. Null on shoots imported before this field existed.
+  coverPhotoId?: number | null;
 }
 
 export type CullView = "triage" | "select" | "route";

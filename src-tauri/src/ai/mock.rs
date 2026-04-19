@@ -1,7 +1,7 @@
 use crate::ai::eye::{EyeStateProvider, NormBox, NormPoint};
 use crate::ai::face::{DetectedFace, FaceProvider};
 use anyhow::Result;
-use image::GrayImage;
+use image::{GrayImage, RgbImage};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 /// Test double: returns preset canned faces + a deterministic alternating
@@ -24,7 +24,7 @@ impl Default for MockFaceProvider {
 }
 
 impl FaceProvider for MockFaceProvider {
-    fn detect(&self, _: &GrayImage) -> Result<Vec<DetectedFace>> {
+    fn detect(&self, _: &RgbImage) -> Result<Vec<DetectedFace>> {
         Ok(self.fixed_faces.clone())
     }
 }

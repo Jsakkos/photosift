@@ -4,5 +4,6 @@ pub mod export;
 pub mod image;
 pub mod import;
 pub mod rating;
+pub mod scan;
 pub mod settings;
 pub mod shoots;

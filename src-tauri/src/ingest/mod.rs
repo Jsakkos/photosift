@@ -8,12 +8,13 @@ pub mod thumbnail;
 pub mod walker;
 
 use crate::db::schema::{Database, PhotoInsert};
-use crate::metadata::{exif, xmp};
+use crate::metadata::{exif, orientation, xmp};
 use progress::{ImportComplete, ImportPhase, ImportProgress};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug)]
@@ -62,12 +63,21 @@ pub fn run_import(
     slug: String,
     import_mode: ImportMode,
     cancel: Arc<AtomicBool>,
+    selected_paths: Option<Vec<PathBuf>>,
 ) -> Result<i64, String> {
     let db = Database::open_global().map_err(|e| e.to_string())?;
     let db = Mutex::new(db);
     // Phase 1: Walk source
     emit_progress(&app, 0, ImportPhase::Walking, 0, 0, "");
-    let files = walker::walk_source(&source);
+    let mut files = walker::walk_source(&source);
+    // Pre-import selection filter: when the user cherry-picked from the
+    // scan dialog we intersect on absolute paths. Preserves walker order
+    // so counters and progress events still make sense.
+    if let Some(selected) = selected_paths {
+        use std::collections::HashSet;
+        let wanted: HashSet<PathBuf> = selected.into_iter().collect();
+        files.retain(|p| wanted.contains(p));
+    }
     if files.is_empty() {
         return Err("No supported image files found in source directory".into());
     }
@@ -167,6 +177,15 @@ pub fn run_import(
             .insert_photos_batch(shoot_id, &inserts)
             .map_err(|e| e.to_string())?
     };
+
+    // Seed the shoot cover with the first imported photo. A later
+    // AI-pick pass can overwrite via `force_set_shoot_cover`; the
+    // `_if_unset` variant won't clobber a user- or AI-chosen cover.
+    if let Some(&first_id) = photo_ids.first() {
+        if let Ok(db_guard) = db.lock() {
+            let _ = db_guard.set_shoot_cover_if_unset(shoot_id, first_id);
+        }
+    }
 
     // Write preview/thumb files and update paths (now that we have photo_ids)
     {
@@ -268,7 +287,10 @@ fn process_one_file(
     db: &Mutex<Database>,
     import_mode: ImportMode,
 ) -> ProcessedFile {
+    let t_start = Instant::now();
+
     // 1. SHA-256
+    let t_sha = Instant::now();
     let content_hash = match hashing::sha256_stream(src_path) {
         Ok(h) => h,
         Err(e) => {
@@ -276,6 +298,7 @@ fn process_one_file(
             return ProcessedFile::Skipped;
         }
     };
+    let sha_ms = t_sha.elapsed().as_secs_f64() * 1000.0;
 
     // 2. Dedup check
     if let Ok(guard) = db.lock() {
@@ -291,7 +314,9 @@ fn process_one_file(
         .to_string();
 
     // 3. EXIF
+    let t_exif = Instant::now();
     let exif_data = exif::extract_exif(src_path).ok();
+    let exif_ms = t_exif.elapsed().as_secs_f64() * 1000.0;
 
     // 3b. Look for an existing XMP sidecar next to the source file. If present,
     // prefer its rating/label over EXIF (XMP is the more recently-written
@@ -304,6 +329,7 @@ fn process_one_file(
 
     // 4. In copy mode, copy file into the canonical location. In in-place
     //    mode, raw_path is simply the source path (the file is left where it is).
+    let t_copy = Instant::now();
     let raw_path = match import_mode {
         ImportMode::Copy => {
             let dest = copy::plan_dest(shoot_dir, &filename);
@@ -317,11 +343,13 @@ fn process_one_file(
         }
         ImportMode::InPlace => src_path.to_path_buf(),
     };
+    let copy_ms = t_copy.elapsed().as_secs_f64() * 1000.0;
 
     // 5-8. Extract primary JPEG bytes (kept for the disk preview) and
     // also try to decode any embedded JPEG candidate (NEFs usually have
     // a smaller standard-baseline preview that decodes even when the
     // full-resolution JPEG uses arithmetic coding or 12-bit precision).
+    let t_preview = Instant::now();
     let (preview_bytes, decoded) = match preview::extract_and_decode(&raw_path) {
         Ok(v) => v,
         Err(e) => {
@@ -329,7 +357,31 @@ fn process_one_file(
             return ProcessedFile::Skipped;
         }
     };
+    let preview_ms = t_preview.elapsed().as_secs_f64() * 1000.0;
 
+    // 5b. If EXIF says the camera was rotated, upright both the decoded
+    // image and the on-disk preview bytes now. Downstream consumers
+    // (thumbnail, pHash, AI worker reading from disk) then all agree on
+    // the same rotated-space coordinates.
+    let t_rotate = Instant::now();
+    let orientation_tag = exif_data.as_ref().and_then(|e| e.orientation);
+    let (preview_bytes, decoded) = match decoded {
+        Some(img) => match orientation::apply_and_reencode(img, orientation_tag, preview_bytes) {
+            Ok((bytes, rotated)) => (bytes, Some(rotated)),
+            Err(e) => {
+                log::error!(
+                    "Orientation apply failed for {:?}: {} (skipping)",
+                    raw_path,
+                    e
+                );
+                return ProcessedFile::Skipped;
+            }
+        },
+        None => (preview_bytes, None),
+    };
+    let rotate_ms = t_rotate.elapsed().as_secs_f64() * 1000.0;
+
+    let t_thumb_phash = Instant::now();
     let (thumb_bytes, phash_val) = match decoded {
         Some(img) => {
             let thumb = thumbnail::make_thumb(&img).ok();
@@ -338,6 +390,20 @@ fn process_one_file(
         }
         None => (None, None),
     };
+    let thumb_phash_ms = t_thumb_phash.elapsed().as_secs_f64() * 1000.0;
+
+    let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+    log::info!(
+        "ingest::process_one_file {} total={:.1}ms (sha={:.1} exif={:.1} copy={:.1} preview={:.1} rotate={:.1} thumb+phash={:.1})",
+        filename,
+        total_ms,
+        sha_ms,
+        exif_ms,
+        copy_ms,
+        preview_ms,
+        rotate_ms,
+        thumb_phash_ms,
+    );
 
     let _ = previews_dir;
     let _ = thumbs_dir;
@@ -356,6 +422,7 @@ fn process_one_file(
         aperture: exif_data.as_ref().and_then(|e| e.aperture),
         shutter_speed: exif_data.as_ref().and_then(|e| e.shutter_speed.clone()),
         iso: exif_data.as_ref().and_then(|e| e.iso),
+        orientation: orientation_tag,
         initial_flag,
         initial_star_rating,
     };

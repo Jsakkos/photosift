@@ -152,6 +152,7 @@ pub fn run() {
             commands::shoots::delete_shoot,
             commands::import::start_import,
             commands::import::cancel_import,
+            commands::scan::scan_folder,
             commands::image::get_image_list,
             commands::image::get_image_metadata,
             commands::rating::set_rating,

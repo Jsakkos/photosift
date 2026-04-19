@@ -1,12 +1,13 @@
 use crate::ai::eye::{NormBox, NormPoint};
 use crate::ai::AiProviderStatus;
 use anyhow::{anyhow, Result};
-use image::GrayImage;
+use image::RgbImage;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct DetectedFace {
@@ -17,7 +18,10 @@ pub struct DetectedFace {
 }
 
 pub trait FaceProvider: Send + Sync {
-    fn detect(&self, gray: &GrayImage) -> Result<Vec<DetectedFace>>;
+    /// Detect faces in an RGB image. YuNet was trained on BGR-formatted
+    /// OpenCV inputs; real providers are expected to handle the
+    /// channel-order conversion internally. The mock ignores the input.
+    fn detect(&self, rgb: &RgbImage) -> Result<Vec<DetectedFace>>;
 }
 
 /// Real face detector backed by the YuNet 2023mar ONNX model.
@@ -58,29 +62,57 @@ impl YuNetProvider {
     /// provider along with the status that actually applied so the UI
     /// can reflect the real backend.
     pub fn load(model_path: &Path, try_cuda: bool) -> Result<(Self, AiProviderStatus)> {
-        let (session, status) = if try_cuda {
+        let (mut session, status) = if try_cuda {
             match Self::build_session(model_path, true) {
-                Ok(s) => (s, AiProviderStatus::Cuda),
+                Ok(s) => {
+                    log::info!("YuNet loaded on CUDA (GPU execution)");
+                    (s, AiProviderStatus::Cuda)
+                }
                 Err(e) => {
                     log::warn!("YuNet CUDA load failed ({}); falling back to CPU", e);
-                    (
-                        Self::build_session(model_path, false)?,
-                        AiProviderStatus::Cpu,
-                    )
+                    let session = Self::build_session(model_path, false)?;
+                    log::info!("YuNet loaded on CPU");
+                    (session, AiProviderStatus::Cpu)
                 }
             }
         } else {
-            (
-                Self::build_session(model_path, false)?,
-                AiProviderStatus::Cpu,
-            )
+            let session = Self::build_session(model_path, false)?;
+            log::info!("YuNet loaded on CPU");
+            (session, AiProviderStatus::Cpu)
         };
+
+        // Prime the session with one dummy inference so the first
+        // user-visible photo doesn't absorb the JIT / allocator cost.
+        // A failure here is non-fatal — we still return the loaded
+        // provider; the first real inference just pays the warmup tax.
+        if let Err(e) = Self::warmup(&mut session) {
+            log::warn!("YuNet warmup failed (continuing anyway): {:#}", e);
+        }
+
         Ok((
             YuNetProvider {
                 session: Mutex::new(session),
             },
             status,
         ))
+    }
+
+    fn warmup(session: &mut Session) -> Result<()> {
+        let t0 = Instant::now();
+        let dummy = vec![0.0_f32; 3 * INPUT_SIDE * INPUT_SIDE];
+        let tensor = Tensor::from_array((
+            vec![1_i64, 3, INPUT_SIDE as i64, INPUT_SIDE as i64],
+            dummy,
+        ))
+        .map_err(|e| anyhow!("warmup tensor: {}", e))?;
+        let _ = session
+            .run(ort::inputs!["input" => tensor])
+            .map_err(|e| anyhow!("warmup run: {}", e))?;
+        log::info!(
+            "YuNet warmup complete in {:.1}ms",
+            t0.elapsed().as_secs_f64() * 1000.0
+        );
+        Ok(())
     }
 
     fn build_session(model_path: &Path, cuda: bool) -> Result<Session> {
@@ -110,10 +142,12 @@ impl YuNetProvider {
     }
 }
 
-/// Letterbox-resize a grayscale image into a flat f32 NCHW RGB buffer
-/// sized 1×3×640×640 (grayscale duplicated across three channels).
-/// Returns the buffer plus scale + padding so the caller can map
-/// detections back to original-image coordinates.
+/// Letterbox-resize an RGB image into a flat f32 NCHW buffer sized
+/// 1×3×640×640 with BGR channel order. YuNet 2023mar (opencv_zoo) was
+/// trained on BGR-formatted inputs from OpenCV's `cv2.imread`, so we
+/// match that convention rather than feeding RGB directly. Passing
+/// grayscale-replicated bytes — what this pipeline did before — left
+/// the model blind to skin-tone cues and depressed recall.
 ///
 /// `scale` = model-pixels per source-pixel. `pad_x`/`pad_y` are offsets
 /// (in model-pixel units) of the source image's top-left corner within
@@ -125,8 +159,8 @@ struct Letterbox {
     pad_y: u32,
 }
 
-fn letterbox_to_640(gray: &GrayImage) -> Letterbox {
-    let (src_w, src_h) = gray.dimensions();
+fn letterbox_to_640(rgb: &RgbImage) -> Letterbox {
+    let (src_w, src_h) = rgb.dimensions();
     let side = INPUT_SIDE as f32;
     let scale = (side / src_w as f32).min(side / src_h as f32);
     let new_w = ((src_w as f32) * scale).round() as u32;
@@ -135,26 +169,25 @@ fn letterbox_to_640(gray: &GrayImage) -> Letterbox {
     let pad_y = ((INPUT_SIDE as u32).saturating_sub(new_h)) / 2;
 
     let resized = image::imageops::resize(
-        gray,
+        rgb,
         new_w,
         new_h,
         image::imageops::FilterType::Triangle,
     );
 
-    // Build [1, 3, 640, 640] NCHW as a flat Vec. Layout: channel stride
-    // 640*640, row stride 640. Grayscale duplicated into all three
-    // channels — YuNet ignores channel identity for gray input.
+    // Build [1, 3, 640, 640] NCHW as a flat Vec with BGR layout.
+    // Channel 0 = B, channel 1 = G, channel 2 = R. Padding stays zero.
     let plane = INPUT_SIDE * INPUT_SIDE;
     let mut data = vec![0.0_f32; 3 * plane];
     for y in 0..new_h {
         for x in 0..new_w {
-            let v = resized.get_pixel(x, y).0[0] as f32;
+            let p = resized.get_pixel(x, y).0;
             let ty = (pad_y + y) as usize;
             let tx = (pad_x + x) as usize;
             let pos = ty * INPUT_SIDE + tx;
-            data[pos] = v;
-            data[plane + pos] = v;
-            data[2 * plane + pos] = v;
+            data[pos] = p[2] as f32;            // B
+            data[plane + pos] = p[1] as f32;    // G
+            data[2 * plane + pos] = p[0] as f32; // R
         }
     }
     Letterbox {
@@ -323,13 +356,13 @@ fn finalize(det: RawDetection, lb: &Letterbox, src_w: u32, src_h: u32) -> Detect
 }
 
 impl FaceProvider for YuNetProvider {
-    fn detect(&self, gray: &GrayImage) -> Result<Vec<DetectedFace>> {
-        let (src_w, src_h) = gray.dimensions();
+    fn detect(&self, rgb: &RgbImage) -> Result<Vec<DetectedFace>> {
+        let (src_w, src_h) = rgb.dimensions();
         if src_w == 0 || src_h == 0 {
             return Ok(Vec::new());
         }
 
-        let lb = letterbox_to_640(gray);
+        let lb = letterbox_to_640(rgb);
         // ort 2.x accepts `(shape, Vec<T>)` for Tensor construction;
         // avoids the ndarray-version mismatch between the ort and
         // workspace copies of the crate.
@@ -439,17 +472,49 @@ mod tests {
 
     #[test]
     fn test_letterbox_preserves_aspect() {
-        use image::{ImageBuffer, Luma};
+        use image::{ImageBuffer, Rgb, RgbImage};
         // Square source → zero padding.
-        let sq: GrayImage = ImageBuffer::from_fn(100, 100, |_, _| Luma([128]));
+        let sq: RgbImage = ImageBuffer::from_fn(100, 100, |_, _| Rgb([128, 128, 128]));
         let lb = letterbox_to_640(&sq);
         assert_eq!(lb.pad_x, 0);
         assert_eq!(lb.pad_y, 0);
         // Wide source → vertical padding.
-        let wide: GrayImage = ImageBuffer::from_fn(200, 100, |_, _| Luma([128]));
+        let wide: RgbImage = ImageBuffer::from_fn(200, 100, |_, _| Rgb([128, 128, 128]));
         let lb2 = letterbox_to_640(&wide);
         assert_eq!(lb2.pad_x, 0);
         assert!(lb2.pad_y > 0);
+    }
+
+    #[test]
+    fn test_letterbox_feeds_bgr_channel_order() {
+        use image::{ImageBuffer, Rgb, RgbImage};
+        // Pure R=200, G=50, B=20 so each channel is distinguishable.
+        // Square input so the content fills the 640×640 canvas with no padding
+        // and we can sample any interior pixel without hitting pad=0.
+        let src: RgbImage = ImageBuffer::from_fn(320, 320, |_, _| Rgb([200, 50, 20]));
+        let lb = letterbox_to_640(&src);
+
+        let plane = INPUT_SIDE * INPUT_SIDE;
+        let center = (INPUT_SIDE / 2) * INPUT_SIDE + (INPUT_SIDE / 2);
+
+        // YuNet was trained via OpenCV's imread (BGR). Tensor channel 0 = B,
+        // channel 1 = G, channel 2 = R. Filter::Triangle can round integer
+        // samples by a pixel so allow ±2.
+        assert!(
+            (lb.data[center] - 20.0).abs() < 2.0,
+            "channel 0 should be B≈20, got {}",
+            lb.data[center]
+        );
+        assert!(
+            (lb.data[plane + center] - 50.0).abs() < 2.0,
+            "channel 1 should be G≈50, got {}",
+            lb.data[plane + center]
+        );
+        assert!(
+            (lb.data[2 * plane + center] - 200.0).abs() < 2.0,
+            "channel 2 should be R≈200, got {}",
+            lb.data[2 * plane + center]
+        );
     }
 
     #[test]
@@ -545,7 +610,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_yunet_runs_inference_on_blank_image() {
-        use image::{ImageBuffer, Luma};
+        use image::{ImageBuffer, Rgb};
 
         let model_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src/ai/models/yunet.onnx");
@@ -565,8 +630,8 @@ mod tests {
             }
         };
 
-        // Uniform gray — no faces possible.
-        let img: GrayImage = ImageBuffer::from_fn(300, 400, |_, _| Luma([128]));
+        // Uniform mid-gray RGB — no faces possible.
+        let img: RgbImage = ImageBuffer::from_fn(300, 400, |_, _| Rgb([128, 128, 128]));
         let faces = provider.detect(&img).expect("detect should not error");
         assert!(faces.is_empty(), "expected 0 faces on uniform gray, got {}", faces.len());
     }

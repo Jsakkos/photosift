@@ -26,7 +26,8 @@ const SHOOT_SUMMARY_SQL_LIST: &str =
        COALESCE(SUM(CASE WHEN p.flag = 'reject' THEN 1 ELSE 0 END), 0) AS rejects, \
        COALESCE(SUM(CASE WHEN p.flag = 'unreviewed' THEN 1 ELSE 0 END), 0) AS unreviewed, \
        (SELECT view_name FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_view, \
-       (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at \
+       (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at, \
+       s.cover_photo_id AS cover_photo_id \
      FROM shoots s LEFT JOIN photos p ON p.shoot_id = s.id \
      GROUP BY s.id ORDER BY s.date DESC, s.id DESC";
 
@@ -36,7 +37,8 @@ const SHOOT_SUMMARY_SQL_ONE: &str =
        COALESCE(SUM(CASE WHEN p.flag = 'reject' THEN 1 ELSE 0 END), 0) AS rejects, \
        COALESCE(SUM(CASE WHEN p.flag = 'unreviewed' THEN 1 ELSE 0 END), 0) AS unreviewed, \
        (SELECT view_name FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_view, \
-       (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at \
+       (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at, \
+       s.cover_photo_id AS cover_photo_id \
      FROM shoots s LEFT JOIN photos p ON p.shoot_id = s.id \
      WHERE s.id = ?1 GROUP BY s.id";
 
@@ -55,6 +57,7 @@ fn row_to_shoot(row: &Row<'_>) -> Result<ShootRow> {
         unreviewed: row.get(10)?,
         last_view: row.get(11)?,
         last_opened_at: row.get(12)?,
+        cover_photo_id: row.get(13)?,
     })
 }
 
@@ -84,6 +87,11 @@ pub struct ShootRow {
     // left off. Null when the user has never opened the shoot.
     pub last_view: Option<String>,
     pub last_opened_at: Option<String>,
+    /// Photo to render as this shoot's cover on the shoot list. Populated
+    /// at import time with the first photo id; AI can overwrite with a
+    /// preferred pick later. `None` for legacy shoots imported before
+    /// this field existed.
+    pub cover_photo_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -101,6 +109,11 @@ pub struct PhotoRow {
     pub aperture: Option<f64>,
     pub shutter_speed: Option<String>,
     pub iso: Option<i32>,
+    /// EXIF orientation value (1-8) at import time. The preview JPEG and
+    /// thumbnail on disk have already had this rotation baked in; the
+    /// field is kept around so the UI can surface "rotated from portrait"
+    /// hints and so future tooling can round-trip to XMP.
+    pub orientation: Option<i32>,
     pub flag: String,
     pub destination: String,
     pub star_rating: i32,
@@ -108,6 +121,10 @@ pub struct PhotoRow {
     pub face_count: Option<i32>,
     pub eyes_open_count: Option<i32>,
     pub sharpness_score: Option<f64>,
+    /// Composite 0-100 quality score used for within-group ranking.
+    /// Combines sharpness with face presence (and later eye/mouth when
+    /// those classifiers are real). Higher is better.
+    pub quality_score: Option<f64>,
     pub ai_analyzed_at: Option<String>,
 }
 
@@ -221,6 +238,7 @@ pub struct PhotoInsert {
     pub aperture: Option<f64>,
     pub shutter_speed: Option<String>,
     pub iso: Option<i32>,
+    pub orientation: Option<i32>,
     /// Initial flag from EXIF/XMP sidecar at import time.
     /// Defaults to "unreviewed" when not provided.
     pub initial_flag: Option<String>,
@@ -259,7 +277,8 @@ impl Database {
                 dest_path TEXT NOT NULL,
                 photo_count INTEGER NOT NULL DEFAULT 0,
                 imported_at TEXT NOT NULL DEFAULT (datetime('now')),
-                import_mode TEXT NOT NULL DEFAULT 'copy'
+                import_mode TEXT NOT NULL DEFAULT 'copy',
+                cover_photo_id INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS photos (
@@ -278,10 +297,12 @@ impl Database {
                 aperture REAL,
                 shutter_speed TEXT,
                 iso INTEGER,
+                orientation INTEGER,
                 flag TEXT NOT NULL DEFAULT 'unreviewed',
                 destination TEXT NOT NULL DEFAULT 'unrouted',
                 star_rating INTEGER NOT NULL DEFAULT 0,
                 sharpness_score REAL,
+                quality_score REAL,
                 UNIQUE(content_hash)
             );
             CREATE INDEX IF NOT EXISTS idx_photos_shoot ON photos(shoot_id);
@@ -348,6 +369,9 @@ impl Database {
         self.ensure_column("photos", "face_count", "INTEGER")?;
         self.ensure_column("photos", "eyes_open_count", "INTEGER")?;
         self.ensure_column("photos", "ai_analyzed_at", "TEXT")?;
+        self.ensure_column("photos", "orientation", "INTEGER")?;
+        self.ensure_column("shoots", "cover_photo_id", "INTEGER")?;
+        self.ensure_column("photos", "quality_score", "REAL")?;
         self.create_faces_table()?;
         self.ensure_column("settings", "enable_ai_on_import", "INTEGER NOT NULL DEFAULT 1")?;
         self.ensure_column("settings", "hide_soft_threshold", "INTEGER NOT NULL DEFAULT 30")?;
@@ -431,6 +455,19 @@ impl Database {
         Ok(())
     }
 
+    /// Set a shoot's cover thumbnail. Only writes when the current cover
+    /// is NULL — that way a later AI-pick override can call
+    /// `force_set_shoot_cover` without this import-time helper clobbering
+    /// it back to the first-photo default.
+    pub fn set_shoot_cover_if_unset(&self, shoot_id: i64, photo_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE shoots SET cover_photo_id = ?2
+             WHERE id = ?1 AND cover_photo_id IS NULL",
+            params![shoot_id, photo_id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_shoot(&self, shoot_id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM shoots WHERE id = ?1", params![shoot_id])?;
@@ -479,9 +516,9 @@ impl Database {
                 "INSERT INTO photos (
                     shoot_id, filename, raw_path, preview_path, thumb_path,
                     content_hash, phash, exif_date, camera, lens,
-                    focal_length, aperture, shutter_speed, iso,
+                    focal_length, aperture, shutter_speed, iso, orientation,
                     flag, star_rating
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             )?;
             for p in photos {
                 let flag = p.initial_flag.clone().unwrap_or_else(|| "unreviewed".into());
@@ -501,6 +538,7 @@ impl Database {
                     p.aperture,
                     p.shutter_speed,
                     p.iso,
+                    p.orientation,
                     flag,
                     rating,
                 ])?;
@@ -532,8 +570,8 @@ impl Database {
         self.conn.query_row(
             "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
-                    iso, flag, destination, star_rating,
-                    face_count, eyes_open_count, sharpness_score, ai_analyzed_at
+                    iso, orientation, flag, destination, star_rating,
+                    face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at
              FROM photos WHERE id = ?1",
             params![photo_id],
             row_to_photo,
@@ -544,8 +582,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
-                    iso, flag, destination, star_rating,
-                    face_count, eyes_open_count, sharpness_score, ai_analyzed_at
+                    iso, orientation, flag, destination, star_rating,
+                    face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at
              FROM photos
              WHERE shoot_id = ?1
              ORDER BY exif_date ASC NULLS LAST, id ASC",
@@ -833,6 +871,7 @@ impl Database {
         face_count: Option<i32>,
         eyes_open_count: Option<i32>,
         sharpness_score: Option<f64>,
+        quality_score: Option<f64>,
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
         tx.execute("DELETE FROM faces WHERE photo_id = ?1", params![photo_id])?;
@@ -858,10 +897,10 @@ impl Database {
         }
         tx.execute(
             "UPDATE photos SET face_count = ?2, eyes_open_count = ?3,
-                               sharpness_score = ?4,
+                               sharpness_score = ?4, quality_score = ?5,
                                ai_analyzed_at = datetime('now')
              WHERE id = ?1",
-            params![photo_id, face_count, eyes_open_count, sharpness_score],
+            params![photo_id, face_count, eyes_open_count, sharpness_score, quality_score],
         )?;
         tx.commit()?;
         Ok(())
@@ -871,7 +910,8 @@ impl Database {
         let tx = self.conn.transaction()?;
         tx.execute(
             "UPDATE photos SET face_count = NULL, eyes_open_count = NULL,
-                               sharpness_score = NULL, ai_analyzed_at = NULL
+                               sharpness_score = NULL, quality_score = NULL,
+                               ai_analyzed_at = NULL
              WHERE shoot_id = ?1",
             params![shoot_id],
         )?;
@@ -1137,13 +1177,15 @@ fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {
         aperture: row.get(10)?,
         shutter_speed: row.get(11)?,
         iso: row.get(12)?,
-        flag: row.get(13)?,
-        destination: row.get(14)?,
-        star_rating: row.get(15)?,
-        face_count: row.get(16)?,
-        eyes_open_count: row.get(17)?,
-        sharpness_score: row.get(18)?,
-        ai_analyzed_at: row.get(19)?,
+        orientation: row.get(13)?,
+        flag: row.get(14)?,
+        destination: row.get(15)?,
+        star_rating: row.get(16)?,
+        face_count: row.get(17)?,
+        eyes_open_count: row.get(18)?,
+        sharpness_score: row.get(19)?,
+        quality_score: row.get(20)?,
+        ai_analyzed_at: row.get(21)?,
     })
 }
 
@@ -1193,6 +1235,7 @@ pub(crate) mod tests {
             aperture: Some(1.8),
             shutter_speed: Some("1/250".into()),
             iso: Some(400),
+            orientation: None,
             initial_flag: None,
             initial_star_rating: None,
         }
@@ -1296,6 +1339,31 @@ pub(crate) mod tests {
         assert_eq!(rows[0].flag, "unreviewed");
         assert_eq!(rows[0].destination, "unrouted");
         assert_eq!(rows[0].star_rating, 0);
+    }
+
+    #[test]
+    fn test_orientation_roundtrips() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("T", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+
+        let mut a = sample_insert(1, "a.nef");
+        a.orientation = Some(6);
+        let mut b = sample_insert(2, "b.nef");
+        b.orientation = None; // absent EXIF tag should stay None
+        let ids = db.insert_photos_batch(shoot_id, &[a, b]).unwrap();
+
+        let row_a = db.get_photo_by_id(ids[0]).unwrap();
+        let row_b = db.get_photo_by_id(ids[1]).unwrap();
+        assert_eq!(row_a.orientation, Some(6));
+        assert_eq!(row_b.orientation, None);
+
+        // photos_for_shoot must return the same orientation value; the UI
+        // reads from this list path, not get_photo_by_id.
+        let listed = db.photos_for_shoot(shoot_id).unwrap();
+        let listed_a = listed.iter().find(|r| r.id == ids[0]).unwrap();
+        assert_eq!(listed_a.orientation, Some(6));
     }
 
     #[test]

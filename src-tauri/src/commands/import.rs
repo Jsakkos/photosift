@@ -11,6 +11,10 @@ pub fn start_import(
     source_path: String,
     slug: String,
     import_mode: Option<String>,
+    // Optional per-file allow-list from the pre-import scan dialog. `None`
+    // falls back to the pre-C2 behavior of importing every supported file
+    // under `source_path`.
+    selected_paths: Option<Vec<String>>,
     app: AppHandle,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
@@ -36,10 +40,12 @@ pub fn start_import(
         app_state.import_cancel.clone()
     };
 
+    let selected = selected_paths.map(|v| v.into_iter().map(PathBuf::from).collect());
+
     // Clone state handle for the post-import hook.
     let app_for_ai = app.clone();
     std::thread::spawn(move || {
-        match ingest::run_import(app.clone(), source, slug_clean, mode, cancel_flag) {
+        match ingest::run_import(app.clone(), source, slug_clean, mode, cancel_flag, selected) {
             Ok(shoot_id) => {
                 log::info!("Import completed: shoot_id={}", shoot_id);
                 enqueue_ai_for_shoot(&app_for_ai, shoot_id);
