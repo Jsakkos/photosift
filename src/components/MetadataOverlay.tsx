@@ -1,11 +1,34 @@
 import { useProjectStore } from "../stores/projectStore";
 
+function orientationLabel(value: number | null | undefined): string | null {
+  switch (value) {
+    case 2:
+      return "flipped horizontal";
+    case 3:
+      return "rotated 180\u00b0";
+    case 4:
+      return "flipped vertical";
+    case 5:
+      return "transposed";
+    case 6:
+      return "rotated 90\u00b0 CW";
+    case 7:
+      return "transversed";
+    case 8:
+      return "rotated 90\u00b0 CCW";
+    default:
+      return null;
+  }
+}
+
 export function MetadataOverlay() {
   const { displayItems, currentIndex, showMetadata } = useProjectStore();
   if (!showMetadata) return null;
 
   const image = displayItems[currentIndex]?.image;
   if (!image) return null;
+
+  const orientation = orientationLabel(image.orientation);
 
   const lines = [
     image.filename,
@@ -20,6 +43,7 @@ export function MetadataOverlay() {
       .join("  \u00b7  ") || null,
     image.cameraModel,
     image.lens,
+    orientation,
   ].filter(Boolean);
 
   return (

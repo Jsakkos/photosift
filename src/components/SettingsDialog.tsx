@@ -3,6 +3,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
+import { useAiStore } from "../stores/aiStore";
+import type { AiProviderStatus } from "../types";
+
+function providerLabel(p: AiProviderStatus): { text: string; color: string } {
+  switch (p) {
+    case "cuda":
+      return { text: "GPU (CUDA)", color: "text-emerald-400" };
+    case "cpu":
+      return { text: "CPU (CUDA unavailable)", color: "text-amber-400" };
+    case "disabled":
+      return { text: "Disabled (model load failed)", color: "text-red-400" };
+  }
+}
 
 export function SettingsDialog() {
   const { isOpen, settings, closeDialog, updateSettings, reclusterShoot } =
@@ -23,6 +36,7 @@ export function SettingsDialog() {
   const [hideSoft, setHideSoft] = useState(settings.hideSoftThreshold);
   const [reanalyzing, setReanalyzing] = useState(false);
   const [reanalyzeMsg, setReanalyzeMsg] = useState<string | null>(null);
+  const aiProvider = useAiStore((s) => s.provider);
 
   useEffect(() => {
     if (isOpen) {
@@ -280,6 +294,13 @@ export function SettingsDialog() {
           <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
             AI analysis
           </h3>
+
+          <div className="mb-3 flex items-center justify-between text-sm">
+            <span className="text-[var(--text-secondary)]">Inference backend</span>
+            <span className={providerLabel(aiProvider).color}>
+              {providerLabel(aiProvider).text}
+            </span>
+          </div>
 
           <label className="flex items-center gap-2 text-sm text-[var(--text-primary)] cursor-pointer mb-3">
             <input

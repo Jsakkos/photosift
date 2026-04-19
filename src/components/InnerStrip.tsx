@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useProjectStore } from "../stores/projectStore";
+import { useAiStore } from "../stores/aiStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
+import { EyeStatusBadge } from "./EyeStatusBadge";
+import { computeGroupRanks, rankColorClass } from "../lib/groupRanking";
 
 const STRIP_WIDTH = 200;
 const THUMB_W = 160;
@@ -47,6 +50,9 @@ export function InnerStrip() {
       filename: string;
       flag: string;
       starRating: number;
+      qualityScore: number | null | undefined;
+      faceCount: number | null | undefined;
+      eyesOpenCount: number | null | undefined;
       isAiPick?: boolean;
     }[] = [];
     for (let i = 0; i < displayItems.length; i++) {
@@ -58,12 +64,25 @@ export function InnerStrip() {
           filename: di.image.filename,
           flag: di.image.flag,
           starRating: di.image.starRating,
+          qualityScore: di.image.qualityScore,
+          faceCount: di.image.faceCount,
+          eyesOpenCount: di.image.eyesOpenCount,
           isAiPick: di.isAiPick,
         });
       }
     }
     return entries;
   }, [activeInnerGroupId, displayItems]);
+
+  const eyeProvider = useAiStore((s) => s.eyeProvider);
+
+  const ranks = useMemo(
+    () =>
+      computeGroupRanks(
+        memberEntries.map((e) => ({ id: e.imageId, qualityScore: e.qualityScore })),
+      ),
+    [memberEntries],
+  );
 
   const highlightIdx = memberEntries.findIndex(
     (m) => m.displayIndex === currentIndex,
@@ -137,6 +156,29 @@ export function InnerStrip() {
                 )}
                 {entry.flag === "reject" && (
                   <div className="absolute top-1 left-1 w-3 h-3 rounded-full bg-red-500" />
+                )}
+                {(() => {
+                  const r = ranks.get(entry.imageId);
+                  const cls = rankColorClass(r?.color ?? null);
+                  if (!cls || r == null || r.rank == null) return null;
+                  const total = memberEntries.length;
+                  const q = entry.qualityScore;
+                  const tooltip =
+                    typeof q === "number"
+                      ? `Rank ${r.rank + 1} of ${total} \u00b7 quality ${q.toFixed(0)}/100`
+                      : `Rank ${r.rank + 1} of ${total}`;
+                  return (
+                    <div
+                      className={`absolute bottom-1 right-1 w-2.5 h-2.5 rounded-full ring-1 ring-black/40 ${cls}`}
+                      title={tooltip}
+                    />
+                  );
+                })()}
+                {eyeProvider === "onnx" && (
+                  <EyeStatusBadge
+                    faceCount={entry.faceCount}
+                    eyesOpenCount={entry.eyesOpenCount}
+                  />
                 )}
                 {entry.isAiPick && <AiPickBadge />}
                 {entry.starRating > 0 && (

@@ -59,7 +59,13 @@ export function AiPanel({ photoId, visible }: Props) {
       className="flex flex-col gap-2 p-2 text-[12px] text-[var(--text-primary)] overflow-y-auto"
     >
       {hasFaces && (
-        <div className="grid grid-cols-2 gap-2">
+        <div
+          className={`grid gap-2 ${
+            visibleFaces.length + (overflow > 0 ? 1 : 0) === 1
+              ? "grid-cols-1"
+              : "grid-cols-2"
+          }`}
+        >
           {visibleFaces.map((f, i) => (
             <FaceTile
               key={i}

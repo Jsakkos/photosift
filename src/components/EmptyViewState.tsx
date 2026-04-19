@@ -43,12 +43,24 @@ function copy(
         body:
           "Every photo has been reviewed. Switch to Select to compare picks within groups, or to Route to mark them for edit/publish.",
       };
-    case "select":
+    case "select": {
+      // Two reasons Select can be empty:
+      //   (a) literally no picks yet — user hasn't triaged
+      //   (b) picks exist but were rejected or filtered (e.g. hide-soft
+      //       threshold is hiding them)
+      const picks = images.filter((i) => i.flag === "pick").length;
+      if (picks > 0) {
+        return {
+          title: "No picks shown",
+          body: `You have ${picks} pick${picks === 1 ? "" : "s"} but none match the current filter. Check the hide-soft threshold in Settings, or flip "Select view requires pick" off to include unreviewed photos.`,
+        };
+      }
       return {
         title: "Nothing to select",
         body:
-          "No picks yet — run Triage first. If you already triaged, toggle the `select_requires_pick` setting to include unreviewed photos.",
+          "No picks yet \u2014 run Triage first, then come back to Select to compare winners within each burst.",
       };
+    }
     case "route": {
       // Distinguish the two reasons Route can be empty: (a) no more
       // unrouted picks at all, or (b) unrouted picks exist but

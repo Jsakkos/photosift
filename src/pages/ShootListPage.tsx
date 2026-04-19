@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useShootListStore } from "../stores/shootListStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { ImportDialog } from "../components/ImportDialog";
+import { thumbUrl } from "../hooks/useImageLoader";
 import type { CullView } from "../types";
 
 /// Compact relative-time formatter. Buckets into "just now / Xm ago /
@@ -145,8 +146,23 @@ export function ShootListPage() {
                       open();
                     }
                   }}
-                  className="relative text-left p-4 rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-white/5 hover:border-white/10 transition-colors cursor-pointer flex flex-col gap-2"
+                  className="relative text-left rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-white/5 hover:border-white/10 transition-colors cursor-pointer flex flex-col overflow-hidden"
                 >
+                  {shoot.coverPhotoId != null ? (
+                    <img
+                      src={thumbUrl(shoot.coverPhotoId)}
+                      alt=""
+                      loading="lazy"
+                      draggable={false}
+                      className="w-full aspect-[3/2] object-cover bg-black/40"
+                    />
+                  ) : (
+                    <div className="w-full aspect-[3/2] bg-[var(--bg-primary)] border-b border-white/5 flex items-center justify-center text-[var(--text-secondary)]/40 text-xs">
+                      No preview
+                    </div>
+                  )}
+
+                  <div className="p-4 flex flex-col gap-2">
                   <div>
                     <div className="font-medium text-[var(--text-primary)] text-lg pr-8 leading-tight">
                       {shoot.slug}
@@ -191,6 +207,7 @@ export function ShootListPage() {
                       Not yet opened
                     </span>
                   )}
+                  </div>
 
                   <button
                     type="button"
