@@ -63,14 +63,6 @@ interface UndoEntry {
   }[];
 }
 
-/// Adapter between the new single-valued `activeInnerGroupId` state
-/// and `computeDisplayItems`, which still takes a Set for historical
-/// reasons (it used to support expanding multiple groups at once — the
-/// Narrative-Select UX only needs one active drilldown at a time).
-function expandedSet(activeInnerGroupId: number | null): Set<number> {
-  return activeInnerGroupId != null ? new Set([activeInnerGroupId]) : new Set<number>();
-}
-
 /// Wrapper around `computeDisplayItems` that applies the Narrative-
 /// Select drill-down filter: when an inner group is active, the
 /// visible (keyboard-navigable) set shrinks to just that group's
@@ -84,19 +76,57 @@ function computeDisplayItemsFiltered(
   routeMinStarGate: number,
   aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
 ): DisplayItem[] {
-  const base = computeDisplayItems(
-    images,
-    currentView,
-    groups,
-    expandedSet(activeInnerGroupId),
-    selectRequiresPickFilter,
-    routeMinStarGate,
-    aiOptions,
-  );
-  if (activeInnerGroupId == null) return base;
-  return base.filter(
-    (di) => di.groupId === activeInnerGroupId && !di.isGroupCover,
-  );
+  if (activeInnerGroupId == null) {
+    return computeDisplayItems(
+      images,
+      currentView,
+      groups,
+      new Set<number>(),
+      selectRequiresPickFilter,
+      routeMinStarGate,
+      aiOptions,
+    );
+  }
+
+  // Drilled in: enumerate the target group's members directly. We can't
+  // reuse `computeDisplayItems` because its photo→group map is lossy —
+  // the Rust two-tier clusterer emits BOTH a tight near_duplicate group
+  // and a broader related group covering the same photos, so a single
+  // photoId resolves to whichever group was registered last. Drilling
+  // into the "losing" group would then return zero members. Walking the
+  // target group's own `members` array avoids the ambiguity entirely.
+  const group = groups.find((g) => g.id === activeInnerGroupId);
+  if (!group) return [];
+
+  const pick = aiPickForGroup(group, images, aiOptions.useEyesInPick);
+  const result: DisplayItem[] = [];
+  for (const m of group.members) {
+    const imgIdx = images.findIndex((i) => i.id === m.photoId);
+    if (imgIdx < 0) continue;
+    const img = images[imgIdx];
+
+    if (currentView === "triage") {
+      if (img.flag === "reject") continue;
+      if (img.flag !== "unreviewed" && img.id !== pick) continue;
+    } else if (currentView === "select") {
+      const passes = selectRequiresPickFilter
+        ? img.flag === "pick"
+        : img.flag !== "reject";
+      if (!passes) continue;
+    } else {
+      // route view
+      if (img.flag !== "pick" || img.destination !== "unrouted") continue;
+      if (routeMinStarGate > 0 && img.starRating < routeMinStarGate) continue;
+    }
+
+    result.push({
+      imageIndex: imgIdx,
+      image: img,
+      groupId: group.id,
+      ...(pick === img.id ? { isAiPick: true } : {}),
+    });
+  }
+  return result;
 }
 
 export function buildPhotoGroupMap(groups: Group[]): Map<number, Group> {

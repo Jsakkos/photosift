@@ -185,6 +185,8 @@ export function Filmstrip() {
               onClick={() => onCellClick(index)}
               onDoubleClick={() => onGroupDoubleClick(gid, index)}
               isAiPick={item.isAiPick}
+              coverW={THUMB_W - 8}
+              coverH={THUMB_H - 8}
             />
           </div>
         );

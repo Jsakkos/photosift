@@ -10,26 +10,46 @@ interface GroupStackProps {
   onClick: () => void;
   onDoubleClick?: () => void;
   isAiPick?: boolean;
+  /// Cover image dimensions; shadow layers render behind at the same
+  /// size with small offsets. Defaults match the previous hard-coded
+  /// 84×60 if the caller doesn't override.
+  coverW?: number;
+  coverH?: number;
 }
 
-export function GroupStack({ imageId, filename, count, isCurrent, onClick, onDoubleClick, isAiPick }: GroupStackProps) {
+const SHADOW_OFFSET = 4;
+
+export function GroupStack({
+  imageId,
+  filename,
+  count,
+  isCurrent,
+  onClick,
+  onDoubleClick,
+  isAiPick,
+  coverW = 84,
+  coverH = 60,
+}: GroupStackProps) {
   const [loaded, setLoaded] = useState(false);
+  // Outer bounding box accommodates the shadow layers' diagonal offset.
+  const outerW = coverW + SHADOW_OFFSET * 2;
+  const outerH = coverH + SHADOW_OFFSET * 2;
 
   return (
     <div
       className="relative cursor-pointer"
-      style={{ width: 92, height: 72 }}
+      style={{ width: outerW, height: outerH }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      {/* Shadow layers */}
+      {/* Shadow layers: back-left and back-right for the 3D stack look */}
       <div
         className="absolute rounded border border-white/10"
-        style={{ top: 0, left: 4, width: 84, height: 60, background: "#252525" }}
+        style={{ top: 0, left: SHADOW_OFFSET * 2, width: coverW, height: coverH, background: "#252525" }}
       />
       <div
         className="absolute rounded border border-white/10"
-        style={{ top: 2, left: 2, width: 84, height: 60, background: "#222" }}
+        style={{ top: SHADOW_OFFSET / 2, left: SHADOW_OFFSET, width: coverW, height: coverH, background: "#222" }}
       />
       {/* Cover image */}
       <div
@@ -38,7 +58,7 @@ export function GroupStack({ imageId, filename, count, isCurrent, onClick, onDou
             ? "ring-2 ring-[var(--accent)] brightness-100"
             : "brightness-75 hover:brightness-90"
         }`}
-        style={{ top: 4, left: 0, width: 84, height: 60 }}
+        style={{ top: SHADOW_OFFSET, left: 0, width: coverW, height: coverH }}
       >
         <img
           src={thumbUrl(imageId)}
