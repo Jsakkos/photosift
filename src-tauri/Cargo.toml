@@ -38,6 +38,14 @@ ndarray = "0.16"
 crossbeam-channel = "0.5"
 anyhow = "1"
 
+# Dev-only MCP bridge: embeds an MCP server inside the Tauri app so
+# Claude Code can take screenshots, read the DOM, and execute JS in
+# the webview for programmatic UI verification. Registered only under
+# `#[cfg(debug_assertions)]` in `lib.rs`, so release builds don't ship
+# it. TCP mode (127.0.0.1:4000) sidesteps the plugin's Unix-socket
+# default, which is awkward on Windows.
+tauri-plugin-mcp = { git = "https://github.com/P3GLEG/tauri-plugin-mcp", features = ["devtools"] }
+
 [dev-dependencies]
 tempfile = "3"
 

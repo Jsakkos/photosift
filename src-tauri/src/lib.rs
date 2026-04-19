@@ -21,9 +21,27 @@ pub fn run() {
 
     let app_state = AppState::new();
 
-    let builder = tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_shell::init());
+
+    // Dev-only MCP bridge for Claude-driven UI verification. The Tauri
+    // plugin listens on 127.0.0.1:4000; the Node bridge
+    // `tauri-plugin-mcp-server` (launched by Claude Code per
+    // `.mcp.json`) connects over TCP and relays take_screenshot,
+    // query_page, execute_js, etc. Not compiled into release builds.
+    #[cfg(debug_assertions)]
+    {
+        log::info!("dev build: registering tauri-plugin-mcp on 127.0.0.1:4000");
+        builder = builder.plugin(tauri_plugin_mcp::init_with_config(
+            tauri_plugin_mcp::PluginConfig::new("photosift".to_string())
+                .start_socket_server(true)
+                .tcp_localhost(4000),
+        ));
+    }
+
+    let builder = builder
         .manage(Mutex::new(app_state))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {

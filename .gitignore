@@ -22,6 +22,11 @@ Thumbs.db
 # Tooling artifacts
 .playwright-mcp/
 .superpowers/
+# tauri-plugin-mcp screenshot / capture outputs and its per-dev config.
+# `.mcp.json` opens a local TCP bridge that can execute JS in the
+# webview — each developer opts in explicitly, never committed.
+target/tauri-mcp/
+.mcp.json
 
 # App data (never commit local database or caches)
 .photosift/
