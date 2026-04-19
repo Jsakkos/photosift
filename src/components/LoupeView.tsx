@@ -23,8 +23,14 @@ export function LoupeView() {
 
   const measureNative = useCallback((): number | null => {
     const img = imgRef.current;
-    if (!img || img.naturalWidth === 0) return null;
-    const rect = img.getBoundingClientRect();
+    const container = containerRef.current;
+    if (!img || !container || img.naturalWidth === 0) return null;
+    // Measure the container, never the image. When `isZoomed` is true
+    // the image already has a scale transform applied, and
+    // `getBoundingClientRect` returns the transformed size — using that
+    // would compute nativeScale against an already-zoomed image and
+    // collapse toward 1.0.
+    const rect = container.getBoundingClientRect();
     return computeNativeScale(img.naturalWidth, img.naturalHeight, rect.width, rect.height);
   }, []);
 
