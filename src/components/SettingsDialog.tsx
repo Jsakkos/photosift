@@ -11,7 +11,6 @@ export function SettingsDialog() {
 
   const [nearDup, setNearDup] = useState(settings.nearDupThreshold);
   const [related, setRelated] = useState(settings.relatedThreshold);
-  const [expand, setExpand] = useState(settings.triageExpandGroups);
   const [selectPick, setSelectPick] = useState(settings.selectRequiresPick);
   const [routeStar, setRouteStar] = useState(settings.routeMinStar);
   const [libraryRoot, setLibraryRoot] = useState<string | null>(settings.libraryRoot);
@@ -28,7 +27,6 @@ export function SettingsDialog() {
     if (isOpen) {
       setNearDup(settings.nearDupThreshold);
       setRelated(settings.relatedThreshold);
-      setExpand(settings.triageExpandGroups);
       setSelectPick(settings.selectRequiresPick);
       setRouteStar(settings.routeMinStar);
       setLibraryRoot(settings.libraryRoot);
@@ -69,7 +67,6 @@ export function SettingsDialog() {
       await updateSettings({
         nearDupThreshold: nearDup,
         relatedThreshold: related,
-        triageExpandGroups: expand,
         selectRequiresPick: selectPick,
         routeMinStar: routeStar,
         libraryRoot,
@@ -194,21 +191,6 @@ export function SettingsDialog() {
           />
           <p className="text-xs text-[var(--text-secondary)] mt-1">
             Must be ≥ near-duplicate threshold. Default 12.
-          </p>
-        </div>
-
-        <div className="mb-4">
-          <label className="flex items-center gap-2 text-sm text-[var(--text-primary)] cursor-pointer">
-            <input
-              type="checkbox"
-              checked={expand}
-              onChange={(e) => setExpand(e.target.checked)}
-              className="w-4 h-4"
-            />
-            Expand groups in triage by default
-          </label>
-          <p className="text-xs text-[var(--text-secondary)] mt-1 ml-6">
-            When on, triage shows every image individually instead of just the group cover.
           </p>
         </div>
 

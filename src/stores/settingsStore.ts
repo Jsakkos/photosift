@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 export interface Settings {
   nearDupThreshold: number;
   relatedThreshold: number;
-  triageExpandGroups: boolean;
   selectRequiresPick: boolean;
   routeMinStar: number;
   libraryRoot: string | null;
@@ -16,7 +15,6 @@ export interface Settings {
 const DEFAULT_SETTINGS: Settings = {
   nearDupThreshold: 4,
   relatedThreshold: 12,
-  triageExpandGroups: false,
   selectRequiresPick: true,
   routeMinStar: 3,
   libraryRoot: null,

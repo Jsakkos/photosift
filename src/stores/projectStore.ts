@@ -11,10 +11,6 @@ import type {
 import { useSettingsStore } from "./settingsStore";
 import { useAiStore } from "./aiStore";
 
-function triageExpand(): boolean {
-  return useSettingsStore.getState().settings.triageExpandGroups;
-}
-
 function selectRequiresPick(): boolean {
   return useSettingsStore.getState().settings.selectRequiresPick ?? false;
 }
@@ -83,7 +79,6 @@ function computeDisplayItemsFiltered(
   images: ImageEntry[],
   currentView: CullView,
   groups: Group[],
-  triageExpandGroups: boolean,
   activeInnerGroupId: number | null,
   selectRequiresPickFilter: boolean,
   routeMinStarGate: number,
@@ -93,7 +88,6 @@ function computeDisplayItemsFiltered(
     images,
     currentView,
     groups,
-    triageExpandGroups,
     expandedSet(activeInnerGroupId),
     selectRequiresPickFilter,
     routeMinStarGate,
@@ -160,7 +154,6 @@ export function computeDisplayItems(
   images: ImageEntry[],
   currentView: CullView,
   groups: Group[],
-  triageExpandGroups: boolean = false,
   expandedGroupIds: Set<number> = new Set(),
   selectRequiresPickFilter: boolean = false,
   routeMinStarGate: number = 0,
@@ -183,72 +176,52 @@ export function computeDisplayItems(
       return p;
     };
 
-    if (triageExpandGroups) {
-      // Every unreviewed image gets its own triage item, with groupId set
-      // so the filmstrip can still draw the blue affiliation bar. The AI
-      // pick for a group stays visible even if flagged so the badge has
-      // somewhere to render.
-      for (let i = 0; i < images.length; i++) {
-        const img = images[i];
-        const group = photoGroupMap.get(img.id);
-        const isPinnedPick = !!group && pickForGroup(group) === img.id;
-        if (img.flag === "reject") continue;
-        if (img.flag !== "unreviewed" && !isPinnedPick) continue;
-        items.push({
-          imageIndex: i,
-          image: img,
-          ...(group ? { groupId: group.id } : {}),
-        });
-      }
-    } else {
-      const seenGroups = new Set<number>();
-      for (let i = 0; i < images.length; i++) {
-        const img = images[i];
-        if (img.flag !== "unreviewed") continue;
+    const seenGroups = new Set<number>();
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      if (img.flag !== "unreviewed") continue;
 
-        const group = photoGroupMap.get(img.id);
-        if (group) {
-          if (seenGroups.has(group.id)) continue;
-          seenGroups.add(group.id);
-          if (expandedGroupIds.has(group.id)) {
-            // Per-group drill-down: emit each unreviewed member inline with
-            // groupId set so the filmstrip still draws the blue affiliation bar.
-            // Also emit the AI pick member even if flagged, so the badge
-            // can render on the recommended shot wherever it is.
-            for (const member of group.members) {
-              const mi = images.findIndex((im) => im.id === member.photoId);
-              if (mi < 0) continue;
-              const memImg = images[mi];
-              const isPinnedPick = pickForGroup(group) === memImg.id;
-              if (memImg.flag === "reject") continue;
-              if (memImg.flag !== "unreviewed" && !isPinnedPick) continue;
-              items.push({
-                imageIndex: mi,
-                image: memImg,
-                groupId: group.id,
-              });
-            }
-            continue;
+      const group = photoGroupMap.get(img.id);
+      if (group) {
+        if (seenGroups.has(group.id)) continue;
+        seenGroups.add(group.id);
+        if (expandedGroupIds.has(group.id)) {
+          // Drill-down: emit each unreviewed member inline with groupId set
+          // so the filmstrip can draw the affiliation bar. The AI pick is
+          // emitted even if flagged so the badge has a place to render.
+          for (const member of group.members) {
+            const mi = images.findIndex((im) => im.id === member.photoId);
+            if (mi < 0) continue;
+            const memImg = images[mi];
+            const isPinnedPick = pickForGroup(group) === memImg.id;
+            if (memImg.flag === "reject") continue;
+            if (memImg.flag !== "unreviewed" && !isPinnedPick) continue;
+            items.push({
+              imageIndex: mi,
+              image: memImg,
+              groupId: group.id,
+            });
           }
-          const coverId = getGroupCover(group);
-          const coverIdx = images.findIndex((im) => im.id === coverId);
-          const coverImg = coverIdx >= 0 ? images[coverIdx] : img;
-          const actualIdx = coverIdx >= 0 ? coverIdx : i;
-          const unrevCount = group.members.filter((m) => {
-            const mi = images.find((im) => im.id === m.photoId);
-            return mi && mi.flag === "unreviewed";
-          }).length;
-          if (unrevCount === 0) continue;
-          items.push({
-            imageIndex: actualIdx,
-            image: coverImg,
-            groupId: group.id,
-            isGroupCover: true,
-            groupMemberCount: group.members.length,
-          });
-        } else {
-          items.push({ imageIndex: i, image: img });
+          continue;
         }
+        const coverId = getGroupCover(group);
+        const coverIdx = images.findIndex((im) => im.id === coverId);
+        const coverImg = coverIdx >= 0 ? images[coverIdx] : img;
+        const actualIdx = coverIdx >= 0 ? coverIdx : i;
+        const unrevCount = group.members.filter((m) => {
+          const mi = images.find((im) => im.id === m.photoId);
+          return mi && mi.flag === "unreviewed";
+        }).length;
+        if (unrevCount === 0) continue;
+        items.push({
+          imageIndex: actualIdx,
+          image: coverImg,
+          groupId: group.id,
+          isGroupCover: true,
+          groupMemberCount: group.members.length,
+        });
+      } else {
+        items.push({ imageIndex: i, image: img });
       }
     }
   } else if (currentView === "select") {
@@ -476,8 +449,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         images,
         resumeView,
         groups,
-        triageExpand(),
-        null,
+          null,
         selectRequiresPick(),
         routeMinStar(),
         currentAiOptions("none"),
@@ -551,7 +523,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       get().currentView,
       get().groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -592,8 +563,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             revertImages,
             get().currentView,
             get().groups,
-            triageExpand(),
-            get().activeInnerGroupId,
+                  get().activeInnerGroupId,
             selectRequiresPick(),
             routeMinStar(),
             currentAiOptions(get().sortByAi),
@@ -666,7 +636,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -746,8 +715,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           revertImages,
           get().currentView,
           get().groups,
-          triageExpand(),
-          get().activeInnerGroupId,
+              get().activeInnerGroupId,
           selectRequiresPick(),
           routeMinStar(),
           currentAiOptions(get().sortByAi),
@@ -772,7 +740,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -817,8 +784,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             revertImages,
             get().currentView,
             get().groups,
-            triageExpand(),
-            get().activeInnerGroupId,
+                  get().activeInnerGroupId,
             selectRequiresPick(),
             routeMinStar(),
             currentAiOptions(get().sortByAi),
@@ -854,7 +820,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -914,7 +879,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -965,7 +929,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       images,
       view,
       groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -1058,7 +1021,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       images,
       currentView,
       groups,
-      triageExpand(),
       nextActive,
       selectRequiresPick(),
       routeMinStar(),
@@ -1094,7 +1056,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -1133,8 +1094,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             revertImages,
             get().currentView,
             get().groups,
-            triageExpand(),
-            get().activeInnerGroupId,
+                  get().activeInnerGroupId,
             selectRequiresPick(),
             routeMinStar(),
             currentAiOptions(get().sortByAi),
@@ -1264,7 +1224,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       updatedImages,
       currentView,
       groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -1330,8 +1289,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           images,
           currentView,
           groups,
-          triageExpand(),
-          get().activeInnerGroupId,
+              get().activeInnerGroupId,
           selectRequiresPick(),
           routeMinStar(),
           currentAiOptions(get().sortByAi),
@@ -1350,7 +1308,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       images,
       currentView,
       groups,
-      triageExpand(),
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
@@ -1413,8 +1370,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           images,
           currentView,
           groups,
-          triageExpand(),
-          get().activeInnerGroupId,
+              get().activeInnerGroupId,
           selectRequiresPick(),
           routeMinStar(),
           currentAiOptions(get().sortByAi),
@@ -1428,29 +1384,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 }));
 
 // Settings that feed `computeDisplayItems` are read lazily at call time
-// via the `triageExpand()` / `hideSoftThreshold()` helpers above — but
-// updating a setting in SettingsDialog only mutates `settingsStore`; it
-// doesn't trigger a re-compute here. Subscribe so the user sees the
-// filter / sort take effect as soon as they adjust the slider.
+// via the `selectRequiresPick()` / `routeMinStar()` / `hideSoftThreshold()`
+// helpers above — but updating a setting in SettingsDialog only mutates
+// `settingsStore`; it doesn't trigger a re-compute here. Subscribe so
+// the user sees the filter / sort take effect as soon as they adjust
+// the slider.
 let lastHideSoft = useSettingsStore.getState().settings.hideSoftThreshold;
-let lastTriageExpand = useSettingsStore.getState().settings.triageExpandGroups;
 let lastSelectRequiresPick = useSettingsStore.getState().settings.selectRequiresPick;
 let lastRouteMinStar = useSettingsStore.getState().settings.routeMinStar;
 useSettingsStore.subscribe((state) => {
   const {
     hideSoftThreshold: hs,
-    triageExpandGroups: te,
     selectRequiresPick: sr,
     routeMinStar: rm,
   } = state.settings;
   if (
     hs !== lastHideSoft ||
-    te !== lastTriageExpand ||
     sr !== lastSelectRequiresPick ||
     rm !== lastRouteMinStar
   ) {
     lastHideSoft = hs;
-    lastTriageExpand = te;
     lastSelectRequiresPick = sr;
     lastRouteMinStar = rm;
     useProjectStore.getState().refreshDisplay();

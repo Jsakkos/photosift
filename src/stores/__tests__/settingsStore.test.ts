@@ -6,7 +6,6 @@ beforeEach(() => {
     settings: {
       nearDupThreshold: 4,
       relatedThreshold: 12,
-      triageExpandGroups: false,
       selectRequiresPick: true,
       routeMinStar: 3,
       libraryRoot: null,
@@ -25,7 +24,6 @@ describe("settingsStore", () => {
       get_settings: {
         nearDupThreshold: 2,
         relatedThreshold: 8,
-        triageExpandGroups: true,
       },
     });
 
@@ -34,7 +32,6 @@ describe("settingsStore", () => {
 
     expect(s.settings.nearDupThreshold).toBe(2);
     expect(s.settings.relatedThreshold).toBe(8);
-    expect(s.settings.triageExpandGroups).toBe(true);
     expect(s.isLoaded).toBe(true);
   });
 

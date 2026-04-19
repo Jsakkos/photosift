@@ -126,7 +126,6 @@ pub struct GroupMemberData {
 pub struct Settings {
     pub near_dup_threshold: i32,
     pub related_threshold: i32,
-    pub triage_expand_groups: bool,
     pub select_requires_pick: bool,
     pub route_min_star: i32,
     /// Absolute path to the root of the photo library (used for copy-mode imports).
@@ -142,7 +141,6 @@ impl Default for Settings {
         Self {
             near_dup_threshold: crate::ingest::clustering::DEFAULT_NEAR_DUP_THRESHOLD as i32,
             related_threshold: crate::ingest::clustering::DEFAULT_RELATED_THRESHOLD as i32,
-            triage_expand_groups: false,
             select_requires_pick: true,
             route_min_star: 3,
             library_root: None,
@@ -306,7 +304,6 @@ impl Database {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 near_dup_threshold INTEGER NOT NULL DEFAULT 4,
                 related_threshold INTEGER NOT NULL DEFAULT 12,
-                triage_expand_groups INTEGER NOT NULL DEFAULT 0,
                 select_requires_pick INTEGER NOT NULL DEFAULT 1,
                 route_min_star INTEGER NOT NULL DEFAULT 3,
                 library_root TEXT
@@ -1012,7 +1009,7 @@ impl Database {
     pub fn get_settings(&self) -> Result<Settings> {
         self.conn
             .query_row(
-                "SELECT near_dup_threshold, related_threshold, triage_expand_groups,
+                "SELECT near_dup_threshold, related_threshold,
                         select_requires_pick, route_min_star, library_root,
                         enable_ai_on_import, hide_soft_threshold, eye_open_confidence
                  FROM settings WHERE id = 1",
@@ -1021,13 +1018,12 @@ impl Database {
                     Ok(Settings {
                         near_dup_threshold: row.get(0)?,
                         related_threshold: row.get(1)?,
-                        triage_expand_groups: row.get::<_, i32>(2)? != 0,
-                        select_requires_pick: row.get::<_, i32>(3)? != 0,
-                        route_min_star: row.get(4)?,
-                        library_root: row.get(5)?,
-                        enable_ai_on_import: row.get::<_, i32>(6)? != 0,
-                        hide_soft_threshold: row.get(7)?,
-                        eye_open_confidence: row.get(8)?,
+                        select_requires_pick: row.get::<_, i32>(2)? != 0,
+                        route_min_star: row.get(3)?,
+                        library_root: row.get(4)?,
+                        enable_ai_on_import: row.get::<_, i32>(5)? != 0,
+                        hide_soft_threshold: row.get(6)?,
+                        eye_open_confidence: row.get(7)?,
                     })
                 },
             )
@@ -1036,14 +1032,13 @@ impl Database {
 
     pub fn update_settings(&self, s: &Settings) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO settings (id, near_dup_threshold, related_threshold, triage_expand_groups,
+            "INSERT INTO settings (id, near_dup_threshold, related_threshold,
                                    select_requires_pick, route_min_star, library_root,
                                    enable_ai_on_import, hide_soft_threshold, eye_open_confidence)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
-                triage_expand_groups = excluded.triage_expand_groups,
                 select_requires_pick = excluded.select_requires_pick,
                 route_min_star = excluded.route_min_star,
                 library_root = excluded.library_root,
@@ -1053,7 +1048,6 @@ impl Database {
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
-                s.triage_expand_groups as i32,
                 s.select_requires_pick as i32,
                 s.route_min_star,
                 s.library_root,

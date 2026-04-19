@@ -10,7 +10,6 @@ beforeEach(() => {
     settings: {
       nearDupThreshold: 4,
       relatedThreshold: 12,
-      triageExpandGroups: false,
       selectRequiresPick: false,
       routeMinStar: 0,
       libraryRoot: null,

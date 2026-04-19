@@ -98,7 +98,6 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       images,
       "triage",
       [baseGroup],
-      false,
       new Set([7]), // group 7 expanded
       false,
       0,
@@ -109,7 +108,7 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
     expect(pickItem!.isAiPick).toBe(true);
   });
 
-  it("triageExpandGroups=true: rejected pick is hidden", () => {
+  it("drill-down: rejected pick is hidden", () => {
     // Regression: previously the isPinnedPick override kept an AI pick
     // visible even after it was rejected, which left the badge stuck on
     // a photo the user had already culled. Rejected means gone — no
@@ -123,32 +122,6 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       images,
       "triage",
       [baseGroup],
-      true, // triageExpandGroups
-      new Set(),
-      false,
-      0,
-      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false },
-    );
-    expect(
-      items.find((d) => d.image.id === 11),
-      "rejected pick must be filtered out",
-    ).toBeUndefined();
-  });
-
-  it("drill-down (expandedGroupIds): rejected pick is hidden", () => {
-    // Same bug surfaces in the non-triageExpandGroups branch when the
-    // user has manually drilled into a single group. Rejected picks
-    // must drop out here too.
-    const images = [
-      { ...e(10, 50, 0), flag: "unreviewed" },
-      picked("reject"),
-      { ...e(12, 40, 0), flag: "unreviewed" },
-    ];
-    const items = computeDisplayItems(
-      images,
-      "triage",
-      [baseGroup],
-      false,
       new Set([7]), // group 7 expanded via drill-down
       false,
       0,
@@ -156,7 +129,7 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
     );
     expect(
       items.find((d) => d.image.id === 11),
-      "rejected pick must be filtered out in drill-down view too",
+      "rejected pick must be filtered out in drill-down view",
     ).toBeUndefined();
   });
 
@@ -172,7 +145,6 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       images,
       "triage",
       [baseGroup],
-      false,
       new Set([7]),
       false,
       0,

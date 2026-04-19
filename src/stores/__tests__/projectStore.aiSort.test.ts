@@ -32,7 +32,7 @@ const g: Group[] = [];
 describe("computeDisplayItems AI sort + filter", () => {
   it("sorts by sharpness descending, nulls last", () => {
     const images = [img(1, "pick", 40), img(2, "pick", 90), img(3, "pick", null)];
-    const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0, {
+    const items = computeDisplayItems(images, "select", g, new Set(), true, 0, {
       sortByAi: "sharpness",
       hideSoftThreshold: 0,
       useEyesInPick: false,
@@ -42,7 +42,7 @@ describe("computeDisplayItems AI sort + filter", () => {
 
   it("sorts by faces descending, nulls last", () => {
     const images = [img(1, "pick", 50, 1), img(2, "pick", 50, 3), img(3, "pick", 50, null)];
-    const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0, {
+    const items = computeDisplayItems(images, "select", g, new Set(), true, 0, {
       sortByAi: "faces",
       hideSoftThreshold: 0,
       useEyesInPick: false,
@@ -52,7 +52,7 @@ describe("computeDisplayItems AI sort + filter", () => {
 
   it("hideSoft hides below threshold but keeps nulls (opt-out while analyzing)", () => {
     const images = [img(1, "pick", 10), img(2, "pick", 50), img(3, "pick", null)];
-    const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0, {
+    const items = computeDisplayItems(images, "select", g, new Set(), true, 0, {
       sortByAi: "none",
       hideSoftThreshold: 30,
       useEyesInPick: false,
@@ -65,7 +65,7 @@ describe("computeDisplayItems AI sort + filter", () => {
       { ...img(1, "unreviewed", 10), starRating: 0 },
       { ...img(2, "unreviewed", 50), starRating: 0 },
     ];
-    const items = computeDisplayItems(images, "triage", g, false, new Set(), false, 0, {
+    const items = computeDisplayItems(images, "triage", g, new Set(), false, 0, {
       sortByAi: "none",
       hideSoftThreshold: 30,
       useEyesInPick: false,
@@ -76,7 +76,7 @@ describe("computeDisplayItems AI sort + filter", () => {
 
   it("sortByAi = none preserves view order", () => {
     const images = [img(1, "pick", 40), img(2, "pick", 90)];
-    const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0, {
+    const items = computeDisplayItems(images, "select", g, new Set(), true, 0, {
       sortByAi: "none",
       hideSoftThreshold: 0,
       useEyesInPick: false,
@@ -84,9 +84,9 @@ describe("computeDisplayItems AI sort + filter", () => {
     expect(items.map((i) => i.image.id)).toEqual([1, 2]);
   });
 
-  it("aiOptions argument is optional — existing 7-arg callers still work", () => {
+  it("aiOptions argument is optional — existing 6-arg callers still work", () => {
     const images = [img(1, "pick", 40), img(2, "pick", 90)];
-    const items = computeDisplayItems(images, "select", g, false, new Set(), true, 0);
+    const items = computeDisplayItems(images, "select", g, new Set(), true, 0);
     expect(items.map((i) => i.image.id)).toEqual([1, 2]);
   });
 });

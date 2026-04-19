@@ -45,7 +45,6 @@ export function setupMockIpc(
         return {
           nearDupThreshold: 4,
           relatedThreshold: 12,
-          triageExpandGroups: false,
         };
       case "recluster_shoot":
         return 0;
