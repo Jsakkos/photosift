@@ -1,7 +1,8 @@
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
 import { FlagFlash } from "./FlagFlash";
+import { computeNativeScale, clampZoomScale } from "../lib/loupeZoom";
 
 export function LoupeView() {
   const { displayItems, currentIndex, isZoomed, toggleZoom, currentView } = useProjectStore();
@@ -9,10 +10,60 @@ export function LoupeView() {
   const { displayUrl } = useImageLoader(currentImage?.id ?? null);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [zoomScale, setZoomScale] = useState(1);
+  const [nativeScale, setNativeScale] = useState(1);
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
+  // Last user-adjusted (scroll-wheel) zoom scale for the current image.
+  // Cleared on image change so each photo starts at native 100%.
+  const savedScaleRef = useRef<number | null>(null);
+
+  const measureNative = useCallback((): number | null => {
+    const img = imgRef.current;
+    if (!img || img.naturalWidth === 0) return null;
+    const rect = img.getBoundingClientRect();
+    return computeNativeScale(img.naturalWidth, img.naturalHeight, rect.width, rect.height);
+  }, []);
+
+  useEffect(() => {
+    savedScaleRef.current = null;
+    setPanOffset({ x: 0, y: 0 });
+  }, [currentImage?.id]);
+
+  useEffect(() => {
+    if (!isZoomed) return;
+    const native = measureNative();
+    if (native === null) return;
+    setNativeScale(native);
+    setZoomScale(savedScaleRef.current ?? native);
+  }, [isZoomed, currentImage?.id, measureNative]);
+
+  const handleImgLoad = useCallback(() => {
+    if (!isZoomed) return;
+    const native = measureNative();
+    if (native === null) return;
+    setNativeScale(native);
+    setZoomScale(savedScaleRef.current ?? native);
+  }, [isZoomed, measureNative]);
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (!isZoomed) return;
+      e.preventDefault();
+      const native = measureNative() ?? nativeScale;
+      if (native !== nativeScale) setNativeScale(native);
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      setZoomScale((current) => {
+        const next = clampZoomScale(current, delta, native);
+        savedScaleRef.current = next;
+        return next;
+      });
+    },
+    [isZoomed, nativeScale, measureNative],
+  );
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -58,7 +109,7 @@ export function LoupeView() {
 
   const imgStyle: React.CSSProperties = isZoomed
     ? {
-        transform: `scale(3) translate(${panOffset.x / 3}px, ${panOffset.y / 3}px)`,
+        transform: `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)`,
         transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
         cursor: "grab",
       }
@@ -73,13 +124,16 @@ export function LoupeView() {
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onDoubleClick={handleDoubleClick}
+      onWheel={handleWheel}
     >
       <img
+        ref={imgRef}
         src={displayUrl}
         alt={currentImage.filename}
         className="w-full h-full object-contain transition-transform duration-100"
         style={imgStyle}
         draggable={false}
+        onLoad={handleImgLoad}
       />
       <FlagFlash />
       {currentView === "triage" && displayItems[currentIndex]?.isGroupCover && (
