@@ -1,5 +1,5 @@
 import { useState, type SyntheticEvent } from "react";
-import { thumbUrl } from "../hooks/useImageLoader";
+import { imageUrl } from "../hooks/useImageLoader";
 import type { Face } from "../types";
 
 /// Uniform-scale face crop. The naive width/height percentage approach
@@ -8,6 +8,12 @@ import type { Face } from "../types";
 /// roughly square, D750 frames are 3:2). We read naturalWidth/Height on
 /// load and emit a CSS transform that scales uniformly (cover semantics)
 /// and translates the face center into the container center.
+///
+/// Uses the full-resolution embedded preview (`imageUrl`) rather than
+/// the 512px thumbnail — a face is often ~15% of the frame, so cropping
+/// from a thumb requires a ~2x CSS upscale that looks blurry. The
+/// full-res preview is already in the LoupeView's cache by the time
+/// the panel renders, so there's no extra network hit.
 export function FaceThumb({
   face,
   photoId,
@@ -46,7 +52,7 @@ export function FaceThumb({
       style={{ width: sizePx, height: sizePx }}
     >
       <img
-        src={thumbUrl(photoId)}
+        src={imageUrl(photoId)}
         alt=""
         aria-hidden="true"
         onLoad={onLoad}
