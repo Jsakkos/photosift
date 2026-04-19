@@ -1,6 +1,13 @@
 import { useEffect, useRef } from "react";
 import { useProjectStore } from "../stores/projectStore";
 
+// Must match the tile grid emitted by the Rust `get_heatmap` command
+// (see `src-tauri/src/commands/ai.rs`). Fine tiling + bilinear CSS
+// scaling reads as a continuous falloff instead of the 32×32 "pixel
+// art" that came before.
+const GRID_COLS = 48;
+const GRID_ROWS = 32;
+
 interface Props {
   photoId: number;
 }
@@ -35,11 +42,10 @@ export function HeatmapOverlay({ photoId }: Props) {
   return (
     <canvas
       ref={canvasRef}
-      width={32}
-      height={32}
+      width={GRID_COLS}
+      height={GRID_ROWS}
       aria-hidden="true"
       className="absolute inset-0 w-full h-full pointer-events-none z-[5] opacity-35"
-      style={{ imageRendering: "pixelated" }}
     />
   );
 }
@@ -48,9 +54,15 @@ function draw(canvas: HTMLCanvasElement | null, data: number[]) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  const img = ctx.createImageData(32, 32);
-  for (let i = 0; i < 1024; i++) {
-    const v = Math.max(0, Math.min(100, data[i] ?? 0)) / 100;
+  const n = GRID_COLS * GRID_ROWS;
+  const img = ctx.createImageData(GRID_COLS, GRID_ROWS);
+  for (let i = 0; i < n; i++) {
+    const raw = Math.max(0, Math.min(100, data[i] ?? 0)) / 100;
+    // Gamma-lift midtones: sqrt moves the center of the palette from
+    // ~0.5 toward ~0.7, so partially-focused regions read yellow/green
+    // instead of being crushed into the red floor by the p5/p95
+    // percentile squash upstream.
+    const v = Math.sqrt(raw);
     // Red → Yellow → Green gradient.
     const r = Math.round(255 * (1 - v));
     const g = Math.round(255 * v);
