@@ -76,6 +76,7 @@ pub fn recluster_shoot(
         &phash_data,
         settings.near_dup_threshold as u32,
         settings.related_threshold as u32,
+        settings.group_time_window_s.max(0) as u32,
     );
 
     let db = app_state.db.as_mut().ok_or("Database not open")?;

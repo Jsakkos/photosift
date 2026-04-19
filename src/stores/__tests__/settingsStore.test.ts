@@ -6,6 +6,7 @@ beforeEach(() => {
     settings: {
       nearDupThreshold: 4,
       relatedThreshold: 12,
+      groupTimeWindowS: 60,
       selectRequiresPick: true,
       routeMinStar: 3,
       libraryRoot: null,

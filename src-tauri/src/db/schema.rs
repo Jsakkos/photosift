@@ -1,5 +1,20 @@
+use chrono::NaiveDateTime;
 use rusqlite::{params, Connection, OptionalExtension, Result, Row};
 use std::path::{Path, PathBuf};
+
+/// Parses the `exif_date` column (EXIF DateTime format `YYYY-MM-DD
+/// HH:MM:SS`, occasionally `YYYY:MM:DD HH:MM:SS`) to Unix seconds.
+/// Returns `None` on any parse failure so callers can fall back to
+/// pHash-only similarity for photos without a readable timestamp.
+fn parse_exif_to_unix_s(s: &str) -> Option<i64> {
+    // Try both common separators.
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y:%m:%d %H:%M:%S"] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(dt.and_utc().timestamp());
+        }
+    }
+    None
+}
 
 // Aggregates flag counts per shoot and picks the most recent view_cursor
 // so the shoot card can render a "Continue [view]" CTA. Column order must
@@ -126,6 +141,12 @@ pub struct GroupMemberData {
 pub struct Settings {
     pub near_dup_threshold: i32,
     pub related_threshold: i32,
+    /// Maximum capture-time gap (seconds) allowed between two photos
+    /// for them to form an edge in pHash clustering. 0 disables the
+    /// time filter (pHash-only). Stops cross-time pHash collisions
+    /// from merging unrelated shots that happen to share low-freq
+    /// composition.
+    pub group_time_window_s: i32,
     pub select_requires_pick: bool,
     pub route_min_star: i32,
     /// Absolute path to the root of the photo library (used for copy-mode imports).
@@ -141,6 +162,7 @@ impl Default for Settings {
         Self {
             near_dup_threshold: crate::ingest::clustering::DEFAULT_NEAR_DUP_THRESHOLD as i32,
             related_threshold: crate::ingest::clustering::DEFAULT_RELATED_THRESHOLD as i32,
+            group_time_window_s: crate::ingest::clustering::DEFAULT_TIME_WINDOW_S as i32,
             select_requires_pick: true,
             route_min_star: 3,
             library_root: None,
@@ -330,6 +352,11 @@ impl Database {
         self.ensure_column("settings", "enable_ai_on_import", "INTEGER NOT NULL DEFAULT 1")?;
         self.ensure_column("settings", "hide_soft_threshold", "INTEGER NOT NULL DEFAULT 30")?;
         self.ensure_column("settings", "eye_open_confidence", "REAL NOT NULL DEFAULT 0.7")?;
+        self.ensure_column(
+            "settings",
+            "group_time_window_s",
+            "INTEGER NOT NULL DEFAULT 60",
+        )?;
         Ok(())
     }
 
@@ -697,19 +724,28 @@ impl Database {
         Ok(())
     }
 
-    /// Returns (photo_id, phash_bytes) for every photo in the shoot that has a phash.
-    pub fn phashes_for_shoot(&self, shoot_id: i64) -> Result<Vec<(i64, [u8; 8])>> {
+    /// Returns `(photo_id, phash_bytes, capture_unix_s)` for every
+    /// photo in the shoot that has a phash. `capture_unix_s` is parsed
+    /// from the EXIF datetime string if present; `None` when the photo
+    /// lacks a parseable capture time.
+    pub fn phashes_for_shoot(
+        &self,
+        shoot_id: i64,
+    ) -> Result<Vec<(i64, [u8; 8], Option<i64>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, phash FROM photos WHERE shoot_id = ?1 AND phash IS NOT NULL",
+            "SELECT id, phash, exif_date FROM photos
+             WHERE shoot_id = ?1 AND phash IS NOT NULL",
         )?;
         let rows = stmt.query_map(params![shoot_id], |row| {
             let id: i64 = row.get(0)?;
             let bytes: Vec<u8> = row.get(1)?;
+            let exif_date: Option<String> = row.get(2)?;
             let mut arr = [0u8; 8];
             if bytes.len() == 8 {
                 arr.copy_from_slice(&bytes);
             }
-            Ok((id, arr))
+            let ts = exif_date.and_then(|s| parse_exif_to_unix_s(&s));
+            Ok((id, arr, ts))
         })?;
         rows.collect()
     }
@@ -1009,7 +1045,7 @@ impl Database {
     pub fn get_settings(&self) -> Result<Settings> {
         self.conn
             .query_row(
-                "SELECT near_dup_threshold, related_threshold,
+                "SELECT near_dup_threshold, related_threshold, group_time_window_s,
                         select_requires_pick, route_min_star, library_root,
                         enable_ai_on_import, hide_soft_threshold, eye_open_confidence
                  FROM settings WHERE id = 1",
@@ -1018,12 +1054,13 @@ impl Database {
                     Ok(Settings {
                         near_dup_threshold: row.get(0)?,
                         related_threshold: row.get(1)?,
-                        select_requires_pick: row.get::<_, i32>(2)? != 0,
-                        route_min_star: row.get(3)?,
-                        library_root: row.get(4)?,
-                        enable_ai_on_import: row.get::<_, i32>(5)? != 0,
-                        hide_soft_threshold: row.get(6)?,
-                        eye_open_confidence: row.get(7)?,
+                        group_time_window_s: row.get(2)?,
+                        select_requires_pick: row.get::<_, i32>(3)? != 0,
+                        route_min_star: row.get(4)?,
+                        library_root: row.get(5)?,
+                        enable_ai_on_import: row.get::<_, i32>(6)? != 0,
+                        hide_soft_threshold: row.get(7)?,
+                        eye_open_confidence: row.get(8)?,
                     })
                 },
             )
@@ -1032,13 +1069,14 @@ impl Database {
 
     pub fn update_settings(&self, s: &Settings) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO settings (id, near_dup_threshold, related_threshold,
+            "INSERT INTO settings (id, near_dup_threshold, related_threshold, group_time_window_s,
                                    select_requires_pick, route_min_star, library_root,
                                    enable_ai_on_import, hide_soft_threshold, eye_open_confidence)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
+                group_time_window_s = excluded.group_time_window_s,
                 select_requires_pick = excluded.select_requires_pick,
                 route_min_star = excluded.route_min_star,
                 library_root = excluded.library_root,
@@ -1048,6 +1086,7 @@ impl Database {
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
+                s.group_time_window_s,
                 s.select_requires_pick as i32,
                 s.route_min_star,
                 s.library_root,

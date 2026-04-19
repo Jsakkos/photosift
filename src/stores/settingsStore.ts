@@ -4,6 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 export interface Settings {
   nearDupThreshold: number;
   relatedThreshold: number;
+  /// Maximum capture-time gap in seconds between two photos for them
+  /// to cluster together. 0 disables the filter. Default 60s targets
+  /// the "same burst" mental model.
+  groupTimeWindowS: number;
   selectRequiresPick: boolean;
   routeMinStar: number;
   libraryRoot: string | null;
@@ -15,6 +19,7 @@ export interface Settings {
 const DEFAULT_SETTINGS: Settings = {
   nearDupThreshold: 4,
   relatedThreshold: 12,
+  groupTimeWindowS: 60,
   selectRequiresPick: true,
   routeMinStar: 3,
   libraryRoot: null,

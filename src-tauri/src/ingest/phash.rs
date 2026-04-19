@@ -30,7 +30,7 @@ pub fn compute_phash(img: &DynamicImage) -> [u8; 8] {
         }
     }
 
-    // Extract 8x8 low-freq block (64 coefficients for 64-bit hash)
+    // Extract 8x8 low-freq block (64 coefficients for 64-bit hash).
     let mut values = Vec::with_capacity(64);
     for u in 0..8 {
         for v in 0..8 {
@@ -38,8 +38,13 @@ pub fn compute_phash(img: &DynamicImage) -> [u8; 8] {
         }
     }
 
-    // Median threshold
-    let mut sorted = values.clone();
+    // Median threshold — over AC coefficients only. The DC coefficient
+    // at values[0] encodes average brightness and is orders of magnitude
+    // larger than the AC coefficients; leaving it in the median sample
+    // biases the threshold toward the AC midpoint anyway, but also
+    // effectively pins bit 0 to 1 across nearly every image. Excluding
+    // it gives a cleaner median over the signal we actually care about.
+    let mut sorted: Vec<f64> = values.iter().skip(1).copied().collect();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = sorted[sorted.len() / 2];
 

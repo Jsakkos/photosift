@@ -11,6 +11,7 @@ export function SettingsDialog() {
 
   const [nearDup, setNearDup] = useState(settings.nearDupThreshold);
   const [related, setRelated] = useState(settings.relatedThreshold);
+  const [timeWindow, setTimeWindow] = useState(settings.groupTimeWindowS);
   const [selectPick, setSelectPick] = useState(settings.selectRequiresPick);
   const [routeStar, setRouteStar] = useState(settings.routeMinStar);
   const [libraryRoot, setLibraryRoot] = useState<string | null>(settings.libraryRoot);
@@ -27,6 +28,7 @@ export function SettingsDialog() {
     if (isOpen) {
       setNearDup(settings.nearDupThreshold);
       setRelated(settings.relatedThreshold);
+      setTimeWindow(settings.groupTimeWindowS);
       setSelectPick(settings.selectRequiresPick);
       setRouteStar(settings.routeMinStar);
       setLibraryRoot(settings.libraryRoot);
@@ -67,6 +69,7 @@ export function SettingsDialog() {
       await updateSettings({
         nearDupThreshold: nearDup,
         relatedThreshold: related,
+        groupTimeWindowS: timeWindow,
         selectRequiresPick: selectPick,
         routeMinStar: routeStar,
         libraryRoot,
@@ -92,6 +95,7 @@ export function SettingsDialog() {
       await updateSettings({
         nearDupThreshold: nearDup,
         relatedThreshold: related,
+        groupTimeWindowS: timeWindow,
       });
       const groupCount = await reclusterShoot(currentShoot.id);
       await loadShoot(currentShoot.id);
@@ -191,6 +195,26 @@ export function SettingsDialog() {
           />
           <p className="text-xs text-[var(--text-secondary)] mt-1">
             Must be ≥ near-duplicate threshold. Default 12.
+          </p>
+        </div>
+
+        <div className="mb-4">
+          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+            Group time window (seconds)
+          </label>
+          <input
+            type="number"
+            min={0}
+            max={3600}
+            value={timeWindow}
+            onChange={(e) => setTimeWindow(parseInt(e.target.value) || 0)}
+            className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm"
+          />
+          <p className="text-xs text-[var(--text-secondary)] mt-1">
+            Two photos only cluster if their capture times are within this
+            gap AND their pHashes are similar. Blocks cross-moment pHash
+            false-positives. Default 60. Set to 0 to disable and use
+            pHash-only similarity.
           </p>
         </div>
 

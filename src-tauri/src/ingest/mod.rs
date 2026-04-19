@@ -203,20 +203,24 @@ pub fn run_import(
     // Phase 6: Clustering
     emit_progress(&app, shoot_id, ImportPhase::Clustering, 0, total, "");
 
-    let phash_data: Vec<(i64, [u8; 8])> = photo_ids
-        .iter()
-        .zip(file_data.iter())
-        .filter_map(|(&id, (_, _, phash))| phash.map(|h| (id, h)))
-        .collect();
-
+    // Pull phash + capture time from the DB now that photos are
+    // persisted, so the time-window check reads the same parsed
+    // timestamp reclustering uses later.
     let settings = {
         let db_guard = db.lock().map_err(|e| e.to_string())?;
         db_guard.get_settings().unwrap_or_default()
     };
+    let phash_rows = {
+        let db_guard = db.lock().map_err(|e| e.to_string())?;
+        db_guard
+            .phashes_for_shoot(shoot_id)
+            .map_err(|e| e.to_string())?
+    };
     let groups = clustering::cluster_phashes(
-        &phash_data,
+        &phash_rows,
         settings.near_dup_threshold as u32,
         settings.related_threshold as u32,
+        settings.group_time_window_s.max(0) as u32,
     );
 
     {
@@ -227,7 +231,7 @@ pub fn run_import(
                 .map_err(|e| e.to_string())?;
 
             for (i, &idx) in group.member_indices.iter().enumerate() {
-                let photo_id = phash_data[idx].0;
+                let photo_id = phash_rows[idx].0;
                 db_guard
                     .add_group_member(group_id, photo_id, i == 0)
                     .map_err(|e| e.to_string())?;
