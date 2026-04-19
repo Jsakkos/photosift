@@ -109,7 +109,11 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
     expect(pickItem!.isAiPick).toBe(true);
   });
 
-  it("triageExpandGroups=true: pick stays visible even if flagged reject", () => {
+  it("triageExpandGroups=true: rejected pick is hidden", () => {
+    // Regression: previously the isPinnedPick override kept an AI pick
+    // visible even after it was rejected, which left the badge stuck on
+    // a photo the user had already culled. Rejected means gone — no
+    // exception for AI picks.
     const images = [
       { ...e(10, 50, 0), flag: "unreviewed" },
       picked("reject"),
@@ -125,9 +129,35 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       0,
       { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false },
     );
-    const pickItem = items.find((d) => d.image.id === 11);
-    expect(pickItem, "pick member must be present even though flag=reject").toBeDefined();
-    expect(pickItem!.isAiPick).toBe(true);
+    expect(
+      items.find((d) => d.image.id === 11),
+      "rejected pick must be filtered out",
+    ).toBeUndefined();
+  });
+
+  it("drill-down (expandedGroupIds): rejected pick is hidden", () => {
+    // Same bug surfaces in the non-triageExpandGroups branch when the
+    // user has manually drilled into a single group. Rejected picks
+    // must drop out here too.
+    const images = [
+      { ...e(10, 50, 0), flag: "unreviewed" },
+      picked("reject"),
+      { ...e(12, 40, 0), flag: "unreviewed" },
+    ];
+    const items = computeDisplayItems(
+      images,
+      "triage",
+      [baseGroup],
+      false,
+      new Set([7]), // group 7 expanded via drill-down
+      false,
+      0,
+      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false },
+    );
+    expect(
+      items.find((d) => d.image.id === 11),
+      "rejected pick must be filtered out in drill-down view too",
+    ).toBeUndefined();
   });
 
   it("non-pick flagged members stay hidden in expanded state", () => {

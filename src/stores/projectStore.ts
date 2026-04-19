@@ -154,6 +154,7 @@ export function computeDisplayItems(
         const img = images[i];
         const group = photoGroupMap.get(img.id);
         const isPinnedPick = !!group && pickForGroup(group) === img.id;
+        if (img.flag === "reject") continue;
         if (img.flag !== "unreviewed" && !isPinnedPick) continue;
         items.push({
           imageIndex: i,
@@ -181,6 +182,7 @@ export function computeDisplayItems(
               if (mi < 0) continue;
               const memImg = images[mi];
               const isPinnedPick = pickForGroup(group) === memImg.id;
+              if (memImg.flag === "reject") continue;
               if (memImg.flag !== "unreviewed" && !isPinnedPick) continue;
               items.push({
                 imageIndex: mi,
