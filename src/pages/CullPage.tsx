@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
 import { useProjectStore } from "../stores/projectStore";
 import { useKeyboardNav } from "../hooks/useKeyboardNav";
 import { LoupeView } from "../components/LoupeView";
@@ -75,6 +76,26 @@ export function CullPage() {
       navigate("/shoots", { replace: true });
     }
   }, [id, loadShoot, navigate]);
+
+  // If the shoot was opened before import finished clustering, the
+  // store snapshot has no groups. Listen for `import-complete` and
+  // re-fetch when it's for the current shoot so groups appear as soon
+  // as the Rust side emits them.
+  useEffect(() => {
+    const shootId = Number(id);
+    if (isNaN(shootId) || shootId <= 0) return;
+    let unlisten: (() => void) | null = null;
+    listen<{ shootId: number }>("import-complete", (event) => {
+      if (event.payload.shootId === shootId) {
+        loadShoot(shootId);
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [id, loadShoot]);
 
   if (isLoading) {
     return (
