@@ -1,6 +1,6 @@
-use image::codecs::jpeg::JpegEncoder;
 use image::DynamicImage;
-use std::io::Cursor;
+use image::GenericImageView;
+use jpeg_encoder::{ColorType, Encoder as JpegEncoder};
 
 /// Apply EXIF orientation (1-8) to produce an upright `DynamicImage`.
 ///
@@ -53,10 +53,14 @@ pub fn apply_and_reencode(
 }
 
 fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
-    let mut buf = Cursor::new(Vec::new());
-    let encoder = JpegEncoder::new_with_quality(&mut buf, quality);
-    img.write_with_encoder(encoder).map_err(|e| e.to_string())?;
-    Ok(buf.into_inner())
+    let (w, h) = img.dimensions();
+    let rgb = img.to_rgb8();
+    let mut out = Vec::new();
+    let encoder = JpegEncoder::new(&mut out, quality);
+    encoder
+        .encode(rgb.as_raw(), w as u16, h as u16, ColorType::Rgb)
+        .map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 /// Human-readable short label for an EXIF orientation value, for UI display.

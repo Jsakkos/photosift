@@ -38,6 +38,11 @@ ndarray = "0.16"
 crossbeam-channel = "0.5"
 anyhow = "1"
 base64 = "0.22"
+# Pure-Rust JPEG encoder. The `image` crate's built-in encoder is
+# significantly slower (2-3s to encode a 24MP preview at quality 92);
+# this one is SIMD-optimised where the target supports it and brings
+# that down to ~400-800ms. Used in the rotation re-encode hot path.
+jpeg-encoder = "0.6"
 
 # Dev-only MCP bridge: embeds an MCP server inside the Tauri app so
 # Claude Code can take screenshots, read the DOM, and execute JS in

@@ -1,9 +1,9 @@
 use crate::ingest::{preview, walker};
 use crate::metadata::{exif, orientation};
 use base64::Engine;
-use image::codecs::jpeg::JpegEncoder;
+use image::GenericImageView;
+use jpeg_encoder::{ColorType, Encoder as JpegEncoder};
 use rayon::prelude::*;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 /// One entry in the pre-import scan response. Cheap enough to produce
@@ -75,11 +75,14 @@ fn build_scan_thumb(path: &Path, orientation_tag: Option<i32>) -> Option<String>
     let img = decoded?;
     let upright = orientation::apply(img, orientation_tag);
     let small = upright.thumbnail(200, 200);
+    let (w, h) = small.dimensions();
+    let rgb = small.to_rgb8();
 
     let mut buf: Vec<u8> = Vec::new();
-    let cursor = Cursor::new(&mut buf);
-    let encoder = JpegEncoder::new_with_quality(cursor, 72);
-    small.write_with_encoder(encoder).ok()?;
+    let encoder = JpegEncoder::new(&mut buf, 72);
+    encoder
+        .encode(rgb.as_raw(), w as u16, h as u16, ColorType::Rgb)
+        .ok()?;
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
     Some(format!("data:image/jpeg;base64,{}", encoded))
