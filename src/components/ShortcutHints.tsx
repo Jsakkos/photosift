@@ -2,8 +2,11 @@ import { useProjectStore } from "../stores/projectStore";
 
 const NAV_SHORTCUTS = [
   { key: "← →", action: "Previous / Next image" },
+  { key: "↑ ↓", action: "Previous / next group" },
   { key: "Home / End", action: "First / Last image" },
   { key: "Space", action: "Next unreviewed" },
+  { key: "Enter", action: "Drill into group (Triage / Select)" },
+  { key: "Esc", action: "Close drilled-in group strip" },
   { key: "Z", action: "Toggle zoom" },
   { key: "I", action: "Toggle metadata" },
   { key: "G", action: "Toggle grid view" },

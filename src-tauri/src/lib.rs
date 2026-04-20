@@ -56,9 +56,14 @@ pub fn run() {
         })
         .setup(|app| {
             use crate::ai::eye::EyeStateProvider;
+            use crate::ai::eye_onnx::OnnxEyeProvider;
             use crate::ai::face::{FaceProvider, YuNetProvider};
             use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
-            use crate::ai::{ensure_models_on_disk, AiProviderStatus};
+            use crate::ai::mouth::{MockMouthProvider, MouthStateProvider};
+            use crate::ai::mouth_onnx::OnnxMouthProvider;
+            use crate::ai::{
+                ensure_models_on_disk, AiProviderStatus, EyeProviderKind, MouthProviderKind,
+            };
             use std::sync::atomic::Ordering;
 
             let state = app.state::<Mutex<AppState>>();
@@ -75,13 +80,24 @@ pub fn run() {
                 )
             };
 
+            // Extract bundled models (YuNet is always present; eye
+            // classifier is optional and drops in if the user places
+            // an `eye_state.onnx` in the same dir).
+            let models_dir = match ensure_models_on_disk() {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    log::error!("Model extraction failed; disabling AI: {}", e);
+                    None
+                }
+            };
+
             // Real face provider via YuNet with graceful fallback to mock if
             // model extraction or ORT init fails (e.g. onnxruntime dylib
             // missing). Surface the actual backend via ai_status so the UI
             // can badge it.
             let (face_provider, face_status): (Box<dyn FaceProvider>, AiProviderStatus) =
-                match ensure_models_on_disk() {
-                    Ok(dir) => match YuNetProvider::load(&dir.join("yunet.onnx"), true) {
+                match models_dir.as_ref() {
+                    Some(dir) => match YuNetProvider::load(&dir.join("yunet.onnx"), true) {
                         Ok((yunet, status)) => (Box::new(yunet), status),
                         Err(e) => {
                             log::error!(
@@ -94,27 +110,95 @@ pub fn run() {
                             )
                         }
                     },
-                    Err(e) => {
-                        log::error!("Model extraction failed; disabling AI: {}", e);
-                        (
-                            Box::new(MockFaceProvider::default()),
-                            AiProviderStatus::Disabled,
-                        )
-                    }
+                    None => (
+                        Box::new(MockFaceProvider::default()),
+                        AiProviderStatus::Disabled,
+                    ),
                 };
 
-            // Eye provider stays mock-backed until a real classifier model is sourced.
-            let eye_provider: Box<dyn EyeStateProvider> = Box::new(MockEyeProvider::default());
+            // Eye provider: drop in a real ONNX classifier the moment
+            // a user places `eye_state.onnx` under ~/.photosift/models/.
+            // Until then, the mock stays live and the UI hides its
+            // alternating-0/1 signal via the eyeProvider === "mock" gate.
+            let (eye_provider, eye_kind): (Box<dyn EyeStateProvider>, EyeProviderKind) =
+                match models_dir.as_ref() {
+                    Some(dir) => {
+                        let eye_path = dir.join("eye_state.onnx");
+                        if eye_path.exists() {
+                            match OnnxEyeProvider::load(&eye_path) {
+                                Ok(p) => (Box::new(p), EyeProviderKind::Onnx),
+                                Err(e) => {
+                                    log::error!(
+                                        "Eye ONNX load failed at {}; falling back to mock: {}",
+                                        eye_path.display(),
+                                        e
+                                    );
+                                    (
+                                        Box::new(MockEyeProvider::default()),
+                                        EyeProviderKind::Mock,
+                                    )
+                                }
+                            }
+                        } else {
+                            log::info!(
+                                "No eye classifier at {} — using mock (drop in an ONNX file and restart to enable)",
+                                eye_path.display()
+                            );
+                            (Box::new(MockEyeProvider::default()), EyeProviderKind::Mock)
+                        }
+                    }
+                    None => (Box::new(MockEyeProvider::default()), EyeProviderKind::Mock),
+                };
 
             let app_handle = app.handle().clone();
             let analyzed_for_cb = analyzed.clone();
             let failed_for_cb = failed.clone();
             let total_for_cb = total.clone();
 
+            // Mouth provider: same pattern as eye. Drop a
+            // `mouth_state.onnx` into ~/.photosift/models/ to swap in a
+            // real smile/open-mouth classifier.
+            let (mouth_provider, mouth_kind): (Box<dyn MouthStateProvider>, MouthProviderKind) =
+                match models_dir.as_ref() {
+                    Some(dir) => {
+                        let mouth_path = dir.join("mouth_state.onnx");
+                        if mouth_path.exists() {
+                            match OnnxMouthProvider::load(&mouth_path) {
+                                Ok(p) => (Box::new(p), MouthProviderKind::Onnx),
+                                Err(e) => {
+                                    log::error!(
+                                        "Mouth ONNX load failed at {}; falling back to mock: {}",
+                                        mouth_path.display(),
+                                        e
+                                    );
+                                    (
+                                        Box::new(MockMouthProvider::default()),
+                                        MouthProviderKind::Mock,
+                                    )
+                                }
+                            }
+                        } else {
+                            log::info!(
+                                "No mouth classifier at {} — using mock",
+                                mouth_path.display()
+                            );
+                            (
+                                Box::new(MockMouthProvider::default()),
+                                MouthProviderKind::Mock,
+                            )
+                        }
+                    }
+                    None => (
+                        Box::new(MockMouthProvider::default()),
+                        MouthProviderKind::Mock,
+                    ),
+                };
+
             let spawned = crate::ai::spawn_worker(
                 db_path,
                 face_provider,
                 eye_provider,
+                mouth_provider,
                 cancel,
                 analyzed,
                 failed,
@@ -140,6 +224,8 @@ pub fn run() {
                 let mut s = state.lock().expect("state lock");
                 s.ai_worker = Some(spawned.handle);
                 s.ai_status = face_status;
+                s.ai_eye_provider = eye_kind;
+                s.ai_mouth_provider = mouth_kind;
             }
 
             log::info!("AI provider status: {:?}", face_status);

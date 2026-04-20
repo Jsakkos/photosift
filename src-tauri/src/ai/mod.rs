@@ -1,5 +1,8 @@
 pub mod face;
 pub mod eye;
+pub mod eye_onnx;
+pub mod mouth;
+pub mod mouth_onnx;
 pub mod sharpness;
 pub mod worker;
 pub mod mock;
@@ -21,6 +24,16 @@ pub enum AiProviderStatus {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EyeProviderKind {
+    Mock,
+    Onnx,
+}
+
+/// Which mouth/smile classifier is in use. Mirrors `EyeProviderKind`.
+/// UI must gate mouth indicators on `Onnx` so the mock's alternating
+/// output doesn't surface to users.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MouthProviderKind {
     Mock,
     Onnx,
 }
@@ -51,6 +64,7 @@ pub fn ensure_models_on_disk() -> anyhow::Result<std::path::PathBuf> {
 
 use crate::ai::eye::EyeStateProvider;
 use crate::ai::face::FaceProvider;
+use crate::ai::mouth::MouthStateProvider;
 use crate::db::schema::Database;
 use crossbeam_channel::unbounded;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -69,6 +83,7 @@ pub fn spawn_worker(
     db_path: std::path::PathBuf,
     faces_provider: Box<dyn FaceProvider>,
     eyes_provider: Box<dyn EyeStateProvider>,
+    mouth_provider: Box<dyn MouthStateProvider>,
     cancel: Arc<AtomicBool>,
     analyzed: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
@@ -90,6 +105,7 @@ pub fn spawn_worker(
             db,
             faces_provider,
             eyes_provider,
+            mouth_provider,
             move |job, res| match res {
                 Ok(_) => {
                     analyzed.fetch_add(1, Ordering::SeqCst);

@@ -73,3 +73,13 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package."jpeg-decoder"]
 opt-level = 3
+# Our own crate at opt-level 2 in dev. The AI worker's inner loops
+# (letterbox tensor build, NMS, Laplacian reduce) spend a meaningful
+# chunk of time in bounds-checked indexed writes; opt-level 2 is
+# enough for LLVM to hoist those checks out without pushing compile
+# times into release-build territory (3 makes link-time balloon).
+[profile.dev.package.photosift]
+opt-level = 2
+# Faster JPEG encoder library we added in this session.
+[profile.dev.package.jpeg-encoder]
+opt-level = 3

@@ -1,4 +1,4 @@
-use crate::ai::{worker::WorkerHandle, AiProviderStatus, EyeProviderKind};
+use crate::ai::{worker::WorkerHandle, AiProviderStatus, EyeProviderKind, MouthProviderKind};
 use crate::db::schema::{self, Database, SharpnessPercentiles};
 use crate::metadata::xmp_queue::XmpWriteQueue;
 use crate::pipeline::cache::ImageCache;
@@ -21,6 +21,7 @@ pub struct AppState {
     pub ai_worker: Option<WorkerHandle>,
     pub ai_status: AiProviderStatus,
     pub ai_eye_provider: EyeProviderKind,
+    pub ai_mouth_provider: MouthProviderKind,
     pub ai_cancel: Arc<AtomicBool>,
     pub ai_analyzed: Arc<AtomicUsize>,
     pub ai_failed: Arc<AtomicUsize>,
@@ -64,6 +65,7 @@ impl AppState {
             ai_worker: None,
             ai_status: AiProviderStatus::Disabled,
             ai_eye_provider: EyeProviderKind::Mock,
+            ai_mouth_provider: MouthProviderKind::Mock,
             ai_cancel: Arc::new(AtomicBool::new(false)),
             ai_analyzed: Arc::new(AtomicUsize::new(0)),
             ai_failed: Arc::new(AtomicUsize::new(0)),

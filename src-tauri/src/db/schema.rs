@@ -1702,6 +1702,7 @@ pub(crate) mod tests {
 
             let face_p = MockFaceProvider::default();
             let eye_p = MockEyeProvider::default();
+            let mouth_p = crate::ai::mouth::MockMouthProvider::default();
 
             for id in &ids {
                 let preview = dir.path().join(format!("{}.jpg", id));
@@ -1715,7 +1716,7 @@ pub(crate) mod tests {
                     photo_id: *id,
                     preview_path: preview.to_string_lossy().into_owned(),
                 };
-                process_job(&mut db, &job, &face_p, &eye_p).unwrap();
+                process_job(&mut db, &job, &face_p, &eye_p, &mouth_p).unwrap();
             }
             ids
         };

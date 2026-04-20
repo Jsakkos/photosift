@@ -1,5 +1,6 @@
 use crate::ai::eye::{eye_crop_pixels, EyeStateProvider};
 use crate::ai::face::FaceProvider;
+use crate::ai::mouth::{mouth_crop_pixels, MouthStateProvider};
 use crate::ai::sharpness::{laplacian_variance, normalize_sharpness};
 use crate::ai::AiJob;
 use crate::db::schema::{Database, FaceRow};
@@ -22,6 +23,7 @@ pub fn process_job(
     job: &AiJob,
     faces_provider: &dyn FaceProvider,
     eyes_provider: &dyn EyeStateProvider,
+    mouth_provider: &dyn MouthStateProvider,
 ) -> Result<()> {
     let preview_path = Path::new(&job.preview_path);
     let t_start = Instant::now();
@@ -56,6 +58,27 @@ pub fn process_job(
 
         let l_sharp = normalize_sharpness(laplacian_variance(&l_img));
         let r_sharp = normalize_sharpness(laplacian_variance(&r_img));
+
+        // Mouth classification: derive a crop from the face bbox and
+        // hand it to the provider. Not yet persisted to the DB — until
+        // a real mouth model is sourced, these values are logged only
+        // so future `DROP DATA; ALTER TABLE faces ADD COLUMN mouth_*`
+        // work has observable data to validate against.
+        let m_crop = mouth_crop_pixels(&face.bbox, img_w, img_h);
+        let m_img = image::imageops::crop_imm(&gray, m_crop.x, m_crop.y, m_crop.w, m_crop.h)
+            .to_image();
+        if let Ok(mouth) = mouth_provider.classify(&m_img) {
+            log::debug!(
+                "ai::worker photo={} face_bbox=({:.2},{:.2},{:.2},{:.2}) mouth_open={} smile={:.2}",
+                job.photo_id,
+                face.bbox.x,
+                face.bbox.y,
+                face.bbox.w,
+                face.bbox.h,
+                mouth.mouth_open,
+                mouth.smile_confidence,
+            );
+        }
 
         face_rows.push(FaceRow {
             photo_id: job.photo_id,
@@ -123,6 +146,7 @@ pub fn run_loop(
     mut db: Database,
     faces_provider: Box<dyn FaceProvider>,
     eyes_provider: Box<dyn EyeStateProvider>,
+    mouth_provider: Box<dyn MouthStateProvider>,
     on_progress: impl Fn(&AiJob, Result<()>) + Send,
 ) {
     log::info!("AI worker started");
@@ -138,7 +162,13 @@ pub fn run_loop(
             log::info!("AI worker: cancel — dropped {} queued job(s)", drained);
             continue;
         }
-        let result = process_job(&mut db, &job, faces_provider.as_ref(), eyes_provider.as_ref());
+        let result = process_job(
+            &mut db,
+            &job,
+            faces_provider.as_ref(),
+            eyes_provider.as_ref(),
+            mouth_provider.as_ref(),
+        );
         on_progress(&job, result);
     }
     log::info!("AI worker exited (channel closed)");
@@ -148,6 +178,7 @@ pub fn run_loop(
 mod tests {
     use super::*;
     use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
+    use crate::ai::mouth::MockMouthProvider;
     use crate::db::schema::Database;
     use image::{ImageBuffer, Luma};
     use tempfile::tempdir;
@@ -179,7 +210,14 @@ mod tests {
             preview_path: preview.to_string_lossy().into_owned(),
         };
 
-        process_job(&mut db, &job, &MockFaceProvider::default(), &MockEyeProvider::default()).unwrap();
+        process_job(
+            &mut db,
+            &job,
+            &MockFaceProvider::default(),
+            &MockEyeProvider::default(),
+            &MockMouthProvider::default(),
+        )
+        .unwrap();
 
         let faces = db.get_faces_for_photo(ids[0]).unwrap();
         assert_eq!(faces.len(), 1);
@@ -235,6 +273,7 @@ mod tests {
                 worker_db,
                 Box::new(crate::ai::mock::MockFaceProvider::default()),
                 Box::new(crate::ai::mock::MockEyeProvider::default()),
+                Box::new(crate::ai::mouth::MockMouthProvider::default()),
                 move |_job, res| {
                     if res.is_ok() {
                         completed_clone.fetch_add(1, Ordering::SeqCst);
