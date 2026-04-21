@@ -34,7 +34,6 @@ export function SettingsDialog() {
   const [reclusterMsg, setReclusterMsg] = useState<string | null>(null);
   const [enableAi, setEnableAi] = useState(settings.enableAiOnImport);
   const [eyeConfidence, setEyeConfidence] = useState(settings.eyeOpenConfidence);
-  const [hideSoft, setHideSoft] = useState(settings.hideSoftThreshold);
   const [reanalyzing, setReanalyzing] = useState(false);
   const [reanalyzeMsg, setReanalyzeMsg] = useState<string | null>(null);
   const aiProvider = useAiStore((s) => s.provider);
@@ -50,7 +49,6 @@ export function SettingsDialog() {
       setImmichPath(settings.immichIngestPath);
       setEnableAi(settings.enableAiOnImport);
       setEyeConfidence(settings.eyeOpenConfidence);
-      setHideSoft(settings.hideSoftThreshold);
       setLibraryRootError(null);
       setReclusterMsg(null);
       setReanalyzeMsg(null);
@@ -99,7 +97,6 @@ export function SettingsDialog() {
         immichIngestPath: immichPath,
         enableAiOnImport: enableAi,
         eyeOpenConfidence: eyeConfidence,
-        hideSoftThreshold: hideSoft,
       });
     } catch (e) {
       setLibraryRootError(String(e));
@@ -372,23 +369,6 @@ export function SettingsDialog() {
             className="w-full mb-3"
             aria-label="Eye open/closed classifier confidence"
           />
-
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
-            Hide-soft threshold: {hideSoft} {hideSoft === 0 ? "(disabled)" : ""}
-          </label>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={hideSoft}
-            onChange={(e) => setHideSoft(parseInt(e.target.value))}
-            className="w-full"
-            aria-label="Hide-soft sharpness threshold"
-          />
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
-            In Select and Route views, photos with sharpness below this are hidden. Photos still being analyzed are always shown.
-          </p>
 
           {currentShoot && (
             <div className="mt-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5">

@@ -46,7 +46,11 @@ describe("undo", () => {
     expect(state.redoStack[0].newValue).toBe("pick");
   });
 
-  test("undo group flag in triage reverts ALL members", async () => {
+  test("undo Select auto-reject reverts the whole group batch", async () => {
+    // Select's P auto-rejects siblings (pick-in-group cascades). Undoing
+    // that one action must restore every photo touched by the cascade,
+    // not just the primary pick. (Triage no longer has a bulk branch —
+    // each photo is reviewed individually via auto-drill.)
     setupMockIpc({});
 
     const img1 = makeImage({ id: 1, flag: "unreviewed" });
@@ -60,13 +64,13 @@ describe("undo", () => {
 
     const images = [img1, img2, img3];
     const groups = [group];
-    const displayItems = computeDisplayItems(images, "triage", groups);
+    const displayItems = computeDisplayItems(images, "select", groups);
 
     useProjectStore.setState({
       images,
       groups,
       displayItems,
-      currentView: "triage",
+      currentView: "select",
       currentIndex: 0,
       autoAdvance: false,
       undoStack: [],
@@ -74,7 +78,9 @@ describe("undo", () => {
     });
 
     await useProjectStore.getState().setFlag("pick");
-    expect(useProjectStore.getState().images.every((i) => i.flag === "pick")).toBe(true);
+    expect(useProjectStore.getState().images.find((i) => i.id === 1)!.flag).toBe("pick");
+    expect(useProjectStore.getState().images.find((i) => i.id === 2)!.flag).toBe("reject");
+    expect(useProjectStore.getState().images.find((i) => i.id === 3)!.flag).toBe("reject");
 
     await useProjectStore.getState().undo();
 
@@ -88,7 +94,7 @@ describe("undo", () => {
     expect(state.redoStack[0].batch).toHaveLength(3);
   });
 
-  test("redo after group-flag undo re-applies to all members", async () => {
+  test("redo after Select-pick undo re-applies the cascade", async () => {
     setupMockIpc({});
 
     const img1 = makeImage({ id: 1, flag: "unreviewed" });
@@ -103,8 +109,8 @@ describe("undo", () => {
     useProjectStore.setState({
       images: [img1, img2, img3],
       groups: [group],
-      displayItems: computeDisplayItems([img1, img2, img3], "triage", [group]),
-      currentView: "triage",
+      displayItems: computeDisplayItems([img1, img2, img3], "select", [group]),
+      currentView: "select",
       currentIndex: 0,
       autoAdvance: false,
       undoStack: [],
@@ -116,7 +122,9 @@ describe("undo", () => {
     await useProjectStore.getState().redo();
 
     const state = useProjectStore.getState();
-    expect(state.images.every((i) => i.flag === "pick")).toBe(true);
+    expect(state.images.find((i) => i.id === 1)!.flag).toBe("pick");
+    expect(state.images.find((i) => i.id === 2)!.flag).toBe("reject");
+    expect(state.images.find((i) => i.id === 3)!.flag).toBe("reject");
     expect(state.undoStack).toHaveLength(1);
     expect(state.redoStack).toHaveLength(0);
   });

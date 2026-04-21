@@ -14,10 +14,11 @@ interface Props {
 /// everything is routed.
 export function EmptyViewState({ view }: Props) {
   const images = useProjectStore((s) => s.images);
+  const selectMinStar = useProjectStore((s) => s.selectMinStar);
   const routeMinStar = useSettingsStore(
     (s) => s.settings.routeMinStar ?? 0,
   );
-  const { title, body, hint } = copy(view, images, routeMinStar);
+  const { title, body, hint } = copy(view, images, routeMinStar, selectMinStar);
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-2 bg-[var(--bg-primary)] px-8">
       <p className="text-[var(--text-primary)] text-lg font-light">{title}</p>
@@ -35,6 +36,7 @@ function copy(
   view: CullView,
   images: { flag: string; destination: string; starRating: number }[],
   routeMinStar: number,
+  selectMinStar: number,
 ): { title: string; body: string; hint?: string } {
   switch (view) {
     case "triage":
@@ -49,10 +51,20 @@ function copy(
       //   (b) picks exist but were rejected or filtered (e.g. hide-soft
       //       threshold is hiding them)
       const picks = images.filter((i) => i.flag === "pick").length;
+      // Most common "empty Select" is the multi-pass floor sitting above
+      // every rated photo. Point the user at the chips / bracket keys
+      // instead of a filter they can't see.
+      if (picks > 0 && selectMinStar > 0) {
+        return {
+          title: `No photos at ${selectMinStar}★+`,
+          body: `You have ${picks} pick${picks === 1 ? "" : "s"}, but none have been rated ${selectMinStar}★ or higher. Rate a photo up to ${selectMinStar}★ to promote it into this pass, or press [ to step back to a lower tier.`,
+          hint: "Use the pass chips above the filmstrip to jump between tiers.",
+        };
+      }
       if (picks > 0) {
         return {
           title: "No picks shown",
-          body: `You have ${picks} pick${picks === 1 ? "" : "s"} but none match the current filter. Check the hide-soft threshold in Settings, or flip "Select view requires pick" off to include unreviewed photos.`,
+          body: `You have ${picks} pick${picks === 1 ? "" : "s"} but none match the current filter. Flip "Select view requires pick" off in Settings to include unreviewed photos, or check the Show-all toggle.`,
         };
       }
       return {

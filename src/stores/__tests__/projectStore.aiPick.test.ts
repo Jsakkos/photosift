@@ -126,7 +126,7 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       new Set([7]), // group 7 expanded
       false,
       0,
-      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false, useSmileInPick: false },
+      { sortByAi: "none", useEyesInPick: false, useSmileInPick: false },
     );
     expect(items.find((d) => d.image.id === 11)).toBeUndefined();
     // The remaining unreviewed siblings should still render.
@@ -150,7 +150,7 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       new Set([7]), // group 7 expanded via drill-down
       false,
       0,
-      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false, useSmileInPick: false },
+      { sortByAi: "none", useEyesInPick: false, useSmileInPick: false },
     );
     expect(
       items.find((d) => d.image.id === 11),
@@ -173,7 +173,7 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       new Set([7]),
       false,
       0,
-      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false, useSmileInPick: false },
+      { sortByAi: "none", useEyesInPick: false, useSmileInPick: false },
     );
     expect(items.find((d) => d.image.id === 12)).toBeUndefined();
     expect(items.find((d) => d.image.id === 11)?.isAiPick).toBe(true);

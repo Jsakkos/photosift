@@ -19,11 +19,15 @@ function routeMinStar(): number {
   return useSettingsStore.getState().settings.routeMinStar ?? 0;
 }
 
-function hideSoftThreshold(): number {
-  return useSettingsStore.getState().settings.hideSoftThreshold ?? 0;
+/// Session-scoped "pass floor" for Select. Read lazily so every
+/// computeDisplayItemsFiltered call picks up the current tier without
+/// threading the value through 18+ internal callers. Defaults to 0 on
+/// first read (Pass 1 — show everything pick-flagged).
+function currentSelectMinStar(): number {
+  return useProjectStore.getState().selectMinStar ?? 0;
 }
 
-/// Bundle the sort/filter/pick options that `computeDisplayItems` needs.
+/// Bundle the sort/pick options that `computeDisplayItems` needs.
 /// Centralized so call sites don't have to remember to keep
 /// `useEyesInPick` / `useSmileInPick` gated on the provider kinds — if the
 /// backend swaps to a real classifier, this helper picks it up automatically.
@@ -33,7 +37,6 @@ function currentAiOptions(
   const { eyeProvider, mouthProvider } = useAiStore.getState();
   return {
     sortByAi,
-    hideSoftThreshold: hideSoftThreshold(),
     useEyesInPick: eyeProvider === "onnx",
     useSmileInPick: mouthProvider === "onnx",
   };
@@ -48,7 +51,6 @@ function showReviewedFlag(): boolean {
 
 export interface AiDisplayOptions {
   sortByAi: "none" | "sharpness" | "faces";
-  hideSoftThreshold: number; // 0 disables
   /// When false, AI-pick scoring ignores the `eyes_open` term. Must be
   /// false while the eye classifier is `MockEyeProvider`.
   useEyesInPick: boolean;
@@ -60,7 +62,6 @@ export interface AiDisplayOptions {
 
 const DEFAULT_AI_OPTIONS: AiDisplayOptions = {
   sortByAi: "none",
-  hideSoftThreshold: 0,
   useEyesInPick: false,
   useSmileInPick: false,
 };
@@ -173,6 +174,7 @@ function computeDisplayItemsFiltered(
   // the user's current Show-all preference without having to thread the
   // flag through the 17+ store actions that recompute displayItems.
   const showReviewed = showReviewedFlag();
+  const selectMinStar = currentSelectMinStar();
   if (activeInnerGroupId == null) {
     return computeDisplayItems(
       images,
@@ -183,6 +185,7 @@ function computeDisplayItemsFiltered(
       routeMinStarGate,
       aiOptions,
       showReviewed,
+      selectMinStar,
     );
   }
 
@@ -211,10 +214,11 @@ function computeDisplayItemsFiltered(
         // the default and rely on the Show-all toggle for second thoughts.
         if (img.flag !== "unreviewed") continue;
       } else if (currentView === "select") {
-        const passes = selectRequiresPickFilter
+        const passesFlag = selectRequiresPickFilter
           ? img.flag === "pick"
           : img.flag !== "reject";
-        if (!passes) continue;
+        if (!passesFlag) continue;
+        if (img.starRating < selectMinStar) continue;
       } else {
         // route view
         if (img.flag !== "pick" || img.destination !== "unrouted") continue;
@@ -316,6 +320,7 @@ export function computeDisplayItems(
   routeMinStarGate: number = 0,
   aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
   showReviewed: boolean = false,
+  selectMinStar: number = 0,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   const photoGroupMap = buildPhotoGroupMap(groups);
@@ -376,8 +381,16 @@ export function computeDisplayItems(
   } else if (currentView === "select") {
     const seenGroups = new Set<number>();
     const passesSelectGate = (img: ImageEntry): boolean => {
-      if (showReviewed) return true;
-      return selectRequiresPickFilter ? img.flag === "pick" : img.flag !== "reject";
+      // showReviewed bypasses the flag filter (so picked/rejected become
+      // visible again) but NOT the pass floor — the floor is a workflow
+      // tier chosen by the user, not a review filter, so leaving it
+      // enforced here keeps "Show all" from silently breaking Pass 2+.
+      const passesFlag = showReviewed
+        ? true
+        : selectRequiresPickFilter
+          ? img.flag === "pick"
+          : img.flag !== "reject";
+      return passesFlag && img.starRating >= selectMinStar;
     };
 
     for (let i = 0; i < images.length; i++) {
@@ -422,18 +435,7 @@ export function computeDisplayItems(
     }
   }
 
-  // AI filter: hideSoft (Select + Route only). Nulls pass through so images
-  // still being analyzed remain visible; the gate only evicts known-soft shots.
   let result = items;
-  if (
-    aiOptions.hideSoftThreshold > 0 &&
-    (currentView === "select" || currentView === "route")
-  ) {
-    result = result.filter((it) => {
-      const s = it.image.sharpnessScore;
-      return s === null || s === undefined || s >= aiOptions.hideSoftThreshold;
-    });
-  }
 
   // AI sort: stable sort, nulls/undefineds to the end.
   if (aiOptions.sortByAi === "sharpness") {
@@ -506,6 +508,11 @@ interface ProjectState {
   /// strip for that group; pass the same id to toggle closed; pass null
   /// to clear. Only one group can be active at a time.
   setActiveInnerGroup: (groupId: number | null) => void;
+  /// If the current Triage/Select cursor sits on a group cover and we're
+  /// not already drilled in, drill in. Called after every navigation /
+  /// view-switch / load so the user reviews group members individually
+  /// instead of landing on a cover and accidentally mass-triaging.
+  autoDrillIfOnCover: () => void;
   setCurrentIndex: (index: number) => void;
   navigateNext: () => void;
   navigatePrev: () => void;
@@ -561,6 +568,13 @@ interface ProjectState {
   /// back an accidental P/X without hunting the Undo shortcut.
   showReviewed: boolean;
   toggleShowReviewed: () => void;
+  /// Pass floor for Select — the minimum star rating a photo needs to
+  /// be visible. Session-scoped; not persisted per shoot. Starts at 0
+  /// (Pass 1, show everything pick-flagged). `]` / `[` and the pass
+  /// chips adjust it; after-rating auto-advance bumps by 1 when every
+  /// visible photo has already cleared the next tier.
+  selectMinStar: number;
+  setSelectMinStar: (n: number) => void;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -590,6 +604,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   heatmapOn: false,
   heatmapCache: new Map<number, number[]>(),
   showReviewed: false,
+  selectMinStar: 0,
 
   currentImage: () => {
     const { displayItems, currentIndex } = get();
@@ -615,6 +630,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         shootId,
         viewName: resumeView,
       }).catch(() => null);
+
+      // Reset the Select pass floor to 0 before computing the initial
+      // display — otherwise a leftover `selectMinStar` from the previous
+      // shoot in the same session would filter this new shoot's photos
+      // at the wrong tier, making the loupe load on an empty list.
+      useProjectStore.setState({ selectMinStar: 0 });
 
       const displayItems = computeDisplayItemsFiltered(
         images,
@@ -645,7 +666,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         displayItems,
         activeInnerGroupId: null,
         lastFlagAction: null,
+        // New shoot → restart at Pass 1. The floor is session-scoped
+        // but carrying it across shoots would land the user on an
+        // empty tier whenever they open a fresh shoot, which reads as
+        // "Select is broken."
+        selectMinStar: 0,
       });
+      get().autoDrillIfOnCover();
 
       // Kick off the shoot's sharpness-percentile fetch so the face-panel
       // badge has the right 1-10 scale ready by the time the user opens a
@@ -661,6 +688,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { displayItems } = get();
     if (index >= 0 && index < displayItems.length) {
       set({ currentIndex: index, isZoomed: false });
+      get().autoDrillIfOnCover();
     }
   },
 
@@ -668,6 +696,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { currentIndex, displayItems } = get();
     if (currentIndex < displayItems.length - 1) {
       set({ currentIndex: currentIndex + 1, isZoomed: false });
+      get().autoDrillIfOnCover();
     }
   },
 
@@ -675,6 +704,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const { currentIndex } = get();
     if (currentIndex > 0) {
       set({ currentIndex: currentIndex - 1, isZoomed: false });
+      get().autoDrillIfOnCover();
     }
   },
 
@@ -717,6 +747,24 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     if (autoAdvance && currentIndex < newDisplayItems.length - 1) {
       set({ currentIndex: currentIndex + 1, isZoomed: false });
+    }
+
+    // Auto-advance the pass floor when the current tier is "used up" —
+    // every visible photo has been rated above the floor, so there's
+    // nothing left to decide at this tier. Bump by 1 so the user moves
+    // to the next pass without pressing `]`. Clamped at 5 and only
+    // fires when the next tier would have at least one member, so a
+    // newly-promoted single photo doesn't strand the user on an empty
+    // Pass N+1.
+    if (get().currentView === "select") {
+      const floor = get().selectMinStar;
+      if (
+        floor < 5 &&
+        newDisplayItems.length > 0 &&
+        newDisplayItems.every((d) => d.image.starRating > floor)
+      ) {
+        get().setSelectMinStar(floor + 1);
+      }
     }
 
     try {
@@ -780,18 +828,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const updatedImages = [...images];
     const affectedIds: { id: number; oldFlag: string }[] = [];
 
-    if (item.groupId && currentView === "triage" && item.isGroupCover) {
-      const group = groups.find((g) => g.id === item.groupId);
-      if (group) {
-        for (const member of group.members) {
-          const mi = updatedImages.findIndex((im) => im.id === member.photoId);
-          if (mi >= 0) {
-            affectedIds.push({ id: member.photoId, oldFlag: updatedImages[mi].flag });
-            updatedImages[mi] = { ...updatedImages[mi], flag };
-          }
-        }
-      }
-    } else if (item.groupId && currentView === "select" && flag === "pick") {
+    if (item.groupId && currentView === "select" && flag === "pick") {
       updatedImages[item.imageIndex] = { ...image, flag };
       affectedIds.push({ id: image.id, oldFlag });
       const group = groups.find((g) => g.id === item.groupId);
@@ -842,13 +879,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       newValue: flag,
     };
     if (affectedIds.length > 1) {
-      if (item.groupId && currentView === "triage" && item.isGroupCover) {
-        undoEntry.batch = affectedIds.map((a) => ({
-          imageId: a.id,
-          oldValue: a.oldFlag,
-          newValue: flag,
-        }));
-      } else if (item.groupId && currentView === "select" && flag === "pick") {
+      if (item.groupId && currentView === "select" && flag === "pick") {
         undoEntry.batch = affectedIds.map((a) => ({
           imageId: a.id,
           oldValue: a.oldFlag,
@@ -866,6 +897,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ? { color: flashColor, timestamp: Date.now() }
         : get().lastFlagAction,
     });
+
+    // If this triage action just cleared the last unreviewed photo,
+    // cross the view boundary to Select so the user doesn't get stuck
+    // on EmptyViewState. Only fires on a real triage transition
+    // (unreviewed → pick/reject) — revisiting an already-empty shoot
+    // won't re-trigger because no flag mutation happens there.
+    const triageJustEmptied =
+      currentView === "triage" &&
+      newDisplayItems.length === 0 &&
+      oldFlag === "unreviewed" &&
+      (flag === "pick" || flag === "reject");
+    if (triageJustEmptied) {
+      void get().setView("select");
+      try {
+        await invoke("set_flag", { photoId: image.id, flag });
+      } catch (e) {
+        console.error("Failed to set flag:", e);
+        get().setToast(`Flag save failed: ${e}`, "error");
+      }
+      return;
+    }
 
     // Auto-exit just happened if we were drilled in and the helper
     // returned null. In that case, jump to where the old group sat in
@@ -902,12 +954,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
 
     try {
-      if (item.groupId && currentView === "triage" && item.isGroupCover) {
-        const allIds = affectedIds.map((a) => a.id);
-        await invoke("bulk_set_flag", { photoIds: allIds, flag });
-      } else {
-        await invoke("set_flag", { photoId: image.id, flag });
-      }
+      await invoke("set_flag", { photoId: image.id, flag });
     } catch (e) {
       console.error("Failed to set flag:", e);
       get().setToast(`Flag save failed: ${e}`, "error");
@@ -1173,6 +1220,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       isZoomed: false,
       showMetadata: view === "route" ? true : get().showMetadata,
     });
+    get().autoDrillIfOnCover();
   },
 
   setViewMode: (mode: ViewMode) => set({ viewMode: mode }),
@@ -1206,6 +1254,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   toggleHeatmap: () => set((s) => ({ heatmapOn: !s.heatmapOn })),
   toggleShowReviewed: () => {
     set((s) => ({ showReviewed: !s.showReviewed }));
+    get().refreshDisplay();
+  },
+
+  setSelectMinStar: (n: number) => {
+    const clamped = Math.max(0, Math.min(5, n));
+    if (get().selectMinStar === clamped) return;
+    set({ selectMinStar: clamped });
     get().refreshDisplay();
   },
 
@@ -1273,6 +1328,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
 
+  autoDrillIfOnCover: () => {
+    const { currentView, activeInnerGroupId, displayItems, currentIndex } = get();
+    if (activeInnerGroupId != null) return;
+    if (currentView !== "triage" && currentView !== "select") return;
+    const target = displayItems[currentIndex];
+    if (target?.isGroupCover && target.groupId != null) {
+      get().setActiveInnerGroup(target.groupId);
+    }
+  },
+
   setFlagNoAutoReject: async (flag: string) => {
     const { displayItems, currentIndex, autoAdvance, undoStack, images, currentView, groups } = get();
     const item = displayItems[currentIndex];
@@ -1315,6 +1380,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       redoStack: [],
       lastFlagAction: flashColor ? { color: flashColor, timestamp: Date.now() } : get().lastFlagAction,
     });
+
+    const triageJustEmptied =
+      currentView === "triage" &&
+      newDisplayItems.length === 0 &&
+      oldFlag === "unreviewed" &&
+      (flag === "pick" || flag === "reject");
+    if (triageJustEmptied) {
+      void get().setView("select");
+      try {
+        await invoke("set_flag", { photoId: image.id, flag });
+      } catch (e) {
+        console.error("Failed to set flag:", e);
+        get().setToast(`Flag save failed: ${e}`, "error");
+      }
+      return;
+    }
 
     const autoExited = preActiveId != null && newActive == null;
     const advanceTarget = autoExited && preDrilledOuterIdx >= 0
@@ -1583,6 +1664,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       activeInnerGroupId: nextActive,
       currentIndex: nextIndex < 0 ? 0 : nextIndex,
     });
+    get().autoDrillIfOnCover();
   },
 
   // Called from the ai-progress listener: pulls the latest AI fields
@@ -1684,26 +1766,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 }));
 
 // Settings that feed `computeDisplayItems` are read lazily at call time
-// via the `selectRequiresPick()` / `routeMinStar()` / `hideSoftThreshold()`
-// helpers above — but updating a setting in SettingsDialog only mutates
-// `settingsStore`; it doesn't trigger a re-compute here. Subscribe so
-// the user sees the filter / sort take effect as soon as they adjust
-// the slider.
-let lastHideSoft = useSettingsStore.getState().settings.hideSoftThreshold;
+// via the `selectRequiresPick()` / `routeMinStar()` helpers above — but
+// updating a setting in SettingsDialog only mutates `settingsStore`; it
+// doesn't trigger a re-compute here. Subscribe so the user sees the
+// filter / sort take effect as soon as they adjust the slider.
 let lastSelectRequiresPick = useSettingsStore.getState().settings.selectRequiresPick;
 let lastRouteMinStar = useSettingsStore.getState().settings.routeMinStar;
 useSettingsStore.subscribe((state) => {
-  const {
-    hideSoftThreshold: hs,
-    selectRequiresPick: sr,
-    routeMinStar: rm,
-  } = state.settings;
-  if (
-    hs !== lastHideSoft ||
-    sr !== lastSelectRequiresPick ||
-    rm !== lastRouteMinStar
-  ) {
-    lastHideSoft = hs;
+  const { selectRequiresPick: sr, routeMinStar: rm } = state.settings;
+  if (sr !== lastSelectRequiresPick || rm !== lastRouteMinStar) {
     lastSelectRequiresPick = sr;
     lastRouteMinStar = rm;
     useProjectStore.getState().refreshDisplay();

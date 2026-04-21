@@ -9,7 +9,6 @@ export function useKeyboardNav() {
     navigatePrev,
     setRating,
     setFlag,
-    setFlagNoAutoReject,
     setDestination,
     undo,
     redo,
@@ -194,18 +193,32 @@ export function useKeyboardNav() {
           if (currentView === "select") setRating(0);
           break;
         case "p":
-          if (currentView !== "route") setFlag("pick");
+          // P is a Triage-only gesture. In Select every photo is already
+          // picked, so binding P to setFlag would be a no-op at best and
+          // (via the Select-P group cascade) a silent bulk reject at
+          // worst. Stars are the Select verb.
+          if (currentView === "triage") setFlag("pick");
           break;
         case "P":
-          if (currentView === "select" && e.shiftKey) {
-            setFlagNoAutoReject("pick");
-          } else if (currentView !== "route") {
-            setFlag("pick");
-          }
+          if (currentView === "triage") setFlag("pick");
           break;
         case "x":
         case "X":
           if (currentView !== "route") setFlag("reject");
+          break;
+        case "[":
+          if (currentView === "select") {
+            e.preventDefault();
+            const cur = useProjectStore.getState().selectMinStar;
+            useProjectStore.getState().setSelectMinStar(cur - 1);
+          }
+          break;
+        case "]":
+          if (currentView === "select") {
+            e.preventDefault();
+            const cur = useProjectStore.getState().selectMinStar;
+            useProjectStore.getState().setSelectMinStar(cur + 1);
+          }
           break;
         case "u":
         case "U":
@@ -319,7 +332,6 @@ export function useKeyboardNav() {
     navigatePrev,
     setRating,
     setFlag,
-    setFlagNoAutoReject,
     setDestination,
     undo,
     redo,

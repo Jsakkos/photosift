@@ -47,6 +47,7 @@ export function Filmstrip() {
   const activeInnerGroupId = useProjectStore((s) => s.activeInnerGroupId);
   const sortByAi = useProjectStore((s) => s.sortByAi);
   const showReviewed = useProjectStore((s) => s.showReviewed);
+  const selectMinStar = useProjectStore((s) => s.selectMinStar);
   const setCurrentIndex = useProjectStore((s) => s.setCurrentIndex);
   const setViewMode = useProjectStore((s) => s.setViewMode);
   const setActiveInnerGroup = useProjectStore((s) => s.setActiveInnerGroup);
@@ -74,7 +75,6 @@ export function Filmstrip() {
   const outerItems = useMemo(() => {
     const aiOptions = {
       sortByAi,
-      hideSoftThreshold: settings.hideSoftThreshold ?? 0,
       useEyesInPick: eyeProvider === "onnx",
       useSmileInPick: mouthProvider === "onnx",
     };
@@ -87,6 +87,7 @@ export function Filmstrip() {
       settings.routeMinStar ?? 0,
       aiOptions,
       showReviewed,
+      selectMinStar,
     );
   }, [
     images,
@@ -94,11 +95,11 @@ export function Filmstrip() {
     currentView,
     settings.selectRequiresPick,
     settings.routeMinStar,
-    settings.hideSoftThreshold,
     sortByAi,
     eyeProvider,
     mouthProvider,
     showReviewed,
+    selectMinStar,
   ]);
 
   // The outer rail's "highlighted" index:
@@ -185,6 +186,11 @@ export function Filmstrip() {
 
       if (item.isGroupCover && item.groupMemberCount && item.groupId !== undefined) {
         const gid = item.groupId;
+        // Suppress the AI-pick badge in Select: every photo in Select is
+        // already a pick, so a ★ AI stamp is redundant noise. Triage
+        // still surfaces it to help the "which frame should I keep"
+        // decision; Route doesn't render group covers.
+        const showAiPickBadge = currentView !== "select" && item.isAiPick;
         return (
           <div
             style={style}
@@ -202,7 +208,7 @@ export function Filmstrip() {
               isCurrent={isCurrent}
               onClick={() => onCellClick(index)}
               onDoubleClick={() => onCoverDoubleClick(gid, index)}
-              isAiPick={item.isAiPick}
+              isAiPick={showAiPickBadge}
               coverW={THUMB_W - 8}
               coverH={THUMB_H - 8}
             />
@@ -210,6 +216,20 @@ export function Filmstrip() {
         );
       }
 
+      // Pick/reject rings are meaningful in Triage (the user is deciding
+      // flag state) but redundant in Select and Route — every visible
+      // photo in those views is already a pick. Collapse the three-way
+      // ternary to accent-vs-dim outside Triage.
+      const ringClass = isCurrent
+        ? "ring-2 ring-[var(--accent)] brightness-100"
+        : currentView === "triage"
+          ? image.flag === "pick"
+            ? "ring-2 ring-green-500/70 brightness-90 hover:brightness-95"
+            : image.flag === "reject"
+              ? "ring-2 ring-red-500/50 brightness-60 hover:brightness-70"
+              : "brightness-75 hover:brightness-90"
+          : "brightness-75 hover:brightness-90";
+      const showAiPickBadge = currentView !== "select" && item.isAiPick;
       return (
         <div
           style={style}
@@ -222,19 +242,11 @@ export function Filmstrip() {
           onDoubleClick={() => openLoupe(index)}
         >
           <div
-            className={`relative cursor-pointer rounded overflow-hidden transition-all ${
-              isCurrent
-                ? "ring-2 ring-[var(--accent)] brightness-100"
-                : image.flag === "pick"
-                  ? "ring-2 ring-green-500/70 brightness-90 hover:brightness-95"
-                  : image.flag === "reject"
-                    ? "ring-2 ring-red-500/50 brightness-60 hover:brightness-70"
-                    : "brightness-75 hover:brightness-90"
-            }`}
+            className={`relative cursor-pointer rounded overflow-hidden transition-all ${ringClass}`}
             style={{ width: THUMB_W, height: THUMB_H }}
           >
             <Thumbnail imageId={image.id} filename={image.filename} />
-            {item.isAiPick && <AiPickBadge />}
+            {showAiPickBadge && <AiPickBadge />}
             {image.starRating > 0 && (
               <div
                 className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-1 bg-gradient-to-t from-black/60 to-transparent pointer-events-auto"

@@ -34,7 +34,6 @@ describe("computeDisplayItems AI sort + filter", () => {
     const images = [img(1, "pick", 40), img(2, "pick", 90), img(3, "pick", null)];
     const items = computeDisplayItems(images, "select", g, new Set(), true, 0, {
       sortByAi: "sharpness",
-      hideSoftThreshold: 0,
       useEyesInPick: false,
       useSmileInPick: false,
     });
@@ -45,44 +44,25 @@ describe("computeDisplayItems AI sort + filter", () => {
     const images = [img(1, "pick", 50, 1), img(2, "pick", 50, 3), img(3, "pick", 50, null)];
     const items = computeDisplayItems(images, "select", g, new Set(), true, 0, {
       sortByAi: "faces",
-      hideSoftThreshold: 0,
       useEyesInPick: false,
       useSmileInPick: false,
     });
     expect(items.map((i) => i.image.id)).toEqual([2, 1, 3]);
   });
 
-  it("hideSoft hides below threshold but keeps nulls (opt-out while analyzing)", () => {
+  it("sharpness does NOT filter photos — AI is enrichment, not a gate", () => {
+    // PhotoSift ethos: AI annotates but never hides. Even a soft shot with
+    // sharpness below any arbitrary threshold must stay visible so the user
+    // can judge it in context (motion blur, bokeh, low-light vibe).
     const images = [img(1, "pick", 10), img(2, "pick", 50), img(3, "pick", null)];
-    const items = computeDisplayItems(images, "select", g, new Set(), true, 0, {
-      sortByAi: "none",
-      hideSoftThreshold: 30,
-      useEyesInPick: false,
-      useSmileInPick: false,
-    });
-    expect(items.map((i) => i.image.id).sort()).toEqual([2, 3]);
-  });
-
-  it("hideSoft only applies in select + route views, not triage", () => {
-    const images = [
-      { ...img(1, "unreviewed", 10), starRating: 0 },
-      { ...img(2, "unreviewed", 50), starRating: 0 },
-    ];
-    const items = computeDisplayItems(images, "triage", g, new Set(), false, 0, {
-      sortByAi: "none",
-      hideSoftThreshold: 30,
-      useEyesInPick: false,
-      useSmileInPick: false,
-    });
-    // Both still visible in triage — threshold only applies in select/route.
-    expect(items.length).toBe(2);
+    const items = computeDisplayItems(images, "select", g, new Set(), false, 0);
+    expect(items.map((i) => i.image.id).sort()).toEqual([1, 2, 3]);
   });
 
   it("sortByAi = none preserves view order", () => {
     const images = [img(1, "pick", 40), img(2, "pick", 90)];
     const items = computeDisplayItems(images, "select", g, new Set(), true, 0, {
       sortByAi: "none",
-      hideSoftThreshold: 0,
       useEyesInPick: false,
       useSmileInPick: false,
     });

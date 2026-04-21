@@ -34,6 +34,7 @@ export function InnerStrip() {
   const activeInnerGroupId = useProjectStore((s) => s.activeInnerGroupId);
   const displayItems = useProjectStore((s) => s.displayItems);
   const currentIndex = useProjectStore((s) => s.currentIndex);
+  const currentView = useProjectStore((s) => s.currentView);
   const groups = useProjectStore((s) => s.groups);
   const setCurrentIndex = useProjectStore((s) => s.setCurrentIndex);
   const setViewMode = useProjectStore((s) => s.setViewMode);
@@ -165,11 +166,13 @@ export function InnerStrip() {
                 className={`relative rounded overflow-hidden transition-all ${
                   isCurrent
                     ? "ring-2 ring-[var(--accent)] brightness-100"
-                    : entry.flag === "pick"
-                      ? "ring-2 ring-green-500/70 brightness-90 hover:brightness-95"
-                      : entry.flag === "reject"
-                        ? "ring-2 ring-red-500/50 brightness-60 hover:brightness-70"
-                        : "brightness-75 hover:brightness-90"
+                    : currentView === "triage"
+                      ? entry.flag === "pick"
+                        ? "ring-2 ring-green-500/70 brightness-90 hover:brightness-95"
+                        : entry.flag === "reject"
+                          ? "ring-2 ring-red-500/50 brightness-60 hover:brightness-70"
+                          : "brightness-75 hover:brightness-90"
+                      : "brightness-75 hover:brightness-90"
                 }`}
                 style={{ width: THUMB_W, height: THUMB_H }}
               >
@@ -196,7 +199,7 @@ Green top third \u00b7 white middle \u00b7 red bottom third.`;
                     </div>
                   );
                 })()}
-                {entry.isAiPick && <AiPickBadge />}
+                {currentView !== "select" && entry.isAiPick && <AiPickBadge />}
                 {entry.starRating > 0 && (
                   <div
                     className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-1 bg-gradient-to-t from-black/60 to-transparent pointer-events-auto"

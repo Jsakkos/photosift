@@ -152,7 +152,13 @@ export function LoupeView() {
           Group · {displayItems[currentIndex]?.groupMemberCount} photos
         </div>
       )}
-      {currentImage.flag !== "unreviewed" && (
+      {/* Flag overlay: green "PICK" or red "REJECT" pill in the loupe.
+          Suppressed in Select — every photo in Select is already a pick,
+          so the PICK badge is always-on and carries no information. In
+          Route the filter already excludes rejects and only surfaces
+          picks, so the pill is redundant there too. Kept in Triage
+          where the flag is the user's in-progress decision. */}
+      {currentImage.flag !== "unreviewed" && currentView === "triage" && (
         <div
           className={`absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-medium uppercase tracking-wide pointer-events-none ${
             currentImage.flag === "pick"

@@ -473,7 +473,7 @@ function GridThumb({
   showGroupBar,
   onClick,
   onDoubleClick,
-  currentView: _currentView,
+  currentView,
 }: {
   item: ReturnType<typeof useProjectStore.getState>["displayItems"][0];
   index: number;
@@ -513,9 +513,9 @@ function GridThumb({
             : "border-[var(--accent)] shadow-[0_0_0_1px_var(--accent)]"
           : isFocused
             ? "border-[var(--accent)]/50"
-            : image.flag === "pick"
+            : currentView === "triage" && image.flag === "pick"
               ? "border-green-500/70 shadow-[inset_0_0_12px_rgba(34,197,94,0.18)]"
-              : image.flag === "reject"
+              : currentView === "triage" && image.flag === "reject"
                 ? "border-red-500/60"
                 : "border-transparent hover:border-white/20"
       } ${isRejected ? "opacity-35" : ""}`}
@@ -543,12 +543,13 @@ function GridThumb({
           glow above. Dots removed — the outline is subtle but clear
           (per spec feedback) and avoids stealing from the face/AI
           badges that share the tile corners. */}
-      {/* AI pick badge */}
-      {item.isAiPick && <AiPickBadge />}
+      {/* AI pick badge — suppressed in Select (every photo is already a
+          pick, so the ★ AI stamp is pure noise there). */}
+      {item.isAiPick && currentView !== "select" && <AiPickBadge />}
       {/* Destination badge */}
       {image.destination === "edit" && (
         <div
-          className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}
+          className={`absolute ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}
           title={"Route: edit\nHeaded to Capture One / DxO for develop work.\nPress E in Route view to set."}
           aria-label="Route: edit"
         >
@@ -557,7 +558,7 @@ function GridThumb({
       )}
       {image.destination === "publish_direct" && (
         <div
-          className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}
+          className={`absolute ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}
           title={"Route: publish direct\nCached JPEG copied to Immich ingest folder by the Publish button.\nPress D in Route view to set."}
           aria-label="Route: publish direct"
         >

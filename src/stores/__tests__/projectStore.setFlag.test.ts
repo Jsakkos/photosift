@@ -113,7 +113,11 @@ describe("setFlag", () => {
     expect(flagged.find((i) => i.id === 3)!.flag).toBe("unreviewed");
   });
 
-  test("triage view: P on group cover flags ALL members", async () => {
+  test("triage view: P on group cover flags only the cover, not siblings", async () => {
+    // Groups in Triage are a visual aid, not a bulk-decision shortcut.
+    // Auto-drill normally keeps the cursor off the cover, but if the
+    // cursor does land on one (e.g. via programmatic setState here),
+    // the flag must stay scoped to that single photo.
     const spy = vi.fn();
     setupMockIpc({}, spy);
 
@@ -130,7 +134,6 @@ describe("setFlag", () => {
     const groups = [group];
     const displayItems = computeDisplayItems(images, "triage", groups);
 
-    // Triage collapses group to one cover item
     expect(displayItems).toHaveLength(1);
     expect(displayItems[0].isGroupCover).toBe(true);
 
@@ -140,6 +143,7 @@ describe("setFlag", () => {
       displayItems,
       currentView: "triage",
       currentIndex: 0,
+      activeInnerGroupId: null,
       autoAdvance: false,
       undoStack: [],
       redoStack: [],
@@ -150,26 +154,24 @@ describe("setFlag", () => {
     const state = useProjectStore.getState();
     const flagged = state.images;
 
-    // All group members should be picked
     expect(flagged.find((i) => i.id === 1)!.flag).toBe("pick");
-    expect(flagged.find((i) => i.id === 2)!.flag).toBe("pick");
-    expect(flagged.find((i) => i.id === 3)!.flag).toBe("pick");
+    expect(flagged.find((i) => i.id === 2)!.flag).toBe("unreviewed");
+    expect(flagged.find((i) => i.id === 3)!.flag).toBe("unreviewed");
 
-    // Verify bulk_set_flag was called with all member IDs
     const bulkCall = spy.mock.calls.find(
       (call) => call[0] === "bulk_set_flag",
     );
-    expect(bulkCall).toBeDefined();
-    const bulkArgs = bulkCall![1] as { photoIds: number[]; flag: string };
-    expect(bulkArgs.photoIds).toEqual(expect.arrayContaining([1, 2, 3]));
-    expect(bulkArgs.flag).toBe("pick");
+    expect(bulkCall).toBeUndefined();
 
-    // Undo entry carries all 3 members so undo can restore each one
+    const setFlagCall = spy.mock.calls.find((call) => call[0] === "set_flag");
+    expect(setFlagCall).toBeDefined();
+    expect((setFlagCall![1] as { photoId: number }).photoId).toBe(1);
+
     expect(state.undoStack).toHaveLength(1);
-    expect(state.undoStack[0].batch).toHaveLength(3);
-    expect(state.undoStack[0].imageId).toBe(1); // cover image (primary)
-    const ids = state.undoStack[0].batch!.map((b) => b.imageId).sort();
-    expect(ids).toEqual([1, 2, 3]);
+    expect(state.undoStack[0].batch).toBeUndefined();
+    expect(state.undoStack[0].imageId).toBe(1);
+    expect(state.undoStack[0].oldValue).toBe("unreviewed");
+    expect(state.undoStack[0].newValue).toBe("pick");
   });
 
   test("single ungrouped image flag", async () => {
@@ -311,6 +313,165 @@ describe("setFlag", () => {
     await useProjectStore.getState().setFlag("pick");
 
     expect(useProjectStore.getState().redoStack).toHaveLength(0);
+  });
+
+  test("autoDrillIfOnCover: Triage cover triggers drill-down", () => {
+    // Simulates landing on a group cover in Triage (e.g. after loadShoot).
+    // The helper should flip activeInnerGroupId to the cover's groupId so
+    // the user sees every group member and decides each frame individually.
+    const img1 = makeImage({ id: 1, flag: "unreviewed" });
+    const img2 = makeImage({ id: 2, flag: "unreviewed" });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+    ]);
+    const images = [img1, img2];
+    const groups = [group];
+    const displayItems = computeDisplayItems(images, "triage", groups);
+
+    expect(displayItems).toHaveLength(1);
+    expect(displayItems[0].isGroupCover).toBe(true);
+
+    useProjectStore.setState({
+      images,
+      groups,
+      displayItems,
+      currentView: "triage",
+      currentIndex: 0,
+      activeInnerGroupId: null,
+    });
+
+    useProjectStore.getState().autoDrillIfOnCover();
+
+    const state = useProjectStore.getState();
+    expect(state.activeInnerGroupId).toBe(group.id);
+    expect(state.displayItems.every((d) => d.groupId === group.id)).toBe(true);
+  });
+
+  test("autoDrillIfOnCover: no-op on ungrouped photo", () => {
+    const img = makeImage({ id: 1, flag: "unreviewed" });
+    const images = [img];
+    const displayItems = computeDisplayItems(images, "triage", []);
+
+    useProjectStore.setState({
+      images,
+      groups: [],
+      displayItems,
+      currentView: "triage",
+      currentIndex: 0,
+      activeInnerGroupId: null,
+    });
+
+    useProjectStore.getState().autoDrillIfOnCover();
+
+    expect(useProjectStore.getState().activeInnerGroupId).toBeNull();
+  });
+
+  test("autoDrillIfOnCover: no-op when already drilled", () => {
+    const img1 = makeImage({ id: 1, flag: "unreviewed" });
+    const img2 = makeImage({ id: 2, flag: "unreviewed" });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+    ]);
+    const images = [img1, img2];
+    const groups = [group];
+
+    useProjectStore.setState({
+      images,
+      groups,
+      displayItems: [{ imageIndex: 0, image: img1, groupId: group.id }],
+      currentView: "triage",
+      currentIndex: 0,
+      activeInnerGroupId: 999,
+    });
+
+    useProjectStore.getState().autoDrillIfOnCover();
+
+    expect(useProjectStore.getState().activeInnerGroupId).toBe(999);
+  });
+
+  test("autoDrillIfOnCover: no-op in route view", () => {
+    const img = makeImage({ id: 1, flag: "pick" });
+    const group = makeGroup([{ photoId: 1, isCover: true }]);
+
+    useProjectStore.setState({
+      images: [img],
+      groups: [group],
+      displayItems: [
+        { imageIndex: 0, image: img, groupId: group.id, isGroupCover: true },
+      ],
+      currentView: "route",
+      currentIndex: 0,
+      activeInnerGroupId: null,
+    });
+
+    useProjectStore.getState().autoDrillIfOnCover();
+
+    expect(useProjectStore.getState().activeInnerGroupId).toBeNull();
+  });
+
+  test("Triage→Select auto-advance: last flag empties Triage and switches view", async () => {
+    // User is drilled into the final unreviewed photo. Picking it empties
+    // Triage (every photo is now pick/reject), which should cross the
+    // view boundary to Select instead of leaving the user on EmptyViewState.
+    setupMockIpc();
+
+    const img1 = makeImage({ id: 1, flag: "pick" });
+    const img2 = makeImage({ id: 2, flag: "reject" });
+    const img3 = makeImage({ id: 3, flag: "unreviewed" });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+      { photoId: 3 },
+    ]);
+
+    const images = [img1, img2, img3];
+    const groups = [group];
+
+    useProjectStore.setState({
+      currentShoot: {
+        id: 1,
+        slug: "test",
+        date: "2026-04-21",
+        sourcePath: "/tmp/src",
+        destPath: "/tmp/dst",
+        photoCount: 3,
+        importedAt: "2026-04-21T00:00:00Z",
+      },
+      images,
+      groups,
+      displayItems: [{ imageIndex: 2, image: img3, groupId: group.id }],
+      activeInnerGroupId: group.id,
+      currentView: "triage",
+      currentIndex: 0,
+      autoAdvance: false,
+      undoStack: [],
+      redoStack: [],
+      showReviewed: false,
+    });
+
+    await useProjectStore.getState().setFlag("pick");
+
+    const state = useProjectStore.getState();
+    expect(state.currentView).toBe("select");
+  });
+
+  test("Triage→Select auto-advance: does NOT fire on load into already-empty Triage", () => {
+    // No flag mutation happens here — just a state setup that mimics
+    // opening a shoot whose Triage was already completed. The store
+    // should stay on "triage" (CullPage shows EmptyViewState) rather
+    // than auto-flipping to Select every time the user revisits.
+    useProjectStore.setState({
+      images: [makeImage({ id: 1, flag: "pick" })],
+      groups: [],
+      displayItems: [],
+      currentView: "triage",
+      currentIndex: 0,
+      activeInnerGroupId: null,
+    });
+
+    expect(useProjectStore.getState().currentView).toBe("triage");
   });
 
   test("triage drill-down auto-exits when the last member is flagged", async () => {

@@ -92,11 +92,11 @@ Each photo carries three orthogonal attributes:
 
 | Attribute | Values | Set During |
 |---|---|---|
-| `flag` | `unreviewed` · `pick` · `reject` | Triage & Select passes |
+| `flag` | `unreviewed` · `pick` · `reject` | Triage (primary) and Select rejections |
 | `destination` | `unrouted` · `edit` · `publish_direct` | Route pass |
-| `star_rating` | `0–5` | Set during Select when `route_min_star > 0` (optional gate); otherwise post-edit |
+| `star_rating` | `0–5` | Primary action during Select. Stars express iterative promotion through rating passes (1★ = survived Pass 1, 5★ = top shelf). |
 
-When the `route_min_star` setting is above 0 (default `3`), Route view only shows picks rated at or above that threshold, so rating happens in Select as part of the narrowing pass. With `route_min_star = 0`, stars remain a post-edit concept and are not part of the culling flow. Either way, a rating's "meaning" is still primarily post-edit quality — the in-cull value is just the selection gate.
+Triage is strictly `pick` / `reject` — no stars, no ambiguity. Select is strictly star-rating driven (plus `X` to demote a photo out of the pick pool). Route view optionally gates on `route_min_star` (default `3`); set to `0` to disable the gate and treat stars as post-edit quality signal only.
 
 ### Three-Pass Workflow
 
@@ -116,16 +116,20 @@ Perceptual hash groups save the most time here. A burst of 12 near-identical sho
 
 #### Pass 2 — Select
 
-**Question**: "Which of these similar shots is the best?"
+**Question**: "Of my kept photos, which deserve more attention? Which are the best of the best?"
 
 | | |
 |---|---|
-| **Filter** | `flag = pick` by default (configurable via `select_requires_pick` setting; off = legacy `flag != reject`) |
+| **Filter** | `flag = pick AND star_rating >= select_min_star` (default floor `0`; raised one tier at a time via `]` or the pass chips) |
 | **Groups** | Expanded for comparison. |
-| **Tempo** | Moderate. 5–10 seconds per group. |
-| **Actions** | `P` pick (auto-rejects others in group) · `Shift+P` pick without auto-reject · `X` reject · `Tab` enter 2-up comparison |
+| **Tempo** | Moderate. Iterative — multiple passes, each narrower than the last. |
+| **Actions** | `1`–`5` rate (and promote) · `0` clear rating · `X` reject (demotes out of Select) · `[` / `]` decrement / increment the pass floor · `Tab` enter 2-up comparison |
 
-This is where comparison mode matters. Expand a group, compare in 2-up with linked zoom/pan, pick the sharpest or best-composed, move on.
+Select is an iterative pass, modeled on the Lightroom "rate-then-raise-the-floor" workflow. Start at Pass 1 (floor `0`) and rate anything you want to keep at 1★. Press `]` to jump to Pass 2 (floor `1`) — now only 1★+ photos are visible, and you rate the best of those up to 2★. Repeat up to 5★ for your top shelf. Each pass is narrower than the last; stars are both the rating and the gesture that moves a photo into the next pass.
+
+When every visible photo has already been rated above the current floor, PhotoSift auto-advances the floor one tier so the user doesn't have to press `]` manually. `[` steps back to a lower floor for second thoughts.
+
+`Tab` opens 2-up comparison with linked zoom/pan. Inside comparison, `1` picks the left panel and `2` picks the right (auto-rejects the other) — this is a burst-disambiguation shortcut distinct from the non-comparison `1`–`5` rating keys.
 
 #### Pass 3 — Route
 
@@ -199,13 +203,23 @@ Entered with `Tab` when inside an expanded group (Select pass). Screen splits in
 | `G` | Toggle grid view |
 | `Enter` | Grid: jump to sequential. Sequential: expand/collapse group. |
 
-### Flagging (Triage & Select)
+### Flagging (Triage)
 
 | Key | Action |
 |---|---|
 | `P` | Pick |
 | `X` | Reject |
 | `U` | Reset to unreviewed |
+| `Cmd+Z` | Undo |
+
+### Rating (Select)
+
+| Key | Action |
+|---|---|
+| `1`–`5` | Rate current photo (and promote to next pass) |
+| `0` | Clear rating |
+| `X` | Reject (demotes out of Select) |
+| `[` / `]` | Decrement / increment the pass floor |
 | `Cmd+Z` | Undo |
 
 ### Routing (Route view)
@@ -220,9 +234,8 @@ Entered with `Tab` when inside an expanded group (Select pass). Screen splits in
 
 | Key | Action |
 |---|---|
-| `P` | Pick this photo, auto-reject others in group |
-| `Shift+P` | Pick without auto-rejecting others |
 | `C` | Set as group cover image |
+| `Shift+A` | Accept AI's suggested photo as group cover |
 
 ### Comparison (2-Up)
 
