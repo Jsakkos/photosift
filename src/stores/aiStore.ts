@@ -5,12 +5,14 @@ import type {
   AiProviderStatus,
   AiStatusResponse,
   EyeProviderKind,
+  MouthProviderKind,
   SharpnessPercentiles,
 } from "../types";
 
 interface AiState {
   provider: AiProviderStatus;
   eyeProvider: EyeProviderKind;
+  mouthProvider: MouthProviderKind;
   analyzed: number;
   failed: number;
   total: number;
@@ -26,6 +28,7 @@ interface AiState {
 export const useAiStore = create<AiState>((set) => ({
   provider: "disabled",
   eyeProvider: "mock",
+  mouthProvider: "mock",
   analyzed: 0,
   failed: 0,
   total: 0,
@@ -34,6 +37,7 @@ export const useAiStore = create<AiState>((set) => ({
     set({
       provider: s.provider,
       eyeProvider: s.eyeProvider,
+      mouthProvider: s.mouthProvider,
       analyzed: s.analyzed,
       failed: s.failed,
       total: s.total,

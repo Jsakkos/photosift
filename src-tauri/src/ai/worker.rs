@@ -1,6 +1,7 @@
+use crate::ai::cat::CatDetectorProvider;
 use crate::ai::eye::{eye_crop_pixels, EyeStateProvider};
 use crate::ai::face::FaceProvider;
-use crate::ai::mouth::{mouth_crop_pixels, MouthStateProvider};
+use crate::ai::mouth::{face_crop_pixels, MouthStateProvider};
 use crate::ai::sharpness::{laplacian_variance, normalize_sharpness};
 use crate::ai::AiJob;
 use crate::db::schema::{Database, FaceRow};
@@ -24,6 +25,7 @@ pub fn process_job(
     faces_provider: &dyn FaceProvider,
     eyes_provider: &dyn EyeStateProvider,
     mouth_provider: &dyn MouthStateProvider,
+    cat_provider: &dyn CatDetectorProvider,
 ) -> Result<()> {
     let preview_path = Path::new(&job.preview_path);
     let t_start = Instant::now();
@@ -59,26 +61,20 @@ pub fn process_job(
         let l_sharp = normalize_sharpness(laplacian_variance(&l_img));
         let r_sharp = normalize_sharpness(laplacian_variance(&r_img));
 
-        // Mouth classification: derive a crop from the face bbox and
-        // hand it to the provider. Not yet persisted to the DB — until
-        // a real mouth model is sourced, these values are logged only
-        // so future `DROP DATA; ALTER TABLE faces ADD COLUMN mouth_*`
-        // work has observable data to validate against.
-        let m_crop = mouth_crop_pixels(&face.bbox, img_w, img_h);
-        let m_img = image::imageops::crop_imm(&gray, m_crop.x, m_crop.y, m_crop.w, m_crop.h)
+        // Smile / expression classification: hand the full face crop to
+        // the mouth provider. FER+/FER were trained on face crops, so a
+        // narrow mouth-only patch produces near-zero smile probability
+        // regardless of expression. For a mouth-specific model we'd
+        // re-introduce `mouth_crop_pixels` here, but today all real-world
+        // providers are holistic. `smile_score` is persisted per face;
+        // `mouth_open` stays transient because nothing downstream reads it.
+        let f_crop = face_crop_pixels(&face.bbox, img_w, img_h);
+        let f_img = image::imageops::crop_imm(&gray, f_crop.x, f_crop.y, f_crop.w, f_crop.h)
             .to_image();
-        if let Ok(mouth) = mouth_provider.classify(&m_img) {
-            log::debug!(
-                "ai::worker photo={} face_bbox=({:.2},{:.2},{:.2},{:.2}) mouth_open={} smile={:.2}",
-                job.photo_id,
-                face.bbox.x,
-                face.bbox.y,
-                face.bbox.w,
-                face.bbox.h,
-                mouth.mouth_open,
-                mouth.smile_confidence,
-            );
-        }
+        let smile_score = mouth_provider
+            .classify(&f_img)
+            .ok()
+            .map(|m| m.smile_confidence);
 
         face_rows.push(FaceRow {
             photo_id: job.photo_id,
@@ -89,7 +85,36 @@ pub fn process_job(
             left_eye_open: l_open, right_eye_open: r_open,
             left_eye_sharpness: l_sharp, right_eye_sharpness: r_sharp,
             detection_confidence: face.confidence,
+            smile_score,
+            species: "human".to_string(),
         });
+    }
+
+    // Cat pass. Runs alongside the human-face loop; produces additional
+    // `FaceRow`s with `species = "cat"` and placeholder eye data (no
+    // classifier today). Mock provider returns zero cats, so this is a
+    // no-op until a real ONNX detector lands at
+    // `~/.photosift/models/cat_detector.onnx`.
+    if let Ok(cats) = cat_provider.detect(&rgb) {
+        for cat in cats {
+            face_rows.push(FaceRow {
+                photo_id: job.photo_id,
+                bbox_x: cat.bbox.x, bbox_y: cat.bbox.y,
+                bbox_w: cat.bbox.w, bbox_h: cat.bbox.h,
+                // No cat eye detector today — leave landmarks at bbox
+                // center so the UI can render a neutral eye position
+                // without stretching off-image when the crop is used.
+                left_eye_x: cat.bbox.x + cat.bbox.w * 0.35,
+                left_eye_y: cat.bbox.y + cat.bbox.h * 0.40,
+                right_eye_x: cat.bbox.x + cat.bbox.w * 0.65,
+                right_eye_y: cat.bbox.y + cat.bbox.h * 0.40,
+                left_eye_open: 0, right_eye_open: 0,
+                left_eye_sharpness: 0.0, right_eye_sharpness: 0.0,
+                detection_confidence: cat.confidence,
+                smile_score: None,
+                species: "cat".to_string(),
+            });
+        }
     }
 
     // Whole-image sharpness on the already-decoded gray image.
@@ -147,6 +172,7 @@ pub fn run_loop(
     faces_provider: Box<dyn FaceProvider>,
     eyes_provider: Box<dyn EyeStateProvider>,
     mouth_provider: Box<dyn MouthStateProvider>,
+    cat_provider: Box<dyn CatDetectorProvider>,
     on_progress: impl Fn(&AiJob, Result<()>) + Send,
 ) {
     log::info!("AI worker started");
@@ -168,6 +194,7 @@ pub fn run_loop(
             faces_provider.as_ref(),
             eyes_provider.as_ref(),
             mouth_provider.as_ref(),
+            cat_provider.as_ref(),
         );
         on_progress(&job, result);
     }
@@ -177,6 +204,7 @@ pub fn run_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::cat::MockCatDetector;
     use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
     use crate::ai::mouth::MockMouthProvider;
     use crate::db::schema::Database;
@@ -216,6 +244,7 @@ mod tests {
             &MockFaceProvider::default(),
             &MockEyeProvider::default(),
             &MockMouthProvider::default(),
+            &MockCatDetector::default(),
         )
         .unwrap();
 
@@ -274,6 +303,7 @@ mod tests {
                 Box::new(crate::ai::mock::MockFaceProvider::default()),
                 Box::new(crate::ai::mock::MockEyeProvider::default()),
                 Box::new(crate::ai::mouth::MockMouthProvider::default()),
+                Box::new(crate::ai::cat::MockCatDetector::default()),
                 move |_job, res| {
                     if res.is_ok() {
                         completed_clone.fetch_add(1, Ordering::SeqCst);

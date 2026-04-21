@@ -126,6 +126,11 @@ pub struct PhotoRow {
     /// those classifiers are real). Higher is better.
     pub quality_score: Option<f64>,
     pub ai_analyzed_at: Option<String>,
+    /// Max `smile_score` across this photo's faces. Computed on read via
+    /// subquery rather than denormalized onto the photos row — the faces
+    /// INSERT is transactional with the photo aggregate update, so an
+    /// on-demand MAX() is always consistent with the per-face values.
+    pub max_smile_score: Option<f64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -172,6 +177,11 @@ pub struct Settings {
     pub enable_ai_on_import: bool,
     pub hide_soft_threshold: i32,
     pub eye_open_confidence: f64,
+    /// Absolute path to the external ingest folder (e.g. Immich's upload
+    /// directory) that `export_publish_direct` copies JPEG previews into.
+    /// `None` = not configured; the export command returns a typed error
+    /// so the UI can prompt the user.
+    pub immich_ingest_path: Option<String>,
 }
 
 impl Default for Settings {
@@ -186,6 +196,7 @@ impl Default for Settings {
             enable_ai_on_import: true,
             hide_soft_threshold: 30,
             eye_open_confidence: 0.7,
+            immich_ingest_path: None,
         }
     }
 }
@@ -221,6 +232,14 @@ pub struct FaceRow {
     pub left_eye_open: i32, pub right_eye_open: i32,
     pub left_eye_sharpness: f64, pub right_eye_sharpness: f64,
     pub detection_confidence: f64,
+    /// 0.0–1.0 from the mouth classifier; None when no mouth model is loaded
+    /// or the face crop fell outside the image. Renders as a smile badge in
+    /// the AI panel and contributes to the pick score via the smile factor.
+    pub smile_score: Option<f64>,
+    /// Subject species — `"human"` (from YuNet) or `"cat"` (from a YOLO-family
+    /// detector). Eye landmarks and `smile_score` are only meaningful for
+    /// humans today; cats carry bbox + confidence and placeholder eye data.
+    pub species: String,
 }
 
 #[derive(Debug)]
@@ -381,6 +400,9 @@ impl Database {
             "group_time_window_s",
             "INTEGER NOT NULL DEFAULT 60",
         )?;
+        self.ensure_column("faces", "smile_score", "REAL")?;
+        self.ensure_column("settings", "immich_ingest_path", "TEXT")?;
+        self.ensure_column("faces", "species", "TEXT NOT NULL DEFAULT 'human'")?;
         Ok(())
     }
 
@@ -571,7 +593,8 @@ impl Database {
             "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
                     iso, orientation, flag, destination, star_rating,
-                    face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at
+                    face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
+                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score
              FROM photos WHERE id = ?1",
             params![photo_id],
             row_to_photo,
@@ -583,12 +606,35 @@ impl Database {
             "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
                     iso, orientation, flag, destination, star_rating,
-                    face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at
+                    face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
+                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score
              FROM photos
              WHERE shoot_id = ?1
              ORDER BY exif_date ASC NULLS LAST, id ASC",
         )?;
         let rows = stmt.query_map(params![shoot_id], row_to_photo)?;
+        rows.collect()
+    }
+
+    /// All photos in a shoot whose `destination` matches. Used by the
+    /// Publish Direct export to select only photos the user flagged for
+    /// immediate upload, leaving edit-path photos for Capture One/DxO.
+    pub fn photos_by_destination(
+        &self,
+        shoot_id: i64,
+        destination: &str,
+    ) -> Result<Vec<PhotoRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, shoot_id, filename, raw_path, preview_path, thumb_path,
+                    exif_date, camera, lens, focal_length, aperture, shutter_speed,
+                    iso, orientation, flag, destination, star_rating,
+                    face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
+                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score
+             FROM photos
+             WHERE shoot_id = ?1 AND destination = ?2
+             ORDER BY exif_date ASC NULLS LAST, id ASC",
+        )?;
+        let rows = stmt.query_map(params![shoot_id, destination], row_to_photo)?;
         rows.collect()
     }
 
@@ -800,8 +846,8 @@ impl Database {
                     left_eye_x, left_eye_y, right_eye_x, right_eye_y,
                     left_eye_open, right_eye_open,
                     left_eye_sharpness, right_eye_sharpness,
-                    detection_confidence
-                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                    detection_confidence, smile_score, species
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             )?;
             for f in faces {
                 stmt.execute(params![
@@ -809,7 +855,7 @@ impl Database {
                     f.left_eye_x, f.left_eye_y, f.right_eye_x, f.right_eye_y,
                     f.left_eye_open, f.right_eye_open,
                     f.left_eye_sharpness, f.right_eye_sharpness,
-                    f.detection_confidence,
+                    f.detection_confidence, f.smile_score, f.species,
                 ])?;
             }
         }
@@ -822,7 +868,8 @@ impl Database {
             "SELECT photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
                     left_eye_x, left_eye_y, right_eye_x, right_eye_y,
                     left_eye_open, right_eye_open,
-                    left_eye_sharpness, right_eye_sharpness, detection_confidence
+                    left_eye_sharpness, right_eye_sharpness, detection_confidence,
+                    smile_score, species
              FROM faces WHERE photo_id = ?1 ORDER BY id",
         )?;
         let rows = stmt.query_map(params![photo_id], |r| Ok(FaceRow {
@@ -833,6 +880,8 @@ impl Database {
             left_eye_open: r.get(9)?, right_eye_open: r.get(10)?,
             left_eye_sharpness: r.get(11)?, right_eye_sharpness: r.get(12)?,
             detection_confidence: r.get(13)?,
+            smile_score: r.get(14)?,
+            species: r.get(15)?,
         }))?;
         rows.collect()
     }
@@ -882,8 +931,8 @@ impl Database {
                     left_eye_x, left_eye_y, right_eye_x, right_eye_y,
                     left_eye_open, right_eye_open,
                     left_eye_sharpness, right_eye_sharpness,
-                    detection_confidence
-                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                    detection_confidence, smile_score, species
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             )?;
             for f in faces {
                 stmt.execute(params![
@@ -891,7 +940,7 @@ impl Database {
                     f.left_eye_x, f.left_eye_y, f.right_eye_x, f.right_eye_y,
                     f.left_eye_open, f.right_eye_open,
                     f.left_eye_sharpness, f.right_eye_sharpness,
-                    f.detection_confidence,
+                    f.detection_confidence, f.smile_score, f.species,
                 ])?;
             }
         }
@@ -1087,7 +1136,8 @@ impl Database {
             .query_row(
                 "SELECT near_dup_threshold, related_threshold, group_time_window_s,
                         select_requires_pick, route_min_star, library_root,
-                        enable_ai_on_import, hide_soft_threshold, eye_open_confidence
+                        enable_ai_on_import, hide_soft_threshold, eye_open_confidence,
+                        immich_ingest_path
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
@@ -1101,6 +1151,7 @@ impl Database {
                         enable_ai_on_import: row.get::<_, i32>(6)? != 0,
                         hide_soft_threshold: row.get(7)?,
                         eye_open_confidence: row.get(8)?,
+                        immich_ingest_path: row.get(9)?,
                     })
                 },
             )
@@ -1111,8 +1162,9 @@ impl Database {
         self.conn.execute(
             "INSERT INTO settings (id, near_dup_threshold, related_threshold, group_time_window_s,
                                    select_requires_pick, route_min_star, library_root,
-                                   enable_ai_on_import, hide_soft_threshold, eye_open_confidence)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                                   enable_ai_on_import, hide_soft_threshold, eye_open_confidence,
+                                   immich_ingest_path)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
@@ -1122,7 +1174,8 @@ impl Database {
                 library_root = excluded.library_root,
                 enable_ai_on_import = excluded.enable_ai_on_import,
                 hide_soft_threshold = excluded.hide_soft_threshold,
-                eye_open_confidence = excluded.eye_open_confidence",
+                eye_open_confidence = excluded.eye_open_confidence,
+                immich_ingest_path = excluded.immich_ingest_path",
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
@@ -1133,6 +1186,7 @@ impl Database {
                 s.enable_ai_on_import as i32,
                 s.hide_soft_threshold,
                 s.eye_open_confidence,
+                s.immich_ingest_path,
             ],
         )?;
         Ok(())
@@ -1186,6 +1240,7 @@ fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {
         sharpness_score: row.get(19)?,
         quality_score: row.get(20)?,
         ai_analyzed_at: row.get(21)?,
+        max_smile_score: row.get(22)?,
     })
 }
 
@@ -1525,6 +1580,8 @@ pub(crate) mod tests {
             left_eye_open: 1, right_eye_open: 1,
             left_eye_sharpness: 78.0, right_eye_sharpness: 81.0,
             detection_confidence: 0.92,
+            smile_score: Some(0.73),
+            species: "human".to_string(),
         };
         db.insert_faces_batch(&[face.clone()]).unwrap();
 
@@ -1533,6 +1590,7 @@ pub(crate) mod tests {
         assert!((got[0].bbox_x - 0.1).abs() < 1e-6);
         assert_eq!(got[0].left_eye_open, 1);
         assert!((got[0].detection_confidence - 0.92).abs() < 1e-6);
+        assert!((got[0].smile_score.unwrap() - 0.73).abs() < 1e-6);
 
         // Cascade delete
         db.delete_shoot(shoot_id).unwrap();
@@ -1703,6 +1761,7 @@ pub(crate) mod tests {
             let face_p = MockFaceProvider::default();
             let eye_p = MockEyeProvider::default();
             let mouth_p = crate::ai::mouth::MockMouthProvider::default();
+            let cat_p = crate::ai::cat::MockCatDetector::default();
 
             for id in &ids {
                 let preview = dir.path().join(format!("{}.jpg", id));
@@ -1716,7 +1775,7 @@ pub(crate) mod tests {
                     photo_id: *id,
                     preview_path: preview.to_string_lossy().into_owned(),
                 };
-                process_job(&mut db, &job, &face_p, &eye_p, &mouth_p).unwrap();
+                process_job(&mut db, &job, &face_p, &eye_p, &mouth_p, &cat_p).unwrap();
             }
             ids
         };

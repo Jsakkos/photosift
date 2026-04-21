@@ -9,7 +9,7 @@ pub mod walker;
 
 use crate::db::schema::{Database, PhotoInsert};
 use crate::metadata::{exif, orientation, xmp};
-use progress::{ImportComplete, ImportPhase, ImportProgress};
+use progress::{ImportComplete, ImportPhase, ImportPhotoReady, ImportProgress};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -187,7 +187,12 @@ pub fn run_import(
         }
     }
 
-    // Write preview/thumb files and update paths (now that we have photo_ids)
+    // Write preview/thumb files and update paths (now that we have photo_ids).
+    // After each photo has disk files + DB paths, emit `import-photo-ready` so
+    // the shoot list can show live progress without polling. Total here is the
+    // post-dedup count — it matches what the UI will eventually see, so a "42/198"
+    // counter stays monotonic instead of dropping when skipped files settle.
+    let photos_total = photo_ids.len();
     {
         let db_guard = db.lock().map_err(|e| e.to_string())?;
         for (i, &photo_id) in photo_ids.iter().enumerate() {
@@ -216,6 +221,17 @@ pub fn run_import(
             ) {
                 log::error!("Failed to update paths for photo {}: {}", photo_id, e);
             }
+
+            let _ = app.emit(
+                "import-photo-ready",
+                ImportPhotoReady {
+                    shoot_id,
+                    photo_id,
+                    filename: inserts[i].filename.clone(),
+                    imported: i + 1,
+                    total: photos_total,
+                },
+            );
         }
     }
 

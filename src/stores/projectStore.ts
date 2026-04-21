@@ -25,15 +25,17 @@ function hideSoftThreshold(): number {
 
 /// Bundle the sort/filter/pick options that `computeDisplayItems` needs.
 /// Centralized so call sites don't have to remember to keep
-/// `useEyesInPick` gated on the eye provider kind — if the backend swaps
-/// to a real classifier, this helper picks it up automatically.
+/// `useEyesInPick` / `useSmileInPick` gated on the provider kinds — if the
+/// backend swaps to a real classifier, this helper picks it up automatically.
 function currentAiOptions(
   sortByAi: "none" | "sharpness" | "faces",
 ): AiDisplayOptions {
+  const { eyeProvider, mouthProvider } = useAiStore.getState();
   return {
     sortByAi,
     hideSoftThreshold: hideSoftThreshold(),
-    useEyesInPick: useAiStore.getState().eyeProvider === "onnx",
+    useEyesInPick: eyeProvider === "onnx",
+    useSmileInPick: mouthProvider === "onnx",
   };
 }
 
@@ -43,12 +45,17 @@ export interface AiDisplayOptions {
   /// When false, AI-pick scoring ignores the `eyes_open` term. Must be
   /// false while the eye classifier is `MockEyeProvider`.
   useEyesInPick: boolean;
+  /// When false, AI-pick scoring ignores the smile term. Must be false
+  /// while the mouth classifier is the mock/1-class/2-class stub — those
+  /// return a constant 0.5 that would bias picks indiscriminately.
+  useSmileInPick: boolean;
 }
 
 const DEFAULT_AI_OPTIONS: AiDisplayOptions = {
   sortByAi: "none",
   hideSoftThreshold: 0,
   useEyesInPick: false,
+  useSmileInPick: false,
 };
 
 interface UndoEntry {
@@ -98,7 +105,7 @@ function computeDisplayItemsFiltered(
   const group = groups.find((g) => g.id === activeInnerGroupId);
   if (!group) return [];
 
-  const pick = aiPickForGroup(group, images, aiOptions.useEyesInPick);
+  const pick = aiPickForGroup(group, images, aiOptions.useEyesInPick, aiOptions.useSmileInPick);
   const result: DisplayItem[] = [];
   for (const m of group.members) {
     const imgIdx = images.findIndex((i) => i.id === m.photoId);
@@ -147,14 +154,16 @@ export function getGroupCover(group: Group): number {
 /// Returns the id of the AI-recommended photo in the group, or null when
 /// fewer than 2 members have been analyzed.
 ///
-/// Scoring: sharpness * (1 + eyes_open_count) when `useEyes` is true,
-/// otherwise sharpness alone. `useEyes` must be false while the eye
-/// classifier is `MockEyeProvider` — mock values corrupt the ranking.
+/// Scoring: `sharp * (1 + eyes_open_count) * (1 + 0.5 * smile_score)`
+/// when both flags are on. Each factor contributes multiplicatively so the
+/// signals compose cleanly; mock providers stay disabled because their
+/// constant outputs would cancel out (or worse, uniformly bias).
 /// Ties broken by lower id.
 export function aiPickForGroup(
   group: Group,
   images: ImageEntry[],
   useEyes: boolean = false,
+  useSmile: boolean = false,
 ): number | null {
   const analyzed = group.members
     .map((m) => images.find((i) => i.id === m.photoId))
@@ -163,8 +172,10 @@ export function aiPickForGroup(
   if (analyzed.length < 2) return null;
 
   const scoreOf = (img: ImageEntry): number => {
-    const sharp = img.sharpnessScore ?? 0;
-    return useEyes ? sharp * (1 + (img.eyesOpenCount ?? 0)) : sharp;
+    let s = img.sharpnessScore ?? 0;
+    if (useEyes) s *= 1 + (img.eyesOpenCount ?? 0);
+    if (useSmile) s *= 1 + 0.5 * (img.maxSmileScore ?? 0);
+    return s;
   };
 
   let bestId = analyzed[0].id;
@@ -201,7 +212,7 @@ export function computeDisplayItems(
     const triagePickCache = new Map<number, number | null>();
     const pickForGroup = (g: Group): number | null => {
       if (triagePickCache.has(g.id)) return triagePickCache.get(g.id)!;
-      const p = aiPickForGroup(g, images, aiOptions.useEyesInPick);
+      const p = aiPickForGroup(g, images, aiOptions.useEyesInPick, aiOptions.useSmileInPick);
       triagePickCache.set(g.id, p);
       return p;
     };
@@ -343,7 +354,7 @@ export function computeDisplayItems(
       const g = groups.find((gg) => gg.id === it.groupId);
       pickCache.set(
         it.groupId,
-        g ? aiPickForGroup(g, images, aiOptions.useEyesInPick) : null,
+        g ? aiPickForGroup(g, images, aiOptions.useEyesInPick, aiOptions.useSmileInPick) : null,
       );
     }
     if (pickCache.get(it.groupId) === it.image.id) {

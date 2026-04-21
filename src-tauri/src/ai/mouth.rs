@@ -43,6 +43,38 @@ impl MouthStateProvider for MockMouthProvider {
     }
 }
 
+/// Convert a normalized face bbox to a pixel-space crop, clamped to the
+/// image bounds. Used for face-holistic mouth/expression classifiers
+/// (FER+, 7-class FER) that want the full face as input rather than a
+/// mouth-only patch.
+///
+/// We inflate the bbox by 10 % on each side so the tightly-cropped YuNet
+/// output — which can clip eyebrows and chin — grows out to include the
+/// cheek/forehead context that FER-family models were trained on.
+pub fn face_crop_pixels(face: &NormBox, img_w: u32, img_h: u32) -> PixelCrop {
+    let pad = 0.10;
+    let face_x = (face.x - face.w * pad).max(0.0);
+    let face_y = (face.y - face.h * pad).max(0.0);
+    let face_w = face.w * (1.0 + 2.0 * pad);
+    let face_h = face.h * (1.0 + 2.0 * pad);
+
+    let mut x = (face_x * img_w as f64) as i32;
+    let mut y = (face_y * img_h as f64) as i32;
+    let mut w = (face_w * img_w as f64) as i32;
+    let mut h = (face_h * img_h as f64) as i32;
+
+    if x < 0 { w += x; x = 0; }
+    if y < 0 { h += y; y = 0; }
+    if x + w > img_w as i32 { w = img_w as i32 - x; }
+    if y + h > img_h as i32 { h = img_h as i32 - y; }
+    PixelCrop {
+        x: x.max(0) as u32,
+        y: y.max(0) as u32,
+        w: w.max(1) as u32,
+        h: h.max(1) as u32,
+    }
+}
+
 /// Geometric mouth crop derived from a face bounding box. YuNet only
 /// surfaces eye landmarks out of its five 5-point keypoint set; the
 /// mouth corners are there in the network output but our `DetectedFace`

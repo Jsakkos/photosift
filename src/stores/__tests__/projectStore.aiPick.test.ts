@@ -67,6 +67,35 @@ describe("aiPickForGroup", () => {
     };
     expect(aiPickForGroup(tinyGroup, [e(1, 90, 2)], true)).toBe(null);
   });
+
+  it("smile factor tips the tie toward the smiling member", () => {
+    // Equal sharpness, both sets of eyes open — the smile factor breaks the
+    // tie between photos 1 and 2. Photo 3 has a higher smile but lower
+    // sharpness, so it should still lose.
+    const withSmile = (id: number, sharp: number, eyes: number, smile: number): ImageEntry => ({
+      ...e(id, sharp, eyes),
+      maxSmileScore: smile,
+    });
+    const images = [
+      withSmile(1, 70, 2, 0.1), // 70 * 3 * (1 + 0.05) = 220.5
+      withSmile(2, 70, 2, 0.9), // 70 * 3 * (1 + 0.45) = 304.5  ← pick
+      withSmile(3, 60, 2, 1.0), // 60 * 3 * (1 + 0.50) = 270.0
+    ];
+    expect(aiPickForGroup(group, images, true, true)).toBe(2);
+  });
+
+  it("smile factor is ignored when useSmile is false", () => {
+    const withSmile = (id: number, sharp: number, eyes: number, smile: number): ImageEntry => ({
+      ...e(id, sharp, eyes),
+      maxSmileScore: smile,
+    });
+    const images = [
+      withSmile(1, 80, 2, 0.1), // 80 * 3 = 240 — wins when smile ignored
+      withSmile(2, 70, 2, 0.9), // 70 * 3 = 210
+      withSmile(3, 60, 2, 1.0), // 60 * 3 = 180
+    ];
+    expect(aiPickForGroup(group, images, true, false)).toBe(1);
+  });
 });
 
 describe("computeDisplayItems — AI pick stays visible in expanded triage", () => {
@@ -101,7 +130,7 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       new Set([7]), // group 7 expanded
       false,
       0,
-      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false },
+      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false, useSmileInPick: false },
     );
     const pickItem = items.find((d) => d.image.id === 11);
     expect(pickItem, "pick member must be present even though flag=pick").toBeDefined();
@@ -125,7 +154,7 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       new Set([7]), // group 7 expanded via drill-down
       false,
       0,
-      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false },
+      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false, useSmileInPick: false },
     );
     expect(
       items.find((d) => d.image.id === 11),
@@ -148,7 +177,7 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       new Set([7]),
       false,
       0,
-      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false },
+      { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false, useSmileInPick: false },
     );
     expect(items.find((d) => d.image.id === 12)).toBeUndefined();
     expect(items.find((d) => d.image.id === 11)?.isAiPick).toBe(true);

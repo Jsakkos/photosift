@@ -14,6 +14,10 @@ export interface Settings {
   enableAiOnImport: boolean;
   hideSoftThreshold: number;
   eyeOpenConfidence: number;
+  /// Absolute path to the external ingest directory used by the
+  /// Publish Direct export. Null when not configured; the export
+  /// command returns a typed error so the UI can prompt first.
+  immichIngestPath: string | null;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -26,6 +30,7 @@ const DEFAULT_SETTINGS: Settings = {
   enableAiOnImport: true,
   hideSoftThreshold: 30,
   eyeOpenConfidence: 0.7,
+  immichIngestPath: null,
 };
 
 interface SettingsState {

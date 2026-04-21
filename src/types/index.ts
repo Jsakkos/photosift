@@ -24,6 +24,10 @@ export interface ImageEntry {
   /// Higher = better. Null when AI hasn't analyzed this photo yet.
   qualityScore?: number | null;
   aiAnalyzedAt?: string | null;
+  /// Max smile confidence (0.0–1.0) across this photo's faces. Null when
+  /// no mouth classifier is loaded or no faces were detected. Drives the
+  /// smile factor in the AI pick formula.
+  maxSmileScore?: number | null;
 }
 
 export interface ShootSummary {
@@ -84,6 +88,13 @@ export interface Face {
   leftEyeSharpness: number;
   rightEyeSharpness: number;
   detectionConfidence: number;
+  /// Smile confidence 0.0–1.0 from the mouth classifier, or null when
+  /// the mouth provider couldn't classify this face (model missing,
+  /// crop out of bounds, etc.).
+  smileScore: number | null;
+  /// Subject species — `"human"` (from YuNet) or `"cat"` (from a future
+  /// cat-face detector). The UI picks the icon variant from this.
+  species: string;
 }
 
 export type AiProviderStatus = "cuda" | "cpu" | "disabled";
@@ -93,9 +104,15 @@ export type AiProviderStatus = "cuda" | "cpu" | "disabled";
 /// indicators and ranks groups by sharpness alone until a real model ships.
 export type EyeProviderKind = "mock" | "onnx";
 
+/// Which mouth/smile classifier the backend is running. Mirrors
+/// `EyeProviderKind`. UI gates smile icons + pick-formula smile factor
+/// on `onnx` so the mock's fixed 0.5 output doesn't drive rankings.
+export type MouthProviderKind = "mock" | "onnx";
+
 export interface AiStatusResponse {
   provider: AiProviderStatus;
   eyeProvider: EyeProviderKind;
+  mouthProvider: MouthProviderKind;
   analyzed: number;
   failed: number;
   total: number;
@@ -107,6 +124,18 @@ export interface AiProgressEvent {
   done: number;
   total: number;
   failed: number;
+}
+
+/// Result of a Publish Direct export. Counts are mutually exclusive
+/// (each candidate photo lands in exactly one bucket); `errors` is
+/// bounded by the backend so an enormous shoot with many failures
+/// doesn't stream thousands of messages to the UI.
+export interface PublishDirectReport {
+  copied: number;
+  skipped: number;
+  failed: number;
+  destDir: string;
+  errors: string[];
 }
 
 /// Sharpness percentile cutoffs for the current shoot. Mapped into the

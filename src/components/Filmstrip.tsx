@@ -48,6 +48,7 @@ export function Filmstrip() {
   const setActiveInnerGroup = useProjectStore((s) => s.setActiveInnerGroup);
   const settings = useSettingsStore((s) => s.settings);
   const eyeProvider = useAiStore((s) => s.eyeProvider);
+  const mouthProvider = useAiStore((s) => s.mouthProvider);
 
   const listRef = useRef<List>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -71,6 +72,7 @@ export function Filmstrip() {
       sortByAi,
       hideSoftThreshold: settings.hideSoftThreshold ?? 0,
       useEyesInPick: eyeProvider === "onnx",
+      useSmileInPick: mouthProvider === "onnx",
     };
     return computeDisplayItems(
       images,
@@ -90,6 +92,7 @@ export function Filmstrip() {
     settings.hideSoftThreshold,
     sortByAi,
     eyeProvider,
+    mouthProvider,
   ]);
 
   // The outer rail's "highlighted" index:

@@ -25,6 +25,7 @@ pub struct ImageInfo {
     pub sharpness_score: Option<f64>,
     pub quality_score: Option<f64>,
     pub ai_analyzed_at: Option<String>,
+    pub max_smile_score: Option<f64>,
 }
 
 impl From<PhotoRow> for ImageInfo {
@@ -49,6 +50,7 @@ impl From<PhotoRow> for ImageInfo {
             sharpness_score: row.sharpness_score,
             quality_score: row.quality_score,
             ai_analyzed_at: row.ai_analyzed_at,
+            max_smile_score: row.max_smile_score,
         }
     }
 }

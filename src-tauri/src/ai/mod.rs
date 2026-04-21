@@ -1,3 +1,4 @@
+pub mod cat;
 pub mod face;
 pub mod eye;
 pub mod eye_onnx;
@@ -84,6 +85,7 @@ pub fn spawn_worker(
     faces_provider: Box<dyn FaceProvider>,
     eyes_provider: Box<dyn EyeStateProvider>,
     mouth_provider: Box<dyn MouthStateProvider>,
+    cat_provider: Box<dyn crate::ai::cat::CatDetectorProvider>,
     cancel: Arc<AtomicBool>,
     analyzed: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,
@@ -106,6 +108,7 @@ pub fn spawn_worker(
             faces_provider,
             eyes_provider,
             mouth_provider,
+            cat_provider,
             move |job, res| match res {
                 Ok(_) => {
                     analyzed.fetch_add(1, Ordering::SeqCst);

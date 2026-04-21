@@ -5,6 +5,8 @@ import { useAiStore, sharpnessBadgeScore } from "../stores/aiStore";
 import { FaceThumb } from "./FaceThumb";
 import { AiSharpnessBadge } from "./AiSharpnessBadge";
 import { AiEyeIcon } from "./AiEyeIcon";
+import { AiSmileIcon } from "./AiSmileIcon";
+import { AiSpeciesIcon } from "./AiSpeciesIcon";
 import type { Face } from "../types";
 
 const TILE_PX = 160;
@@ -21,6 +23,7 @@ export function AiPanel({ photoId, visible }: Props) {
   );
   const provider = useAiStore((s) => s.provider);
   const eyeProvider = useAiStore((s) => s.eyeProvider);
+  const mouthProvider = useAiStore((s) => s.mouthProvider);
   const percentiles = useAiStore((s) => s.percentiles);
   const [faces, setFaces] = useState<Face[] | null>(null);
 
@@ -48,6 +51,7 @@ export function AiPanel({ photoId, visible }: Props) {
 
   const badge = sharpnessBadgeScore(image.sharpnessScore, percentiles);
   const showEyes = eyeProvider === "onnx";
+  const showSmile = mouthProvider === "onnx";
   const visibleFaces = faces ? faces.slice(0, MAX_VISIBLE) : [];
   const overflow = faces ? Math.max(0, faces.length - MAX_VISIBLE) : 0;
   const hasFaces = !!faces && faces.length > 0;
@@ -73,6 +77,7 @@ export function AiPanel({ photoId, visible }: Props) {
               photoId={photoId}
               sharpnessScore={badge}
               showEyes={showEyes}
+              showSmile={showSmile}
             />
           ))}
           {overflow > 0 && (
@@ -101,21 +106,27 @@ function FaceTile({
   photoId,
   sharpnessScore,
   showEyes,
+  showSmile,
 }: {
   face: Face;
   photoId: number;
   sharpnessScore: number;
   showEyes: boolean;
+  showSmile: boolean;
 }) {
   return (
     <div className="relative" style={{ width: TILE_PX, height: TILE_PX }}>
       <FaceThumb face={face} photoId={photoId} sizePx={TILE_PX} />
-      {showEyes && (
+      {showEyes && face.species === "human" && (
         <AiEyeIcon
           leftOpen={face.leftEyeOpen === 1}
           rightOpen={face.rightEyeOpen === 1}
         />
       )}
+      {showSmile && face.species === "human" && (
+        <AiSmileIcon smileScore={face.smileScore} />
+      )}
+      <AiSpeciesIcon species={face.species} />
       <AiSharpnessBadge score={sharpnessScore} />
     </div>
   );

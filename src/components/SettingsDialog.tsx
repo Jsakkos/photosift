@@ -29,6 +29,7 @@ export function SettingsDialog() {
   const [routeStar, setRouteStar] = useState(settings.routeMinStar);
   const [libraryRoot, setLibraryRoot] = useState<string | null>(settings.libraryRoot);
   const [libraryRootError, setLibraryRootError] = useState<string | null>(null);
+  const [immichPath, setImmichPath] = useState<string | null>(settings.immichIngestPath);
   const [reclustering, setReclustering] = useState(false);
   const [reclusterMsg, setReclusterMsg] = useState<string | null>(null);
   const [enableAi, setEnableAi] = useState(settings.enableAiOnImport);
@@ -46,6 +47,7 @@ export function SettingsDialog() {
       setSelectPick(settings.selectRequiresPick);
       setRouteStar(settings.routeMinStar);
       setLibraryRoot(settings.libraryRoot);
+      setImmichPath(settings.immichIngestPath);
       setEnableAi(settings.enableAiOnImport);
       setEyeConfidence(settings.eyeOpenConfidence);
       setHideSoft(settings.hideSoftThreshold);
@@ -68,6 +70,13 @@ export function SettingsDialog() {
     setLibraryRootError(null);
   }, []);
 
+  const handleBrowseImmichPath = useCallback(async () => {
+    const selected = await open({ directory: true });
+    if (typeof selected === "string") setImmichPath(selected);
+  }, []);
+
+  const handleResetImmichPath = useCallback(() => setImmichPath(null), []);
+
   if (!isOpen) return null;
 
   const valid =
@@ -87,6 +96,7 @@ export function SettingsDialog() {
         selectRequiresPick: selectPick,
         routeMinStar: routeStar,
         libraryRoot,
+        immichIngestPath: immichPath,
         enableAiOnImport: enableAi,
         eyeOpenConfidence: eyeConfidence,
         hideSoftThreshold: hideSoft,
@@ -176,6 +186,40 @@ export function SettingsDialog() {
           {libraryRootError && (
             <p className="text-xs text-red-400 mt-1">{libraryRootError}</p>
           )}
+        </div>
+
+        <div className="mb-4">
+          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+            Immich ingest folder (for Publish Direct)
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={immichPath ?? ""}
+              readOnly
+              placeholder="Not configured — Publish Direct disabled"
+              className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm"
+            />
+            <button
+              onClick={handleBrowseImmichPath}
+              title="Pick the Immich ingest directory"
+              className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm"
+            >
+              Browse
+            </button>
+            {immichPath !== null && (
+              <button
+                onClick={handleResetImmichPath}
+                title="Clear (disables Publish Direct)"
+                className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-[var(--text-secondary)] mt-1">
+            Photos flagged with <kbd className="px-1 bg-[var(--bg-tertiary)] rounded">D</kbd> (publish direct) have their cached JPEG copied here. Re-running skips files that already exist.
+          </p>
         </div>
 
         <div className="mb-4">

@@ -1,11 +1,20 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { useShootListStore } from "../stores/shootListStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { ImportDialog } from "../components/ImportDialog";
 import { thumbUrl } from "../hooks/useImageLoader";
-import type { CullView } from "../types";
+import type { CullView, PublishDirectReport } from "../types";
+
+interface ImportPhotoReady {
+  shootId: number;
+  photoId: number;
+  filename: string;
+  imported: number;
+  total: number;
+}
 
 /// Compact relative-time formatter. Buckets into "just now / Xm ago /
 /// Xh ago / Xd ago / ISO date". Good enough for a shoot card — no need
@@ -37,6 +46,52 @@ export function ShootListPage() {
   const openSettings = useSettingsStore((s) => s.openDialog);
   const navigate = useNavigate();
   const [showImport, setShowImport] = useState(false);
+  const [publishingShootId, setPublishingShootId] = useState<number | null>(null);
+  /// Live import progress per in-flight shoot. Populated by
+  /// `import-photo-ready` events and cleared on `import-complete`.
+  const [importingProgress, setImportingProgress] = useState<
+    Map<number, { imported: number; total: number }>
+  >(new Map());
+
+  const handlePublishDirect = async (
+    e: React.MouseEvent,
+    shootId: number,
+    slug: string,
+  ) => {
+    e.stopPropagation();
+    setPublishingShootId(shootId);
+    try {
+      const report = await invoke<PublishDirectReport>("export_publish_direct", {
+        shootId,
+      });
+      const parts = [
+        `${report.copied} copied`,
+        `${report.skipped} skipped`,
+        report.failed > 0 ? `${report.failed} failed` : null,
+      ].filter(Boolean);
+      const body = report.copied + report.skipped + report.failed === 0
+        ? `No photos are flagged for publish direct in "${slug}".`
+        : `"${slug}" → ${report.destDir}\n${parts.join(" · ")}${
+            report.errors.length > 0 ? "\n\n" + report.errors.join("\n") : ""
+          }`;
+      window.alert(body);
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("immich_ingest_path not configured")) {
+        if (
+          window.confirm(
+            "Immich ingest folder not configured. Open Settings to set it up?",
+          )
+        ) {
+          openSettings();
+        }
+      } else {
+        window.alert(`Publish failed: ${msg}`);
+      }
+    } finally {
+      setPublishingShootId(null);
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -63,10 +118,32 @@ export function ShootListPage() {
 
   useEffect(() => {
     refresh();
-    const unlisten = listen("import-complete", () => {
+    const unlistenComplete = listen<{ shootId: number }>("import-complete", (ev) => {
+      setImportingProgress((prev) => {
+        if (!prev.has(ev.payload.shootId)) return prev;
+        const next = new Map(prev);
+        next.delete(ev.payload.shootId);
+        return next;
+      });
       refresh();
     });
-    return () => { unlisten.then((fn) => fn()).catch(() => {}); };
+    const unlistenReady = listen<ImportPhotoReady>("import-photo-ready", (ev) => {
+      const { shootId, imported, total } = ev.payload;
+      setImportingProgress((prev) => {
+        const next = new Map(prev);
+        next.set(shootId, { imported, total });
+        return next;
+      });
+      // Trigger an early refresh when the first photo lands so the shoot
+      // appears on the list even if the user opened ShootListPage after
+      // the import started. Subsequent refreshes piggyback on the 1-in-N
+      // coarser event throttling below.
+      if (imported === 1) refresh();
+    });
+    return () => {
+      unlistenComplete.then((fn) => fn()).catch(() => {});
+      unlistenReady.then((fn) => fn()).catch(() => {});
+    };
   }, [refresh]);
 
   return (
@@ -133,6 +210,7 @@ export function ShootListPage() {
               const reviewed = picks + rejects;
               const opened = relativeTime(shoot.lastOpenedAt);
               const resumeLabel = viewLabel(shoot.lastView);
+              const importing = importingProgress.get(shoot.id);
 
               return (
                 <div
@@ -193,20 +271,49 @@ export function ShootListPage() {
                     </span>
                   </div>
 
-                  {opened ? (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); open(); }}
-                      className="self-start mt-1 px-3 py-1.5 rounded bg-[var(--accent)]/15 hover:bg-[var(--accent)]/25 border border-[var(--accent)]/30 text-[var(--accent)] text-xs font-medium transition-colors"
-                      title={`Last opened ${opened}`}
-                    >
-                      Continue {resumeLabel} · {opened}
-                    </button>
-                  ) : (
-                    <span className="self-start mt-1 text-[11px] text-[var(--text-secondary)]/60">
-                      Not yet opened
-                    </span>
+                  {importing && (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-[var(--bg-primary)] rounded overflow-hidden">
+                        <div
+                          className="h-full bg-[var(--accent)] transition-all"
+                          style={{
+                            width: `${Math.min(100, (importing.imported / Math.max(1, importing.total)) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="text-[11px] text-[var(--text-secondary)] tabular-nums">
+                        {importing.imported}/{importing.total}
+                      </span>
+                    </div>
                   )}
+
+                  <div className="flex items-center gap-2 mt-1">
+                    {opened ? (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); open(); }}
+                        className="px-3 py-1.5 rounded bg-[var(--accent)]/15 hover:bg-[var(--accent)]/25 border border-[var(--accent)]/30 text-[var(--accent)] text-xs font-medium transition-colors"
+                        title={`Last opened ${opened}`}
+                      >
+                        Continue {resumeLabel} · {opened}
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-[var(--text-secondary)]/60">
+                        Not yet opened
+                      </span>
+                    )}
+                    {picks > 0 && (
+                      <button
+                        type="button"
+                        onClick={(e) => handlePublishDirect(e, shoot.id, shoot.slug)}
+                        disabled={publishingShootId === shoot.id}
+                        title="Copy publish-direct picks to Immich ingest folder"
+                        className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 border border-white/10 text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {publishingShootId === shoot.id ? "Publishing…" : "Publish"}
+                      </button>
+                    )}
+                  </div>
                   </div>
 
                   <button

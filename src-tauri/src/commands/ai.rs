@@ -1,5 +1,5 @@
 use crate::ai::sharpness::tiled_tenengrad;
-use crate::ai::{AiProviderStatus, EyeProviderKind};
+use crate::ai::{AiProviderStatus, EyeProviderKind, MouthProviderKind};
 use crate::db::schema::{FaceRow, SharpnessPercentiles};
 use crate::state::AppState;
 use serde::Serialize;
@@ -12,6 +12,7 @@ use tauri::State;
 pub struct AiStatus {
     pub provider: AiProviderStatus,
     pub eye_provider: EyeProviderKind,
+    pub mouth_provider: MouthProviderKind,
     pub analyzed: usize,
     pub failed: usize,
     pub total: usize,
@@ -23,6 +24,7 @@ pub fn get_ai_status(state: State<'_, Mutex<AppState>>) -> Result<AiStatus, Stri
     Ok(AiStatus {
         provider: s.ai_status,
         eye_provider: s.ai_eye_provider,
+        mouth_provider: s.ai_mouth_provider,
         analyzed: s.ai_analyzed.load(Ordering::SeqCst),
         failed: s.ai_failed.load(Ordering::SeqCst),
         total: s.ai_total.load(Ordering::SeqCst),

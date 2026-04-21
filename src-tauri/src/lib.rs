@@ -194,11 +194,19 @@ pub fn run() {
                     ),
                 };
 
+            // Cat detector is the mock until a real ONNX cat face model
+            // is sourced. See `src-tauri/src/ai/cat.rs` — the trait +
+            // persistence path are live; plug a real provider in here
+            // when `~/.photosift/models/cat_detector.onnx` exists.
+            let cat_provider: Box<dyn crate::ai::cat::CatDetectorProvider> =
+                Box::new(crate::ai::cat::MockCatDetector);
+
             let spawned = crate::ai::spawn_worker(
                 db_path,
                 face_provider,
                 eye_provider,
                 mouth_provider,
+                cat_provider,
                 cancel,
                 analyzed,
                 failed,
@@ -256,6 +264,7 @@ pub fn run() {
             commands::settings::update_settings,
             commands::settings::recluster_shoot,
             commands::export::export_xmp,
+            commands::export::export_publish_direct,
             commands::ai::get_ai_status,
             commands::ai::cancel_ai_analysis,
             commands::ai::reanalyze_shoot,

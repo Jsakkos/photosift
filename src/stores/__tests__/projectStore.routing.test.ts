@@ -20,6 +20,7 @@ beforeEach(() => {
       enableAiOnImport: true,
       hideSoftThreshold: 30,
       eyeOpenConfidence: 0.7,
+      immichIngestPath: null,
     },
   });
 });
