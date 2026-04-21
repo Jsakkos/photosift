@@ -25,6 +25,8 @@ function useViewStats() {
 export function ViewSelector() {
   const currentView = useProjectStore((s) => s.currentView);
   const setView = useProjectStore((s) => s.setView);
+  const showReviewed = useProjectStore((s) => s.showReviewed);
+  const toggleShowReviewed = useProjectStore((s) => s.toggleShowReviewed);
   const stats = useViewStats();
 
   let statsText = "";
@@ -59,7 +61,26 @@ export function ViewSelector() {
           </button>
         ))}
       </div>
-      <span className="text-xs text-[var(--text-secondary)]">{statsText}</span>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={toggleShowReviewed}
+          aria-pressed={showReviewed}
+          title={
+            showReviewed
+              ? "Showing all photos including picked/rejected. Click to hide reviewed again."
+              : "Include picked/rejected photos in the list so an accidental P/X can be undone."
+          }
+          className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+            showReviewed
+              ? "bg-[var(--accent)] text-white"
+              : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          }`}
+        >
+          Show all {showReviewed ? "ON" : "OFF"}
+        </button>
+        <span className="text-xs text-[var(--text-secondary)]">{statsText}</span>
+      </div>
     </div>
   );
 }

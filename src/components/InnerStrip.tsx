@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
@@ -9,17 +9,17 @@ const THUMB_W = 160;
 const THUMB_H = 100;
 
 function Thumbnail({ imageId, filename }: { imageId: number; filename: string }) {
-  const [loaded, setLoaded] = useState(false);
+  // Key on imageId so React replaces the <img> when the position in
+  // the inner strip switches to a different group member — without
+  // this, the old src's onLoad state persists and the new image can
+  // render stuck in its loading placeholder.
   return (
     <img
+      key={imageId}
       src={thumbUrl(imageId)}
       alt={filename}
-      className={`w-full h-full object-cover ${loaded ? "opacity-100" : "opacity-30"}`}
-      loading="lazy"
+      className="w-full h-full object-cover"
       draggable={false}
-      onLoad={(e) => {
-        if (e.currentTarget.naturalWidth > 1) setLoaded(true);
-      }}
     />
   );
 }

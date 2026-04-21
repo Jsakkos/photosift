@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
 
@@ -30,7 +29,6 @@ export function GroupStack({
   coverW = 84,
   coverH = 60,
 }: GroupStackProps) {
-  const [loaded, setLoaded] = useState(false);
   // Outer bounding box accommodates the shadow layers' diagonal offset.
   const outerW = coverW + SHADOW_OFFSET * 2;
   const outerH = coverH + SHADOW_OFFSET * 2;
@@ -63,14 +61,11 @@ export function GroupStack({
         style={{ top: SHADOW_OFFSET, left: 0, width: coverW, height: coverH }}
       >
         <img
+          key={imageId}
           src={thumbUrl(imageId)}
           alt={filename}
-          className={`w-full h-full object-cover ${loaded ? "opacity-100" : "opacity-30"}`}
-          loading="lazy"
+          className="w-full h-full object-cover"
           draggable={false}
-          onLoad={(e) => {
-            if (e.currentTarget.naturalWidth > 1) setLoaded(true);
-          }}
         />
       </div>
       {/* Count badge */}

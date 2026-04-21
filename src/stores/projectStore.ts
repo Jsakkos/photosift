@@ -39,6 +39,13 @@ function currentAiOptions(
   };
 }
 
+/// Reads the store flag that, when true, disables the triage/select
+/// review filter so picked/rejected photos remain visible alongside
+/// unreviewed ones. Lets the user recover from an accidental P/X.
+function showReviewedFlag(): boolean {
+  return useProjectStore.getState().showReviewed;
+}
+
 export interface AiDisplayOptions {
   sortByAi: "none" | "sharpness" | "faces";
   hideSoftThreshold: number; // 0 disables
@@ -98,6 +105,10 @@ function computeDisplayItemsFiltered(
   routeMinStarGate: number,
   aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
 ): DisplayItem[] {
+  // Reads the toggle lazily so every call site automatically picks up
+  // the user's current Show-all preference without having to thread the
+  // flag through the 17+ store actions that recompute displayItems.
+  const showReviewed = showReviewedFlag();
   if (activeInnerGroupId == null) {
     return computeDisplayItems(
       images,
@@ -107,6 +118,7 @@ function computeDisplayItemsFiltered(
       selectRequiresPickFilter,
       routeMinStarGate,
       aiOptions,
+      showReviewed,
     );
   }
 
@@ -127,18 +139,23 @@ function computeDisplayItemsFiltered(
     if (imgIdx < 0) continue;
     const img = images[imgIdx];
 
-    if (currentView === "triage") {
-      if (img.flag === "reject") continue;
-      if (img.flag !== "unreviewed" && img.id !== pick) continue;
-    } else if (currentView === "select") {
-      const passes = selectRequiresPickFilter
-        ? img.flag === "pick"
-        : img.flag !== "reject";
-      if (!passes) continue;
-    } else {
-      // route view
-      if (img.flag !== "pick" || img.destination !== "unrouted") continue;
-      if (routeMinStarGate > 0 && img.starRating < routeMinStarGate) continue;
+    if (!showReviewed) {
+      if (currentView === "triage") {
+        // Filter picked/rejected so the reviewed photo actually disappears.
+        // The prior AI-pick pin kept the recommended frame visible after
+        // P/X, but users read that as "my pick didn't register" — flip
+        // the default and rely on the Show-all toggle for second thoughts.
+        if (img.flag !== "unreviewed") continue;
+      } else if (currentView === "select") {
+        const passes = selectRequiresPickFilter
+          ? img.flag === "pick"
+          : img.flag !== "reject";
+        if (!passes) continue;
+      } else {
+        // route view
+        if (img.flag !== "pick" || img.destination !== "unrouted") continue;
+        if (routeMinStarGate > 0 && img.starRating < routeMinStarGate) continue;
+      }
     }
 
     result.push({
@@ -234,44 +251,36 @@ export function computeDisplayItems(
   selectRequiresPickFilter: boolean = false,
   routeMinStarGate: number = 0,
   aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
+  showReviewed: boolean = false,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   const photoGroupMap = buildPhotoGroupMap(groups);
 
   if (currentView === "triage") {
-    // Pre-compute AI pick per group so we can keep the recommended member
-    // visible in expanded display even after it's been flagged. Without
-    // this, the `★ AI` badge loses its target the moment the user picks
-    // or rejects the pick photo, since the default filter drops
-    // non-unreviewed members.
-    const triagePickCache = new Map<number, number | null>();
-    const pickForGroup = (g: Group): number | null => {
-      if (triagePickCache.has(g.id)) return triagePickCache.get(g.id)!;
-      const p = aiPickForGroup(g, images, aiOptions.useEyesInPick, aiOptions.useSmileInPick);
-      triagePickCache.set(g.id, p);
-      return p;
-    };
-
     const seenGroups = new Set<number>();
+    // In triage, a photo passes unless it's already picked/rejected —
+    // unless the user flipped the Show-all toggle in ViewSelector,
+    // which re-includes reviewed photos so they can un-pick/un-reject.
+    const passesTriage = (img: ImageEntry): boolean =>
+      showReviewed || img.flag === "unreviewed";
+
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
-      if (img.flag !== "unreviewed") continue;
+      if (!passesTriage(img)) continue;
 
       const group = photoGroupMap.get(img.id);
       if (group) {
         if (seenGroups.has(group.id)) continue;
         seenGroups.add(group.id);
         if (expandedGroupIds.has(group.id)) {
-          // Drill-down: emit each unreviewed member inline with groupId set
-          // so the filmstrip can draw the affiliation bar. The AI pick is
-          // emitted even if flagged so the badge has a place to render.
+          // Drill-down inline: emit each member whose flag still passes.
+          // No AI-pick pinning — picked/rejected photos leave the list
+          // so the user sees their action take effect.
           for (const member of group.members) {
             const mi = images.findIndex((im) => im.id === member.photoId);
             if (mi < 0) continue;
             const memImg = images[mi];
-            const isPinnedPick = pickForGroup(group) === memImg.id;
-            if (memImg.flag === "reject") continue;
-            if (memImg.flag !== "unreviewed" && !isPinnedPick) continue;
+            if (!passesTriage(memImg)) continue;
             items.push({
               imageIndex: mi,
               image: memImg,
@@ -284,11 +293,11 @@ export function computeDisplayItems(
         const coverIdx = images.findIndex((im) => im.id === coverId);
         const coverImg = coverIdx >= 0 ? images[coverIdx] : img;
         const actualIdx = coverIdx >= 0 ? coverIdx : i;
-        const unrevCount = group.members.filter((m) => {
+        const visibleCount = group.members.filter((m) => {
           const mi = images.find((im) => im.id === m.photoId);
-          return mi && mi.flag === "unreviewed";
+          return mi && passesTriage(mi);
         }).length;
-        if (unrevCount === 0) continue;
+        if (visibleCount === 0) continue;
         items.push({
           imageIndex: actualIdx,
           image: coverImg,
@@ -302,8 +311,10 @@ export function computeDisplayItems(
     }
   } else if (currentView === "select") {
     const seenGroups = new Set<number>();
-    const passesSelectGate = (img: ImageEntry): boolean =>
-      selectRequiresPickFilter ? img.flag === "pick" : img.flag !== "reject";
+    const passesSelectGate = (img: ImageEntry): boolean => {
+      if (showReviewed) return true;
+      return selectRequiresPickFilter ? img.flag === "pick" : img.flag !== "reject";
+    };
 
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
@@ -331,10 +342,16 @@ export function computeDisplayItems(
   } else {
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
-      if (
+      const starGate =
+        routeMinStarGate === 0 || img.starRating >= routeMinStarGate;
+      if (showReviewed) {
+        if (img.flag === "pick" && starGate) {
+          items.push({ imageIndex: i, image: img });
+        }
+      } else if (
         img.flag === "pick" &&
         img.destination === "unrouted" &&
-        (routeMinStarGate === 0 || img.starRating >= routeMinStarGate)
+        starGate
       ) {
         items.push({ imageIndex: i, image: img });
       }
@@ -475,6 +492,11 @@ interface ProjectState {
   heatmapCache: Map<number, number[]>;
   toggleHeatmap: () => void;
   getHeatmapData: (photoId: number) => number[] | null;
+  /// When true, the review filters in all three views are bypassed so
+  /// picked/rejected/routed photos remain visible. Lets the user walk
+  /// back an accidental P/X without hunting the Undo shortcut.
+  showReviewed: boolean;
+  toggleShowReviewed: () => void;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -503,6 +525,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   sortByAi: "none" as const,
   heatmapOn: false,
   heatmapCache: new Map<number, number[]>(),
+  showReviewed: false,
 
   currentImage: () => {
     const { displayItems, currentIndex } = get();
@@ -1079,6 +1102,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((s) => ({ showShortcutHints: !s.showShortcutHints })),
   toggleAiPanel: () => set((s) => ({ aiPanelForced: !s.aiPanelForced })),
   toggleHeatmap: () => set((s) => ({ heatmapOn: !s.heatmapOn })),
+  toggleShowReviewed: () => {
+    set((s) => ({ showReviewed: !s.showReviewed }));
+    get().refreshDisplay();
+  },
 
   getHeatmapData: (photoId: number) => {
     const cached = get().heatmapCache.get(photoId);
@@ -1435,6 +1462,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         faceCount: fresh.faceCount,
         eyesOpenCount: fresh.eyesOpenCount,
         sharpnessScore: fresh.sharpnessScore,
+        qualityScore: fresh.qualityScore,
+        maxSmileScore: fresh.maxSmileScore,
         aiAnalyzedAt: fresh.aiAnalyzedAt,
       };
       set({ images: updatedImages });

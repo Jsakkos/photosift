@@ -485,7 +485,6 @@ function GridThumb({
   onDoubleClick: () => void;
   currentView: string;
 }) {
-  const [loaded, setLoaded] = useState(false);
   const image = item.image;
   const isRejected = image.flag === "reject";
 
@@ -524,14 +523,12 @@ function GridThumb({
       onDoubleClick={onDoubleClick}
     >
       <img
+        key={image.id}
         src={thumbUrl(image.id)}
         alt={image.filename}
-        className={`w-full h-full object-cover ${loaded ? "opacity-100" : "opacity-30"} ${isRejected ? "grayscale-[0.6]" : ""}`}
+        className={`w-full h-full object-cover ${isRejected ? "grayscale-[0.6]" : ""}`}
         loading="lazy"
         draggable={false}
-        onLoad={(e) => {
-          if (e.currentTarget.naturalWidth > 1) setLoaded(true);
-        }}
       />
       {/* Expanded-group affiliation bar — left-edge accent visible inside
           the rounded clip. Matches the Filmstrip treatment so switching

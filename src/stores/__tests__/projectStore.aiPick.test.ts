@@ -108,7 +108,12 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
   const picked = (flag: string): ImageEntry =>
     ({ ...e(11, 90, 0), flag }) as ImageEntry;
 
-  it("expanded group: pick member stays in display items even when already flagged", () => {
+  it("expanded group: picked member is filtered out so the P action takes effect", () => {
+    // Earlier the AI pick was pinned in expanded triage so the ★ badge
+    // always had a home, but users read "my pick shot is still on
+    // screen" as a broken filter. Flipped the contract: P/X remove the
+    // photo just like on an ungrouped frame. The Show-all toggle in
+    // ViewSelector covers the recover-from-accident case.
     const images = [
       { ...e(10, 50, 0), flag: "unreviewed" },
       picked("pick"),
@@ -123,9 +128,9 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
       0,
       { sortByAi: "none", hideSoftThreshold: 0, useEyesInPick: false, useSmileInPick: false },
     );
-    const pickItem = items.find((d) => d.image.id === 11);
-    expect(pickItem, "pick member must be present even though flag=pick").toBeDefined();
-    expect(pickItem!.isAiPick).toBe(true);
+    expect(items.find((d) => d.image.id === 11)).toBeUndefined();
+    // The remaining unreviewed siblings should still render.
+    expect(items.map((d) => d.image.id).sort()).toEqual([10, 12]);
   });
 
   it("drill-down: rejected pick is hidden", () => {

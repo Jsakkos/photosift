@@ -14,18 +14,21 @@ const THUMB_H = 110;
 const CELL_H = THUMB_H + 10;
 
 function Thumbnail({ imageId, filename }: { imageId: number; filename: string }) {
-  const [loaded, setLoaded] = useState(false);
-
+  // The FixedSizeList recycles row instances when the item array
+  // changes (e.g. switching triage → select → triage), so a single
+  // Thumbnail component gets handed a new imageId instead of unmounting
+  // and remounting. If we kept `loaded` as a persistent state, the
+  // opacity-100 class would stick from the previous image while the new
+  // src is still loading — what the user saw as "thumbnails don't show
+  // up after a view switch." Keying the <img> by imageId forces React
+  // to replace the element, which resets the load state cleanly.
   return (
     <img
+      key={imageId}
       src={thumbUrl(imageId)}
       alt={filename}
-      className={`w-full h-full object-cover ${loaded ? "opacity-100" : "opacity-30"}`}
-      loading="lazy"
+      className="w-full h-full object-cover"
       draggable={false}
-      onLoad={(e) => {
-        if (e.currentTarget.naturalWidth > 1) setLoaded(true);
-      }}
     />
   );
 }
@@ -43,6 +46,7 @@ export function Filmstrip() {
   const currentIndex = useProjectStore((s) => s.currentIndex);
   const activeInnerGroupId = useProjectStore((s) => s.activeInnerGroupId);
   const sortByAi = useProjectStore((s) => s.sortByAi);
+  const showReviewed = useProjectStore((s) => s.showReviewed);
   const setCurrentIndex = useProjectStore((s) => s.setCurrentIndex);
   const setViewMode = useProjectStore((s) => s.setViewMode);
   const setActiveInnerGroup = useProjectStore((s) => s.setActiveInnerGroup);
@@ -82,6 +86,7 @@ export function Filmstrip() {
       settings.selectRequiresPick ?? false,
       settings.routeMinStar ?? 0,
       aiOptions,
+      showReviewed,
     );
   }, [
     images,
@@ -93,6 +98,7 @@ export function Filmstrip() {
     sortByAi,
     eyeProvider,
     mouthProvider,
+    showReviewed,
   ]);
 
   // The outer rail's "highlighted" index:
