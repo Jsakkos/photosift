@@ -194,12 +194,36 @@ pub fn run() {
                     ),
                 };
 
-            // Cat detector is the mock until a real ONNX cat face model
-            // is sourced. See `src-tauri/src/ai/cat.rs` — the trait +
-            // persistence path are live; plug a real provider in here
-            // when `~/.photosift/models/cat_detector.onnx` exists.
+            // Cat detector: Tiny-YOLOv3 (COCO, class 15 = cat) loaded
+            // from `~/.photosift/models/cat_detector.onnx` when present.
+            // Falls back to the mock (no cats) if the file is missing or
+            // fails to load, mirroring the eye/mouth hot-swap pattern.
             let cat_provider: Box<dyn crate::ai::cat::CatDetectorProvider> =
-                Box::new(crate::ai::cat::MockCatDetector);
+                match models_dir.as_ref() {
+                    Some(dir) => {
+                        let cat_path = dir.join("cat_detector.onnx");
+                        if cat_path.exists() {
+                            match crate::ai::cat::OnnxCatDetector::load(&cat_path) {
+                                Ok(p) => Box::new(p),
+                                Err(e) => {
+                                    log::error!(
+                                        "Cat detector ONNX load failed at {}; falling back to mock: {}",
+                                        cat_path.display(),
+                                        e
+                                    );
+                                    Box::new(crate::ai::cat::MockCatDetector)
+                                }
+                            }
+                        } else {
+                            log::info!(
+                                "No cat detector at {} — using mock",
+                                cat_path.display()
+                            );
+                            Box::new(crate::ai::cat::MockCatDetector)
+                        }
+                    }
+                    None => Box::new(crate::ai::cat::MockCatDetector),
+                };
 
             let spawned = crate::ai::spawn_worker(
                 db_path,

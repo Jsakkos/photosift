@@ -124,11 +124,11 @@ pub fn process_job(
     let t_total = t_start.elapsed();
 
     // Composite quality score (0-100). Sharpness-dominant today with a
-    // small face-presence bump; when the mock eye classifier is swapped
+    // small subject-presence bump; when the mock eye classifier is swapped
     // for a real ONNX model we'll factor in eye-open ratio, and mouth/smile
     // when D1 unblocks. Ranking is within a group so the absolute scale
     // doesn't matter much — relative order does.
-    let face_bonus = if !faces.is_empty() { 15.0 } else { 0.0 };
+    let face_bonus = if !face_rows.is_empty() { 15.0 } else { 0.0 };
     let quality = (whole * 0.85 + face_bonus).clamp(0.0, 100.0);
 
     log::info!(
@@ -145,10 +145,13 @@ pub fn process_job(
         whole,
     );
 
+    // `face_count` on photos is the total detection count across species —
+    // cat-only photos would otherwise report zero and the AiPanel visibility
+    // gate would hide the panel despite valid cat tiles being available.
     db.write_ai_result(
         job.photo_id,
         &face_rows,
-        Some(faces.len() as i32),
+        Some(face_rows.len() as i32),
         Some(open_count),
         Some(whole),
         Some(quality),
