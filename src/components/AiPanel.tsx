@@ -10,7 +10,6 @@ import { AiSpeciesIcon } from "./AiSpeciesIcon";
 import type { Face } from "../types";
 
 const TILE_PX = 160;
-const MAX_VISIBLE = 6;
 
 interface Props {
   photoId: number;
@@ -52,8 +51,6 @@ export function AiPanel({ photoId, visible }: Props) {
   const badge = sharpnessBadgeScore(image.sharpnessScore, percentiles);
   const showEyes = eyeProvider === "onnx";
   const showSmile = mouthProvider === "onnx";
-  const visibleFaces = faces ? faces.slice(0, MAX_VISIBLE) : [];
-  const overflow = faces ? Math.max(0, faces.length - MAX_VISIBLE) : 0;
   const hasFaces = !!faces && faces.length > 0;
 
   return (
@@ -64,13 +61,9 @@ export function AiPanel({ photoId, visible }: Props) {
     >
       {hasFaces && (
         <div
-          className={`grid gap-2 ${
-            visibleFaces.length + (overflow > 0 ? 1 : 0) === 1
-              ? "grid-cols-1"
-              : "grid-cols-2"
-          }`}
+          className={`grid gap-2 ${faces!.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}
         >
-          {visibleFaces.map((f, i) => (
+          {faces!.map((f, i) => (
             <FaceTile
               key={i}
               face={f}
@@ -80,15 +73,6 @@ export function AiPanel({ photoId, visible }: Props) {
               showSmile={showSmile}
             />
           ))}
-          {overflow > 0 && (
-            <div
-              className="flex items-center justify-center rounded bg-black/40 text-[var(--text-secondary)] text-[11px]"
-              style={{ width: TILE_PX, height: TILE_PX }}
-              aria-label={`${overflow} more faces not shown`}
-            >
-              +{overflow} more
-            </div>
-          )}
         </div>
       )}
       {!hasFaces && (
