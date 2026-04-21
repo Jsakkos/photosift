@@ -312,4 +312,59 @@ describe("setFlag", () => {
 
     expect(useProjectStore.getState().redoStack).toHaveLength(0);
   });
+
+  test("triage drill-down auto-exits when the last member is flagged", async () => {
+    setupMockIpc({});
+
+    // Two groups: user drills into groupA and picks its last unreviewed
+    // frame. groupB still has unreviewed members. Previously the display
+    // would collapse to [] (the drill-down path filtered the final
+    // photo) and CullPage would render "Triage complete" even though
+    // groupB is untouched. Regression guard: after the final pick,
+    // activeInnerGroupId clears and displayItems falls back to the
+    // outer list with groupB's cover visible.
+    const a1 = makeImage({ id: 1, flag: "pick" });
+    const a2 = makeImage({ id: 2, flag: "reject" });
+    const a3 = makeImage({ id: 3, flag: "unreviewed" });
+    const b1 = makeImage({ id: 4, flag: "unreviewed" });
+    const b2 = makeImage({ id: 5, flag: "unreviewed" });
+    const groupA = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+      { photoId: 3 },
+    ]);
+    const groupB = makeGroup([
+      { photoId: 4, isCover: true },
+      { photoId: 5 },
+    ]);
+
+    const images = [a1, a2, a3, b1, b2];
+    const groups = [groupA, groupB];
+
+    // Emulate "drilled into groupA, focused on its last unreviewed
+    // frame id=3." Setup displayItems as the drill-down list of one
+    // photo so setFlag targets it.
+    useProjectStore.setState({
+      images,
+      groups,
+      displayItems: [{ imageIndex: 2, image: a3, groupId: groupA.id }],
+      activeInnerGroupId: groupA.id,
+      currentView: "triage",
+      currentIndex: 0,
+      autoAdvance: false,
+      undoStack: [],
+      redoStack: [],
+      showReviewed: false,
+    });
+
+    await useProjectStore.getState().setFlag("pick");
+
+    const state = useProjectStore.getState();
+    expect(state.activeInnerGroupId).toBeNull();
+    // Outer triage: groupA now fully reviewed (no cover), groupB cover
+    // still visible. So exactly one item remains.
+    expect(state.displayItems.length).toBeGreaterThan(0);
+    expect(state.displayItems.some((d) => d.groupId === groupB.id)).toBe(true);
+    expect(state.displayItems.every((d) => d.groupId !== groupA.id)).toBe(true);
+  });
 });

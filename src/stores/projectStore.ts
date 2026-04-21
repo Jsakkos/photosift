@@ -96,6 +96,45 @@ function describeUndoRedoEntry(action: "Undo" | "Redo", entry: UndoEntry): strin
 /// Select drill-down filter: when an inner group is active, the
 /// visible (keyboard-navigable) set shrinks to just that group's
 /// members. Outside a drill-down this is a no-op passthrough.
+/// Compute the display items AND figure out whether the drill-down
+/// should auto-exit. When every member of the currently-drilled group
+/// has been picked/rejected (as happens after the user finishes
+/// triaging a burst), the raw drill-down computation returns [] — but
+/// `CullPage` treats `displayItems.length === 0` as "triage complete"
+/// and renders EmptyViewState, hiding the 40 unreviewed photos in
+/// other groups. Detect that and fall back to the outer list, also
+/// returning the new activeInnerGroupId so callers can clear it.
+function computeWithAutoExit(
+  images: ImageEntry[],
+  currentView: CullView,
+  groups: Group[],
+  activeInnerGroupId: number | null,
+  aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
+): { items: DisplayItem[]; activeInnerGroupId: number | null } {
+  const items = computeDisplayItemsFiltered(
+    images,
+    currentView,
+    groups,
+    activeInnerGroupId,
+    selectRequiresPick(),
+    routeMinStar(),
+    aiOptions,
+  );
+  if (activeInnerGroupId != null && items.length === 0) {
+    const outer = computeDisplayItemsFiltered(
+      images,
+      currentView,
+      groups,
+      null,
+      selectRequiresPick(),
+      routeMinStar(),
+      aiOptions,
+    );
+    return { items: outer, activeInnerGroupId: null };
+  }
+  return { items, activeInnerGroupId };
+}
+
 function computeDisplayItemsFiltered(
   images: ImageEntry[],
   currentView: CullView,
@@ -739,15 +778,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       affectedIds.push({ id: image.id, oldFlag });
     }
 
-    const newDisplayItems = computeDisplayItemsFiltered(
-      updatedImages,
-      currentView,
-      groups,
-      get().activeInnerGroupId,
-      selectRequiresPick(),
-      routeMinStar(),
-      currentAiOptions(get().sortByAi),
-    );
+    const { items: newDisplayItems, activeInnerGroupId: newActive } =
+      computeWithAutoExit(
+        updatedImages,
+        currentView,
+        groups,
+        get().activeInnerGroupId,
+        currentAiOptions(get().sortByAi),
+      );
 
     const flashColor =
       flag === "pick"
@@ -780,6 +818,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({
       images: updatedImages,
       displayItems: newDisplayItems,
+      activeInnerGroupId: newActive,
       undoStack: [...undoStack.slice(-49), undoEntry],
       redoStack: [],
       lastFlagAction: flashColor
@@ -1175,21 +1214,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, flag };
-    const newDisplayItems = computeDisplayItemsFiltered(
-      updatedImages,
-      currentView,
-      groups,
-      get().activeInnerGroupId,
-      selectRequiresPick(),
-      routeMinStar(),
-      currentAiOptions(get().sortByAi),
-    );
+    const { items: newDisplayItems, activeInnerGroupId: newActive } =
+      computeWithAutoExit(
+        updatedImages,
+        currentView,
+        groups,
+        get().activeInnerGroupId,
+        currentAiOptions(get().sortByAi),
+      );
 
     const flashColor = flag === "pick" ? "rgba(34, 197, 94, 0.15)" : flag === "reject" ? "rgba(239, 68, 68, 0.15)" : null;
 
     set({
       images: updatedImages,
       displayItems: newDisplayItems,
+      activeInnerGroupId: newActive,
       undoStack: [...undoStack.slice(-49), { imageId: image.id, field: "flag", oldValue: oldFlag, newValue: flag }],
       redoStack: [],
       lastFlagAction: flashColor ? { color: flashColor, timestamp: Date.now() } : get().lastFlagAction,
@@ -1427,13 +1466,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   refreshDisplay: () => {
     const { images, currentView, groups, displayItems, currentIndex } = get();
     const currentPhotoId = displayItems[currentIndex]?.image.id;
-    const next = computeDisplayItemsFiltered(
+    const { items: next, activeInnerGroupId: nextActive } = computeWithAutoExit(
       images,
       currentView,
       groups,
       get().activeInnerGroupId,
-      selectRequiresPick(),
-      routeMinStar(),
       currentAiOptions(get().sortByAi),
     );
     let nextIndex = currentIndex;
@@ -1442,7 +1479,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       if (idx >= 0) nextIndex = idx;
     }
     nextIndex = Math.min(nextIndex, Math.max(0, next.length - 1));
-    set({ displayItems: next, currentIndex: nextIndex < 0 ? 0 : nextIndex });
+    set({
+      displayItems: next,
+      activeInnerGroupId: nextActive,
+      currentIndex: nextIndex < 0 ? 0 : nextIndex,
+    });
   },
 
   // Called from the ai-progress listener: pulls the latest AI fields
