@@ -42,19 +42,35 @@ pub struct ScanProgress {
 const SCAN_PARALLELISM: usize = 4;
 
 #[tauri::command]
-pub async fn scan_folder(app: AppHandle, source: String) -> Result<usize, String> {
+pub async fn scan_folder(
+    app: AppHandle,
+    source: String,
+    // When false (default flow), skip the embedded-JPEG decode and emit
+    // entries with `thumb_data_url = None`. Walking + EXIF is cheap; the
+    // decode is what took 10+ seconds on a 400-photo NEF folder. The
+    // ImportDialog only needs thumbs when the user flips "Select subset"
+    // so they can visually pick which frames to drop.
+    with_thumbnails: Option<bool>,
+) -> Result<usize, String> {
+    let with_thumbnails = with_thumbnails.unwrap_or(false);
     // Must run inside spawn_blocking so the synchronous rayon work doesn't
     // hold the IPC worker: emit() queues events to the webview, but they
     // only drain while the command task yields. A blocking sync command
     // would let the scan complete in the background but deliver every
     // `scan-progress` event in one burst after it returned — the UI would
     // see a 30-second frozen panel and then 398 thumbnails at once.
-    tauri::async_runtime::spawn_blocking(move || scan_folder_blocking(app, source))
-        .await
-        .map_err(|e| format!("scan task panicked: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_folder_blocking(app, source, with_thumbnails)
+    })
+    .await
+    .map_err(|e| format!("scan task panicked: {}", e))?
 }
 
-fn scan_folder_blocking(app: AppHandle, source: String) -> Result<usize, String> {
+fn scan_folder_blocking(
+    app: AppHandle,
+    source: String,
+    with_thumbnails: bool,
+) -> Result<usize, String> {
     let src_path = PathBuf::from(&source);
     if !src_path.exists() {
         return Err(format!("Source path does not exist: {}", source));
@@ -71,7 +87,7 @@ fn scan_folder_blocking(app: AppHandle, source: String) -> Result<usize, String>
     let counter = AtomicUsize::new(0);
     pool.install(|| {
         files.par_iter().for_each(|p| {
-            let entry = scan_one_file(p);
+            let entry = scan_one_file(p, with_thumbnails);
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let _ = app.emit(
                 "scan-progress",
@@ -87,7 +103,7 @@ fn scan_folder_blocking(app: AppHandle, source: String) -> Result<usize, String>
     Ok(total)
 }
 
-fn scan_one_file(path: &Path) -> ScanEntry {
+fn scan_one_file(path: &Path, with_thumbnails: bool) -> ScanEntry {
     let filename = path
         .file_name()
         .unwrap_or_default()
@@ -99,13 +115,18 @@ fn scan_one_file(path: &Path) -> ScanEntry {
     let captured_at = exif_data.as_ref().and_then(|e| e.capture_time.clone());
     let orientation_tag = exif_data.as_ref().and_then(|e| e.orientation);
 
-    let thumb_data_url = build_scan_thumb(path, orientation_tag);
-    if thumb_data_url.is_none() {
-        log::warn!(
-            "scan: no preview thumbnail for {} — embedded JPEG decode failed",
-            path.display()
-        );
-    }
+    let thumb_data_url = if with_thumbnails {
+        let t = build_scan_thumb(path, orientation_tag);
+        if t.is_none() {
+            log::warn!(
+                "scan: no preview thumbnail for {} — embedded JPEG decode failed",
+                path.display()
+            );
+        }
+        t
+    } else {
+        None
+    };
 
     ScanEntry {
         path: path.to_string_lossy().into_owned(),

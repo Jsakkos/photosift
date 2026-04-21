@@ -69,10 +69,16 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
   const [scanEntries, setScanEntries] = useState<ScanEntry[] | null>(null);
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // "Select subset" opts into the thumbnail-driven selection grid. OFF
+  // by default — a 400-photo NEF folder needed ~30s of embedded-JPEG
+  // decode to populate every tile, and most imports take the whole
+  // folder anyway. When OFF we just list the filenames and import
+  // everything on commit.
+  const [selectSubset, setSelectSubset] = useState(false);
   // shift-click range selection uses the last-clicked index as anchor
   const lastClickedIdx = useRef<number | null>(null);
 
-  const runScan = useCallback(async (source: string) => {
+  const runScan = useCallback(async (source: string, withThumbnails: boolean) => {
     setScanning(true);
     setScanEntries([]);
     setScanProgress(null);
@@ -97,7 +103,7 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
     });
 
     try {
-      await invoke<number>("scan_folder", { source });
+      await invoke<number>("scan_folder", { source, withThumbnails });
     } catch (e) {
       setError(`Scan failed: ${e}`);
       setScanEntries([]);
@@ -115,8 +121,20 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
       const name = picked.split(/[/\\]/).pop() || "";
       setSlug(name.replace(/[^a-zA-Z0-9_-]/g, "-"));
     }
-    runScan(picked);
-  }, [slug, runScan]);
+    runScan(picked, selectSubset);
+  }, [slug, runScan, selectSubset]);
+
+  const toggleSelectSubset = useCallback(() => {
+    const next = !selectSubset;
+    setSelectSubset(next);
+    // If a folder is already picked, re-run the scan with the new
+    // thumbnail setting so flipping the toggle isn't a silent no-op.
+    // The second pass is cheap when dropping thumbs, and the expected
+    // wait when opting in.
+    if (sourcePath && !scanning) {
+      runScan(sourcePath, next);
+    }
+  }, [selectSubset, sourcePath, scanning, runScan]);
 
   useEffect(() => {
     if (!importing) return;
@@ -220,7 +238,10 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
     : "Scanning...";
 
   const hasScan = scanEntries !== null && scanEntries.length > 0;
-  const dialogWidthClass = hasScan || scanning ? "w-[960px]" : "w-[480px]";
+  // Stay narrow when we're just showing a count. Widen once thumbnails
+  // are on-screen so the 3-6 column grid has room to breathe.
+  const dialogWidthClass =
+    (hasScan || scanning) && selectSubset ? "w-[960px]" : "w-[480px]";
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -305,15 +326,52 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
               />
             </div>
 
+            {sourcePath && (
+              <div className="mb-4">
+                <label className="flex items-start gap-2 cursor-pointer text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selectSubset}
+                    onChange={toggleSelectSubset}
+                    disabled={scanning}
+                    className="mt-0.5 cursor-pointer"
+                  />
+                  <span>
+                    <span className="text-[var(--text-primary)]">Select subset</span>
+                    <span className="block text-xs text-[var(--text-secondary)]">
+                      Load thumbnails so you can deselect unwanted photos. Off
+                      by default because decoding embedded previews is slow on
+                      RAW folders.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
+
             {scanning && (
               <div className="mb-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5 text-sm text-[var(--text-secondary)]">
                 {scanProgress
-                  ? `Scanning folder... ${scanProgress.done} of ${scanProgress.total}`
+                  ? selectSubset
+                    ? `Loading thumbnails... ${scanProgress.done} of ${scanProgress.total}`
+                    : `Scanning folder... ${scanProgress.done} of ${scanProgress.total}`
                   : "Scanning folder..."}
               </div>
             )}
 
-            {hasScan && (
+            {hasScan && !selectSubset && (
+              <div className="mb-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5 text-sm">
+                <div className="text-[var(--text-primary)]">
+                  {scanEntries!.length}{" "}
+                  {scanEntries!.length === 1 ? "photo" : "photos"} ready to import
+                </div>
+                <div className="text-xs text-[var(--text-secondary)] mt-0.5">
+                  {formatBytes(totalBytes)} · everything under the source
+                  folder will be imported
+                </div>
+              </div>
+            )}
+
+            {hasScan && selectSubset && (
               <div className="mb-4">
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-sm text-[var(--text-secondary)]">
@@ -404,12 +462,14 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
                   !sourcePath ||
                   !slug.trim() ||
                   scanning ||
-                  (hasScan && selected.size === 0)
+                  (hasScan && selectSubset && selected.size === 0)
                 }
                 className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-medium transition-colors disabled:opacity-50"
               >
                 {hasScan
-                  ? `Import ${selected.size} ${selected.size === 1 ? "photo" : "photos"}`
+                  ? selectSubset
+                    ? `Import ${selected.size} ${selected.size === 1 ? "photo" : "photos"}`
+                    : `Import all ${scanEntries!.length}`
                   : "Start Import"}
               </button>
             </div>
