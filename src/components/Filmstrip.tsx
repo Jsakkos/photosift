@@ -230,7 +230,11 @@ export function Filmstrip() {
             <Thumbnail imageId={image.id} filename={image.filename} />
             {item.isAiPick && <AiPickBadge />}
             {image.starRating > 0 && (
-              <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-1 bg-gradient-to-t from-black/60 to-transparent">
+              <div
+                className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-1 bg-gradient-to-t from-black/60 to-transparent pointer-events-auto"
+                title={`${image.starRating} of 5 stars\nPress 1-5 to rate, 0 to clear.`}
+                aria-label={`${image.starRating} of 5 stars`}
+              >
                 {Array.from({ length: image.starRating }, (_, i) => (
                   <div
                     key={i}

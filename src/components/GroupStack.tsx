@@ -41,6 +41,8 @@ export function GroupStack({
       style={{ width: outerW, height: outerH }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
+      title={`Group of ${count} similar photos\nDouble-click (or Enter) to drill in.\nAI pick is shown as the cover.`}
+      aria-label={`Group of ${count} photos`}
     >
       {/* Shadow layers: back-left and back-right for the 3D stack look */}
       <div
@@ -72,7 +74,11 @@ export function GroupStack({
         />
       </div>
       {/* Count badge */}
-      <div className="absolute -top-1 -right-1 bg-[var(--accent)] text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full z-10 min-w-[20px] text-center">
+      <div
+        className="absolute -top-1 -right-1 bg-[var(--accent)] text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full z-10 min-w-[20px] text-center"
+        title={`${count} photos in this group`}
+        aria-hidden="true"
+      >
         {count}
       </div>
       {/* AI pick badge */}

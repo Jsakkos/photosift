@@ -550,18 +550,30 @@ function GridThumb({
       {item.isAiPick && <AiPickBadge />}
       {/* Destination badge */}
       {image.destination === "edit" && (
-        <div className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}>
+        <div
+          className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}
+          title={"Route: edit\nHeaded to Capture One / DxO for develop work.\nPress E in Route view to set."}
+          aria-label="Route: edit"
+        >
           EDIT
         </div>
       )}
       {image.destination === "publish_direct" && (
-        <div className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}>
+        <div
+          className={`absolute ${item.isAiPick ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}
+          title={"Route: publish direct\nCached JPEG copied to Immich ingest folder by the Publish button.\nPress D in Route view to set."}
+          aria-label="Route: publish direct"
+        >
           PUBLISH
         </div>
       )}
       {/* Group stack indicator */}
       {item.isGroupCover && item.groupMemberCount && (
-        <div className="absolute bottom-1.5 right-1.5 bg-black/70 text-blue-300 text-[10px] font-semibold px-1.5 py-0.5 rounded backdrop-blur-sm">
+        <div
+          className="absolute bottom-1.5 right-1.5 bg-black/70 text-blue-300 text-[10px] font-semibold px-1.5 py-0.5 rounded backdrop-blur-sm"
+          title={`Group cover · ${item.groupMemberCount} photos total\n${item.groupMemberCount - 1} similar photos hidden.\nDouble-click or press Enter to drill in.`}
+          aria-label={`Group cover, ${item.groupMemberCount} photos total`}
+        >
           +{item.groupMemberCount - 1}
         </div>
       )}

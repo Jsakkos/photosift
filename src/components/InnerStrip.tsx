@@ -183,15 +183,20 @@ export function InnerStrip() {
                   if (!cls || r == null || r.rank == null) return null;
                   const total = memberEntries.length;
                   const q = entry.qualityScore;
+                  const qPart =
+                    typeof q === "number" ? ` \u00b7 quality ${q.toFixed(0)}/100` : "";
                   const tooltip =
-                    typeof q === "number"
-                      ? `Rank ${r.rank + 1} of ${total} \u00b7 quality ${q.toFixed(0)}/100`
-                      : `Rank ${r.rank + 1} of ${total}`;
+                    `Rank ${r.rank + 1} of ${total}${qPart}
+Within-group ranking by composite AI quality score.
+Green top third \u00b7 white middle \u00b7 red bottom third.`;
                   return (
                     <div
-                      className={`absolute bottom-1 right-1 w-2.5 h-2.5 rounded-full ring-1 ring-black/40 ${cls}`}
+                      className={`absolute bottom-1 right-1 ${cls} text-black/80 text-[10px] font-semibold leading-none rounded px-1 py-0.5 shadow-sm pointer-events-auto`}
                       title={tooltip}
-                    />
+                      aria-label={`Rank ${r.rank + 1} of ${total}`}
+                    >
+                      {`#${r.rank + 1}`}
+                    </div>
                   );
                 })()}
                 {eyeProvider === "onnx" && (
@@ -202,7 +207,11 @@ export function InnerStrip() {
                 )}
                 {entry.isAiPick && <AiPickBadge />}
                 {entry.starRating > 0 && (
-                  <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-1 bg-gradient-to-t from-black/60 to-transparent">
+                  <div
+                    className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-1 bg-gradient-to-t from-black/60 to-transparent pointer-events-auto"
+                    title={`${entry.starRating} of 5 stars\nPress 1-5 to rate, 0 to clear.`}
+                    aria-label={`${entry.starRating} of 5 stars`}
+                  >
                     {Array.from({ length: entry.starRating }, (_, i) => (
                       <div
                         key={i}

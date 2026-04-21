@@ -26,25 +26,60 @@ export function EyeStatusBadge({
   }
 
   const totalEyes = faceCount * 2;
-  let bg: string;
+  let tint: string;
+  let state: "open" | "closed" | "mixed";
   let label: string;
   if (eyesOpenCount >= totalEyes) {
-    bg = "bg-emerald-500";
+    tint = "bg-emerald-500/90 text-white";
+    state = "open";
     label = "All eyes open";
   } else if (eyesOpenCount <= 0) {
-    bg = "bg-red-500";
+    tint = "bg-red-500/90 text-white";
+    state = "closed";
     label = "All eyes closed";
   } else {
-    bg = "bg-yellow-500";
+    tint = "bg-yellow-500/90 text-white";
+    state = "mixed";
     label = `${eyesOpenCount}/${totalEyes} eyes open`;
   }
 
-  const title = `${label}\nWhole-photo eye summary (green all open · yellow mixed · red all closed).\nPer-face detail in the AI panel.`;
+  const title = `${label}\nWhole-photo eye summary across all detected faces.\nGreen = all open · Yellow = mixed · Red = all closed.\nPer-face detail in the AI panel.`;
+
   return (
     <div
-      className={`absolute bottom-1 left-1 w-2 h-2 rounded-full ring-1 ring-black/40 ${bg} pointer-events-none`}
+      className={`absolute bottom-1 left-1 ${tint} rounded w-5 h-5 flex items-center justify-center pointer-events-auto shadow-sm`}
       aria-label={label}
       title={title}
-    />
+    >
+      {state === "open" && <EyeOpenGlyph />}
+      {state === "closed" && <EyeClosedGlyph />}
+      {state === "mixed" && <EyeMixedGlyph />}
+    </div>
+  );
+}
+
+function EyeOpenGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M1 10 C4 4, 16 4, 19 10 C16 16, 4 16, 1 10 Z" stroke="currentColor" strokeWidth="1.5" fill="none" />
+      <circle cx="10" cy="10" r="3" fill="currentColor" />
+    </svg>
+  );
+}
+
+function EyeClosedGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M1 12 C5 7, 15 7, 19 12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+    </svg>
+  );
+}
+
+function EyeMixedGlyph() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M1 10 C4 6, 16 6, 19 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+      <circle cx="10" cy="9" r="2" fill="currentColor" />
+    </svg>
   );
 }
