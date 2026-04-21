@@ -317,12 +317,11 @@ describe("setFlag", () => {
     setupMockIpc({});
 
     // Two groups: user drills into groupA and picks its last unreviewed
-    // frame. groupB still has unreviewed members. Previously the display
-    // would collapse to [] (the drill-down path filtered the final
-    // photo) and CullPage would render "Triage complete" even though
-    // groupB is untouched. Regression guard: after the final pick,
-    // activeInnerGroupId clears and displayItems falls back to the
-    // outer list with groupB's cover visible.
+    // frame. groupB still has unreviewed members. The first fix (auto-
+    // exit) made sure the outer list came back instead of a false
+    // "Triage complete." This test now also guards the follow-up: the
+    // outer advance lands on groupB's cover (where groupA used to sit)
+    // and auto-drills into it so the user keeps going zero-click.
     const a1 = makeImage({ id: 1, flag: "pick" });
     const a2 = makeImage({ id: 2, flag: "reject" });
     const a3 = makeImage({ id: 3, flag: "unreviewed" });
@@ -360,11 +359,13 @@ describe("setFlag", () => {
     await useProjectStore.getState().setFlag("pick");
 
     const state = useProjectStore.getState();
-    expect(state.activeInnerGroupId).toBeNull();
-    // Outer triage: groupA now fully reviewed (no cover), groupB cover
-    // still visible. So exactly one item remains.
-    expect(state.displayItems.length).toBeGreaterThan(0);
-    expect(state.displayItems.some((d) => d.groupId === groupB.id)).toBe(true);
-    expect(state.displayItems.every((d) => d.groupId !== groupA.id)).toBe(true);
+    // Auto-drilled into groupB — its cover sat where groupA's used to
+    // in the outer list, and the advance-then-drill handoff picks it up.
+    expect(state.activeInnerGroupId).toBe(groupB.id);
+    // Inner strip for groupB is now the live displayItems.
+    expect(state.displayItems.length).toBe(2);
+    expect(state.displayItems.every((d) => d.groupId === groupB.id)).toBe(true);
+    // Focused on the top frame of the new group, not stale state.
+    expect(state.currentIndex).toBe(0);
   });
 });

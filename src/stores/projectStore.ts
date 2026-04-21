@@ -96,6 +96,31 @@ function describeUndoRedoEntry(action: "Undo" | "Redo", entry: UndoEntry): strin
 /// Select drill-down filter: when an inner group is active, the
 /// visible (keyboard-navigable) set shrinks to just that group's
 /// members. Outside a drill-down this is a no-op passthrough.
+/// Finds the outer-list index of a group's cover tile, or -1 if the
+/// group has no remaining unreviewed members (so no cover is emitted).
+/// Used by setFlag / setFlagNoAutoReject to remember where the user's
+/// drilled-in group SAT in the outer list *before* they finished it —
+/// after auto-exit the same index now holds whatever came next, so the
+/// post-advance cursor lands adjacent instead of snapping to index 0.
+function outerIndexOfGroupCover(
+  images: ImageEntry[],
+  currentView: CullView,
+  groups: Group[],
+  groupId: number,
+  aiOptions: AiDisplayOptions,
+): number {
+  const outer = computeDisplayItemsFiltered(
+    images,
+    currentView,
+    groups,
+    null,
+    selectRequiresPick(),
+    routeMinStar(),
+    aiOptions,
+  );
+  return outer.findIndex((d) => d.isGroupCover && d.groupId === groupId);
+}
+
 /// Compute the display items AND figure out whether the drill-down
 /// should auto-exit. When every member of the currently-drilled group
 /// has been picked/rejected (as happens after the user finishes
@@ -736,6 +761,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const oldFlag = image.flag;
     if (oldFlag === flag) return;
 
+    // If drilled in, remember where the active group's cover sits in
+    // the outer list so auto-advance after a drill-empty can snap to
+    // the adjacent item (post-removal, the same index now points at
+    // the next group or standalone photo).
+    const preActiveId = get().activeInnerGroupId;
+    const preDrilledOuterIdx =
+      preActiveId != null
+        ? outerIndexOfGroupCover(
+            images,
+            currentView,
+            groups,
+            preActiveId,
+            currentAiOptions(get().sortByAi),
+          )
+        : -1;
+
     const updatedImages = [...images];
     const affectedIds: { id: number; oldFlag: string }[] = [];
 
@@ -826,16 +867,38 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         : get().lastFlagAction,
     });
 
+    // Auto-exit just happened if we were drilled in and the helper
+    // returned null. In that case, jump to where the old group sat in
+    // the outer list — post-removal, that index holds whatever came
+    // next (natural continue-where-you-left-off). Otherwise keep the
+    // old clamp-to-range behavior.
+    const autoExited = preActiveId != null && newActive == null;
+    const advanceTarget = autoExited && preDrilledOuterIdx >= 0
+      ? Math.min(preDrilledOuterIdx, Math.max(0, newDisplayItems.length - 1))
+      : Math.min(currentIndex, Math.max(0, newDisplayItems.length - 1));
+
+    const maybeDrillIn = () => {
+      const items = get().displayItems;
+      const target = items[advanceTarget];
+      if (
+        target?.isGroupCover &&
+        target.groupId != null &&
+        (currentView === "triage" || currentView === "select")
+      ) {
+        get().setActiveInnerGroup(target.groupId);
+      }
+    };
+
     if (autoAdvance) {
-      const clampedIndex = Math.min(currentIndex, Math.max(0, newDisplayItems.length - 1));
       setTimeout(() => {
-        set({ currentIndex: clampedIndex, isZoomed: false });
+        set({ currentIndex: advanceTarget, isZoomed: false });
+        maybeDrillIn();
       }, 150);
     } else {
-      const clampedIndex = Math.min(currentIndex, Math.max(0, newDisplayItems.length - 1));
-      if (clampedIndex !== currentIndex) {
-        set({ currentIndex: clampedIndex });
+      if (advanceTarget !== currentIndex) {
+        set({ currentIndex: advanceTarget });
       }
+      maybeDrillIn();
     }
 
     try {
@@ -1219,6 +1282,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const oldFlag = image.flag;
     if (oldFlag === flag) return;
 
+    const preActiveId = get().activeInnerGroupId;
+    const preDrilledOuterIdx =
+      preActiveId != null
+        ? outerIndexOfGroupCover(
+            images,
+            currentView,
+            groups,
+            preActiveId,
+            currentAiOptions(get().sortByAi),
+          )
+        : -1;
+
     const updatedImages = [...images];
     updatedImages[item.imageIndex] = { ...image, flag };
     const { items: newDisplayItems, activeInnerGroupId: newActive } =
@@ -1241,10 +1316,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       lastFlagAction: flashColor ? { color: flashColor, timestamp: Date.now() } : get().lastFlagAction,
     });
 
+    const autoExited = preActiveId != null && newActive == null;
+    const advanceTarget = autoExited && preDrilledOuterIdx >= 0
+      ? Math.min(preDrilledOuterIdx, Math.max(0, newDisplayItems.length - 1))
+      : Math.min(currentIndex, Math.max(0, newDisplayItems.length - 1));
+
+    const maybeDrillIn = () => {
+      const items = get().displayItems;
+      const target = items[advanceTarget];
+      if (
+        target?.isGroupCover &&
+        target.groupId != null &&
+        (currentView === "triage" || currentView === "select")
+      ) {
+        get().setActiveInnerGroup(target.groupId);
+      }
+    };
+
     if (autoAdvance) {
-      const clampedIndex = Math.min(currentIndex, Math.max(0, newDisplayItems.length - 1));
       setTimeout(() => {
-        set({ currentIndex: clampedIndex, isZoomed: false });
+        set({ currentIndex: advanceTarget, isZoomed: false });
+        maybeDrillIn();
       }, 150);
     }
 
