@@ -30,6 +30,15 @@ pub fn set_flag(
         &flag,
     );
 
+    // Auto-update the shoot cover whenever the pick set changes —
+    // promotes the highest-quality pick into the list view so the
+    // card reflects what the user actually curated. Non-fatal: a
+    // failure here just means the cover stays where it was, which
+    // is still a coherent state.
+    if flag == "pick" || old == "pick" {
+        let _ = db.auto_update_shoot_cover(shoot_id);
+    }
+
     Ok(old)
 }
 

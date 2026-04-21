@@ -490,6 +490,49 @@ impl Database {
         Ok(())
     }
 
+    /// Re-pick a shoot's cover to the best picked photo. Uses `quality_score`
+    /// as the ranking key, preferring flag='pick' photos; falls back to
+    /// highest-quality overall when no picks exist yet. No-op when the
+    /// shoot has no analyzed photos. Returns the chosen photo id for
+    /// logging / UI feedback.
+    ///
+    /// Call after pick actions so the shoot list card reflects the user's
+    /// latest curation without requiring a manual "set cover" gesture.
+    pub fn auto_update_shoot_cover(&self, shoot_id: i64) -> Result<Option<i64>> {
+        let picked: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM photos
+                 WHERE shoot_id = ?1 AND flag = 'pick' AND quality_score IS NOT NULL
+                 ORDER BY quality_score DESC, id ASC LIMIT 1",
+                params![shoot_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        let chosen = match picked {
+            Some(id) => Some(id),
+            None => self
+                .conn
+                .query_row(
+                    "SELECT id FROM photos
+                     WHERE shoot_id = ?1 AND quality_score IS NOT NULL
+                     ORDER BY quality_score DESC, id ASC LIMIT 1",
+                    params![shoot_id],
+                    |r| r.get(0),
+                )
+                .optional()?,
+        };
+
+        if let Some(id) = chosen {
+            self.conn.execute(
+                "UPDATE shoots SET cover_photo_id = ?2 WHERE id = ?1",
+                params![shoot_id, id],
+            )?;
+        }
+        Ok(chosen)
+    }
+
     pub fn delete_shoot(&self, shoot_id: i64) -> Result<()> {
         self.conn
             .execute("DELETE FROM shoots WHERE id = ?1", params![shoot_id])?;

@@ -129,13 +129,45 @@ pub fn process_job(
     let t_eye_sharp = t_eye_start.elapsed();
     let t_total = t_start.elapsed();
 
-    // Composite quality score (0-100). Sharpness-dominant today with a
-    // small subject-presence bump; when the mock eye classifier is swapped
-    // for a real ONNX model we'll factor in eye-open ratio, and mouth/smile
-    // when D1 unblocks. Ranking is within a group so the absolute scale
-    // doesn't matter much — relative order does.
-    let face_bonus = if !face_rows.is_empty() { 15.0 } else { 0.0 };
-    let quality = (whole * 0.85 + face_bonus).clamp(0.0, 100.0);
+    // Composite quality score (0-100). Blends sharpness with subject
+    // presence, eye-open rate, and smile confidence. Calibrated so:
+    //   - bare sharp-100 landscape (no subject)       → 70
+    //   - sharp-100 portrait, eyes open, big smile    → 100
+    //   - sharp-100 portrait, eyes closed, flat face  → 80
+    //   - sharp-100 cat photo (no per-eye/smile data) → 80
+    //   - blurry (sharp=30) portrait w/ smile+eyes    → ~51
+    // Keeps sharpness as the dominant term (70 %) so AI pick inside a
+    // group still privileges focus over expression when they conflict,
+    // while letting subject engagement break ties in landscapes/portraits
+    // that are equally sharp.
+    let human_count = face_rows.iter().filter(|f| f.species == "human").count();
+    let cat_count = face_rows.iter().filter(|f| f.species == "cat").count();
+
+    let mut q = whole * 0.70;
+    if human_count > 0 {
+        q += 10.0; // subject-presence bonus
+        // Eye-open ratio: open_count / (2 eyes × human faces).
+        let max_eyes = (human_count as i32) * 2;
+        if max_eyes > 0 {
+            let eye_ratio = (open_count as f64 / max_eyes as f64).clamp(0.0, 1.0);
+            q += eye_ratio * 10.0;
+        }
+        // Smile: max across human faces (null → 0, so neutral faces
+        // contribute nothing rather than penalizing).
+        let max_smile = face_rows
+            .iter()
+            .filter(|f| f.species == "human")
+            .filter_map(|f| f.smile_score)
+            .fold(0.0_f64, f64::max);
+        q += max_smile * 10.0;
+    } else if cat_count > 0 {
+        // Cats don't (yet) have eye/smile classifiers, so they contribute
+        // the same flat subject bonus a human face does but no engagement
+        // term. Rationale: a sharp cat portrait should still rank above a
+        // sharp empty-room shot.
+        q += 10.0;
+    }
+    let quality = q.clamp(0.0, 100.0);
 
     log::info!(
         "ai::worker photo={} dims={}x{} faces={} total={:.1}ms (decode={:.1}ms cvt={:.1}ms face={:.1}ms eye+sharp={:.1}ms) sharp={:.1}",

@@ -53,8 +53,22 @@ const COMPARISON_SHORTCUTS = [
   { key: "← →", action: "Cycle right panel" },
 ];
 
+/// Grid view extras — the per-view shortcuts above describe
+/// sequential/loupe flow. In grid with >=1 selected tile the same keys
+/// fan out across the selection; E/D are the ones most likely to be
+/// missed since sequential Route view sets them on a single photo.
+const GRID_SHORTCUTS = [
+  { key: "Click / Shift+Click", action: "Select / range-select" },
+  { key: "P", action: "Pick selected" },
+  { key: "X", action: "Reject selected" },
+  { key: "U", action: "Reset selected (unreviewed / unrouted)" },
+  { key: "E", action: "Route selected → edit (Route view only)" },
+  { key: "D", action: "Route selected → publish direct (Route view only)" },
+  { key: "+ / -", action: "Zoom grid in / out" },
+];
+
 export function ShortcutHints() {
-  const { showShortcutHints, toggleShortcutHints, currentView } =
+  const { showShortcutHints, toggleShortcutHints, currentView, viewMode } =
     useProjectStore();
   if (!showShortcutHints) return null;
 
@@ -111,6 +125,23 @@ export function ShortcutHints() {
             </h3>
             <div className="space-y-2">
               {COMPARISON_SHORTCUTS.map(({ key, action }) => (
+                <div key={key} className="flex justify-between gap-8 text-sm">
+                  <kbd className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-primary)] font-mono text-xs">
+                    {key}
+                  </kbd>
+                  <span className="text-[var(--text-secondary)]">{action}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {viewMode === "grid" && (
+          <>
+            <h3 className="text-sm font-medium text-[var(--accent)] mt-4 mb-2">
+              Grid multi-select
+            </h3>
+            <div className="space-y-2">
+              {GRID_SHORTCUTS.map(({ key, action }) => (
                 <div key={key} className="flex justify-between gap-8 text-sm">
                   <kbd className="px-2 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-primary)] font-mono text-xs">
                     {key}
