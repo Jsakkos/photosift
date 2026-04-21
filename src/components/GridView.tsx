@@ -514,7 +514,11 @@ function GridThumb({
             : "border-[var(--accent)] shadow-[0_0_0_1px_var(--accent)]"
           : isFocused
             ? "border-[var(--accent)]/50"
-            : "border-transparent hover:border-white/20"
+            : image.flag === "pick"
+              ? "border-green-500/70 shadow-[inset_0_0_12px_rgba(34,197,94,0.18)]"
+              : image.flag === "reject"
+                ? "border-red-500/60"
+                : "border-transparent hover:border-white/20"
       } ${isRejected ? "opacity-35" : ""}`}
       onClick={(e) => onClick(index, e)}
       onDoubleClick={onDoubleClick}
@@ -538,13 +542,10 @@ function GridThumb({
           aria-hidden="true"
         />
       )}
-      {/* Flag dot */}
-      {image.flag === "pick" && (
-        <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-green-500 shadow-[0_0_4px_rgba(34,197,94,0.5)]" />
-      )}
-      {image.flag === "reject" && (
-        <div className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_4px_rgba(239,68,68,0.5)]" />
-      )}
+      {/* Flag state is now shown via the card outline + subtle inner
+          glow above. Dots removed — the outline is subtle but clear
+          (per spec feedback) and avoids stealing from the face/AI
+          badges that share the tile corners. */}
       {/* AI pick badge */}
       {item.isAiPick && <AiPickBadge />}
       {/* Destination badge */}

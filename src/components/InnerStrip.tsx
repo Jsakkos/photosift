@@ -84,7 +84,29 @@ export function InnerStrip() {
     [memberEntries],
   );
 
-  const highlightIdx = memberEntries.findIndex(
+  // Sort by quality (best-first) inside the group so the user sees the
+  // AI pick and runners-up at the top of the strip instead of in
+  // capture-time order. Fall back to capture-time (displayIndex) when
+  // rank is null (unanalyzed or single-member groups), and as a stable
+  // tiebreaker within a given rank.
+  const sortedMembers = useMemo(() => {
+    const copy = [...memberEntries];
+    copy.sort((a, b) => {
+      const ra = ranks.get(a.imageId)?.rank;
+      const rb = ranks.get(b.imageId)?.rank;
+      if (ra != null && rb != null) {
+        if (ra !== rb) return ra - rb;
+      } else if (ra != null) {
+        return -1;
+      } else if (rb != null) {
+        return 1;
+      }
+      return a.displayIndex - b.displayIndex;
+    });
+    return copy;
+  }, [memberEntries, ranks]);
+
+  const highlightIdx = sortedMembers.findIndex(
     (m) => m.displayIndex === currentIndex,
   );
 
@@ -126,7 +148,7 @@ export function InnerStrip() {
         ref={scrollRef}
         className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col items-center gap-2 py-2"
       >
-        {memberEntries.map((entry, idx) => {
+        {sortedMembers.map((entry, idx) => {
           const isCurrent = idx === highlightIdx;
           return (
             <div
@@ -146,17 +168,15 @@ export function InnerStrip() {
                 className={`relative rounded overflow-hidden transition-all ${
                   isCurrent
                     ? "ring-2 ring-[var(--accent)] brightness-100"
-                    : "brightness-75 hover:brightness-90"
+                    : entry.flag === "pick"
+                      ? "ring-2 ring-green-500/70 brightness-90 hover:brightness-95"
+                      : entry.flag === "reject"
+                        ? "ring-2 ring-red-500/50 brightness-60 hover:brightness-70"
+                        : "brightness-75 hover:brightness-90"
                 }`}
                 style={{ width: THUMB_W, height: THUMB_H }}
               >
                 <Thumbnail imageId={entry.imageId} filename={entry.filename} />
-                {entry.flag === "pick" && (
-                  <div className="absolute top-1 left-1 w-3 h-3 rounded-full bg-green-500" />
-                )}
-                {entry.flag === "reject" && (
-                  <div className="absolute top-1 left-1 w-3 h-3 rounded-full bg-red-500" />
-                )}
                 {(() => {
                   const r = ranks.get(entry.imageId);
                   const cls = rankColorClass(r?.color ?? null);

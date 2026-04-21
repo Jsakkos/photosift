@@ -148,6 +148,20 @@ function computeDisplayItemsFiltered(
       ...(pick === img.id ? { isAiPick: true } : {}),
     });
   }
+
+  // Within-group ranking: best quality first so sequential navigation
+  // (arrow keys, Space-to-next) cycles through the likely picks before
+  // the filler shots. Unanalyzed photos (qualityScore == null) sort last
+  // so they don't push real candidates down. AI pick is a tiebreaker
+  // ahead of anything at the same score.
+  result.sort((a, b) => {
+    const aq = typeof a.image.qualityScore === "number" ? a.image.qualityScore : -Infinity;
+    const bq = typeof b.image.qualityScore === "number" ? b.image.qualityScore : -Infinity;
+    if (aq !== bq) return bq - aq;
+    if (a.isAiPick && !b.isAiPick) return -1;
+    if (b.isAiPick && !a.isAiPick) return 1;
+    return a.imageIndex - b.imageIndex;
+  });
   return result;
 }
 

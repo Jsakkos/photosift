@@ -11,11 +11,16 @@ export function AiSharpnessBadge({ score }: { score: number }) {
       : band === "yellow"
         ? "bg-yellow-500/85"
         : "bg-red-500/85";
+  const bandLabel = band === "green" ? "sharp" : band === "yellow" ? "soft" : "blurry";
+  const title =
+    `Sharpness ${score}/10 (${bandLabel})\n` +
+    `Laplacian variance percentile within this shoot.\n` +
+    `Green 8-10 · Yellow 4-7 · Red 1-3.`;
   return (
     <div
       className={`absolute bottom-1 right-1 ${bg} text-white text-[11px] font-semibold leading-none rounded px-1.5 py-1 min-w-[24px] text-center pointer-events-none shadow-sm`}
       aria-label={`Sharpness ${score} of 10`}
-      title={`Sharpness ${score}/10 (relative to this shoot)`}
+      title={title}
     >
       {score}
     </div>

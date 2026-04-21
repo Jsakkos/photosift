@@ -219,17 +219,15 @@ export function Filmstrip() {
             className={`relative cursor-pointer rounded overflow-hidden transition-all ${
               isCurrent
                 ? "ring-2 ring-[var(--accent)] brightness-100"
-                : "brightness-75 hover:brightness-90"
+                : image.flag === "pick"
+                  ? "ring-2 ring-green-500/70 brightness-90 hover:brightness-95"
+                  : image.flag === "reject"
+                    ? "ring-2 ring-red-500/50 brightness-60 hover:brightness-70"
+                    : "brightness-75 hover:brightness-90"
             }`}
             style={{ width: THUMB_W, height: THUMB_H }}
           >
             <Thumbnail imageId={image.id} filename={image.filename} />
-            {image.flag === "pick" && (
-              <div className="absolute top-1 left-1 w-3 h-3 rounded-full bg-green-500" />
-            )}
-            {image.flag === "reject" && (
-              <div className="absolute top-1 left-1 w-3 h-3 rounded-full bg-red-500" />
-            )}
             {item.isAiPick && <AiPickBadge />}
             {image.starRating > 0 && (
               <div className="absolute bottom-0 left-0 right-0 flex justify-center gap-0.5 pb-1 bg-gradient-to-t from-black/60 to-transparent">

@@ -32,12 +32,13 @@ export function AiEyeIcon({
       : state === "closed"
         ? "Both eyes closed"
         : "One eye open";
+  const title = `${label}\nPer-eye open/closed from the eye classifier.\nFeeds the AI pick score.`;
 
   return (
     <div
       className={`absolute bottom-1 left-1 ${tint} rounded w-5 h-5 flex items-center justify-center pointer-events-none shadow-sm`}
       aria-label={label}
-      title={label}
+      title={title}
     >
       {state === "open" && <EyeOpenIcon />}
       {state === "closed" && <EyeClosedIcon />}

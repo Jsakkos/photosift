@@ -8,7 +8,11 @@ export function AiSpeciesIcon({ species }: { species: string }) {
     <div
       className="absolute top-1 right-1 bg-[var(--bg-secondary)]/85 rounded w-5 h-5 flex items-center justify-center pointer-events-none shadow-sm"
       aria-label="Cat face"
-      title="Cat face"
+      title={
+        "Cat face (detected by Tiny-YOLOv3).\n" +
+        "Bbox is heuristically cropped from the whole-cat detection.\n" +
+        "No per-eye or smile score for cats today."
+      }
     >
       <CatIcon />
     </div>

@@ -39,11 +39,12 @@ export function EyeStatusBadge({
     label = `${eyesOpenCount}/${totalEyes} eyes open`;
   }
 
+  const title = `${label}\nWhole-photo eye summary (green all open · yellow mixed · red all closed).\nPer-face detail in the AI panel.`;
   return (
     <div
       className={`absolute bottom-1 left-1 w-2 h-2 rounded-full ring-1 ring-black/40 ${bg} pointer-events-none`}
       aria-label={label}
-      title={label}
+      title={title}
     />
   );
 }

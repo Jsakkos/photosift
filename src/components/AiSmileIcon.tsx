@@ -28,6 +28,12 @@ export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
     smileScore == null
       ? "Smile unknown"
       : `Smile confidence ${(smileScore * 100).toFixed(0)}%`;
+  const title =
+    smileScore == null
+      ? "Smile unknown — mouth classifier couldn't score this face."
+      : `${label}\nHappy-class probability from the mouth classifier.\n` +
+        `Green ≥60% · Yellow 40-60% · Red ≤40%.\n` +
+        `Multiplies into AI pick score at half weight.`;
 
   const opacity = smileScore == null ? "opacity-60" : "";
 
@@ -35,7 +41,7 @@ export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
     <div
       className={`absolute top-1 left-1 ${tint} ${opacity} rounded w-5 h-5 flex items-center justify-center pointer-events-none shadow-sm`}
       aria-label={label}
-      title={label}
+      title={title}
     >
       {state === "smile" && <SmileIcon />}
       {state === "neutral" && <NeutralIcon />}
