@@ -183,29 +183,35 @@ export function getGroupCover(group: Group): number {
 /// Returns the id of the AI-recommended photo in the group, or null when
 /// fewer than 2 members have been analyzed.
 ///
-/// Scoring: `sharp * (1 + eyes_open_count) * (1 + 0.5 * smile_score)`
-/// when both flags are on. Each factor contributes multiplicatively so the
-/// signals compose cleanly; mock providers stay disabled because their
-/// constant outputs would cancel out (or worse, uniformly bias).
+/// Ranks by persisted `quality_score` (Rust worker's composite of
+/// sharpness + subject presence + eye-open ratio + smile). This is the
+/// same number drives the #rank badge in InnerStrip, so ★ AI and #1
+/// always agree. Falls back to `sharpnessScore` when a photo was
+/// analyzed before quality_score existed (pre-2026-04-20 shoots).
 /// Ties broken by lower id.
+///
+/// The `useEyes` / `useSmile` params are retained for backwards
+/// compatibility but no longer affect ranking — quality_score already
+/// incorporates those signals at write time if the provider reported
+/// them. Kept so existing callers don't need to be updated in one pass.
 export function aiPickForGroup(
   group: Group,
   images: ImageEntry[],
-  useEyes: boolean = false,
-  useSmile: boolean = false,
+  _useEyes: boolean = false,
+  _useSmile: boolean = false,
 ): number | null {
+  void _useEyes;
+  void _useSmile;
   const analyzed = group.members
     .map((m) => images.find((i) => i.id === m.photoId))
     .filter((img): img is ImageEntry => !!img && img.aiAnalyzedAt != null);
 
   if (analyzed.length < 2) return null;
 
-  const scoreOf = (img: ImageEntry): number => {
-    let s = img.sharpnessScore ?? 0;
-    if (useEyes) s *= 1 + (img.eyesOpenCount ?? 0);
-    if (useSmile) s *= 1 + 0.5 * (img.maxSmileScore ?? 0);
-    return s;
-  };
+  const scoreOf = (img: ImageEntry): number =>
+    typeof img.qualityScore === "number"
+      ? img.qualityScore
+      : (img.sharpnessScore ?? 0);
 
   let bestId = analyzed[0].id;
   let bestScore = scoreOf(analyzed[0]);

@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useProjectStore } from "../stores/projectStore";
-import { useAiStore } from "../stores/aiStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
-import { EyeStatusBadge } from "./EyeStatusBadge";
 import { computeGroupRanks, rankColorClass } from "../lib/groupRanking";
 
 const STRIP_WIDTH = 200;
@@ -74,7 +72,6 @@ export function InnerStrip() {
     return entries;
   }, [activeInnerGroupId, displayItems]);
 
-  const eyeProvider = useAiStore((s) => s.eyeProvider);
 
   const ranks = useMemo(
     () =>
@@ -199,12 +196,6 @@ Green top third \u00b7 white middle \u00b7 red bottom third.`;
                     </div>
                   );
                 })()}
-                {eyeProvider === "onnx" && (
-                  <EyeStatusBadge
-                    faceCount={entry.faceCount}
-                    eyesOpenCount={entry.eyesOpenCount}
-                  />
-                )}
                 {entry.isAiPick && <AiPickBadge />}
                 {entry.starRating > 0 && (
                   <div

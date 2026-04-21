@@ -7,6 +7,8 @@
 /// Gate on `mouthProvider === "onnx"` at the call site — the mock/1-class
 /// variants all return a flat 0.5 that would light up yellow for every
 /// face regardless of actual expression.
+///
+/// Sized and unpositioned for FaceTile's bottom badge row.
 export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
   const state: "smile" | "neutral" | "frown" =
     smileScore == null
@@ -19,10 +21,10 @@ export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
 
   const tint =
     state === "smile"
-      ? "bg-green-500/85 text-white"
+      ? "bg-green-500/90 text-white"
       : state === "frown"
-        ? "bg-red-500/85 text-white"
-        : "bg-yellow-500/85 text-white";
+        ? "bg-red-500/90 text-white"
+        : "bg-yellow-500/90 text-white";
 
   const label =
     smileScore == null
@@ -31,15 +33,13 @@ export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
   const title =
     smileScore == null
       ? "Smile unknown — mouth classifier couldn't score this face."
-      : `${label}\nHappy-class probability from the mouth classifier.\n` +
-        `Green ≥60% · Yellow 40-60% · Red ≤40%.\n` +
-        `Multiplies into AI pick score at half weight.`;
+      : `${label}\nHappy-class probability from the mouth classifier.\nGreen ≥60% · Yellow 40-60% · Red ≤40%.\nMultiplies into AI pick score at half weight.`;
 
   const opacity = smileScore == null ? "opacity-60" : "";
 
   return (
     <div
-      className={`absolute top-1 left-1 ${tint} ${opacity} rounded w-5 h-5 flex items-center justify-center pointer-events-none shadow-sm`}
+      className={`${tint} ${opacity} rounded w-6 h-6 flex items-center justify-center pointer-events-auto shadow-sm`}
       aria-label={label}
       title={title}
     >
@@ -52,7 +52,7 @@ export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
 
 function SmileIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <circle cx="7" cy="8" r="1.3" fill="currentColor" />
       <circle cx="13" cy="8" r="1.3" fill="currentColor" />
       <path
@@ -68,7 +68,7 @@ function SmileIcon() {
 
 function NeutralIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <circle cx="7" cy="8" r="1.3" fill="currentColor" />
       <circle cx="13" cy="8" r="1.3" fill="currentColor" />
       <path
@@ -83,7 +83,7 @@ function NeutralIcon() {
 
 function FrownIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <circle cx="7" cy="8" r="1.3" fill="currentColor" />
       <circle cx="13" cy="8" r="1.3" fill="currentColor" />
       <path

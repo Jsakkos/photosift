@@ -6,6 +6,7 @@ const e = (
   id: number,
   sharp: number | null,
   openCount: number | null,
+  quality?: number | null,
 ): ImageEntry => ({
   id,
   filepath: `/fake/${id}.nef`,
@@ -23,7 +24,8 @@ const e = (
   sharpnessScore: sharp,
   eyesOpenCount: openCount,
   faceCount: 0,
-  aiAnalyzedAt: sharp === null ? null : "2026-04-16T00:00:00",
+  qualityScore: quality ?? null,
+  aiAnalyzedAt: sharp === null && quality == null ? null : "2026-04-16T00:00:00",
 });
 
 describe("aiPickForGroup", () => {
@@ -38,26 +40,26 @@ describe("aiPickForGroup", () => {
     ],
   };
 
-  it("returns member with max sharpness * (1 + open eyes) when useEyes is true", () => {
-    const images = [e(1, 70, 2), e(2, 80, 0), e(3, 60, 4)];
-    // Scores: 70*3=210, 80*1=80, 60*5=300 → pick 3.
-    expect(aiPickForGroup(group, images, true)).toBe(3);
+  it("picks highest qualityScore when available", () => {
+    // Quality is the single source of truth now (unified with #rank).
+    const images = [e(1, 70, 2, 60), e(2, 80, 0, 85), e(3, 60, 4, 72)];
+    expect(aiPickForGroup(group, images)).toBe(2);
   });
 
-  it("defaults to sharpness-only when useEyes is omitted (mock eye provider)", () => {
+  it("falls back to sharpnessScore when qualityScore is absent", () => {
     const images = [e(1, 70, 2), e(2, 80, 0), e(3, 60, 4)];
-    // Sharpness alone: 80 > 70 > 60 → pick 2, ignoring mock-noisy eye counts.
+    // No qualityScore → use sharpnessScore; 80 > 70 > 60.
     expect(aiPickForGroup(group, images)).toBe(2);
   });
 
   it("returns null when fewer than 2 analyzed members", () => {
-    const images = [e(1, 70, 0), e(2, null, null)];
-    expect(aiPickForGroup(group, images, true)).toBe(null);
+    const images = [e(1, 70, 0, 60), e(2, null, null)];
+    expect(aiPickForGroup(group, images)).toBe(null);
   });
 
   it("breaks ties by lower id", () => {
-    const images = [e(3, 50, 0), e(1, 50, 0), e(2, 50, 0)];
-    expect(aiPickForGroup(group, images, true)).toBe(1);
+    const images = [e(3, 50, 0, 50), e(1, 50, 0, 50), e(2, 50, 0, 50)];
+    expect(aiPickForGroup(group, images)).toBe(1);
   });
 
   it("returns null when group has fewer than 2 members total", () => {
@@ -65,36 +67,25 @@ describe("aiPickForGroup", () => {
       id: 2, shootId: 1, groupType: "near_duplicate",
       members: [{ photoId: 1, isCover: true }],
     };
-    expect(aiPickForGroup(tinyGroup, [e(1, 90, 2)], true)).toBe(null);
+    expect(aiPickForGroup(tinyGroup, [e(1, 90, 2, 95)])).toBe(null);
   });
 
-  it("smile factor tips the tie toward the smiling member", () => {
-    // Equal sharpness, both sets of eyes open — the smile factor breaks the
-    // tie between photos 1 and 2. Photo 3 has a higher smile but lower
-    // sharpness, so it should still lose.
-    const withSmile = (id: number, sharp: number, eyes: number, smile: number): ImageEntry => ({
-      ...e(id, sharp, eyes),
-      maxSmileScore: smile,
-    });
+  it("agrees with #rank ordering for the same inputs", () => {
+    // Regression for the ★ AI ≠ #1 disagreement. Both should pick the
+    // same photo now that aiPickForGroup reads qualityScore.
     const images = [
-      withSmile(1, 70, 2, 0.1), // 70 * 3 * (1 + 0.05) = 220.5
-      withSmile(2, 70, 2, 0.9), // 70 * 3 * (1 + 0.45) = 304.5  ← pick
-      withSmile(3, 60, 2, 1.0), // 60 * 3 * (1 + 0.50) = 270.0
+      e(1, 70, 2, 72), // quality lower than #2
+      e(2, 68, 2, 88), // top quality → pick
+      e(3, 80, 0, 65), // sharper but worse quality (closed eyes)
     ];
-    expect(aiPickForGroup(group, images, true, true)).toBe(2);
+    expect(aiPickForGroup(group, images)).toBe(2);
   });
 
-  it("smile factor is ignored when useSmile is false", () => {
-    const withSmile = (id: number, sharp: number, eyes: number, smile: number): ImageEntry => ({
-      ...e(id, sharp, eyes),
-      maxSmileScore: smile,
-    });
-    const images = [
-      withSmile(1, 80, 2, 0.1), // 80 * 3 = 240 — wins when smile ignored
-      withSmile(2, 70, 2, 0.9), // 70 * 3 = 210
-      withSmile(3, 60, 2, 1.0), // 60 * 3 = 180
-    ];
-    expect(aiPickForGroup(group, images, true, false)).toBe(1);
+  it("legacy useEyes/useSmile params are accepted but ignored", () => {
+    const images = [e(1, 60, 0, 90), e(2, 90, 0, 40), e(3, 70, 0, 70)];
+    // Photo 1 has highest quality; params shouldn't flip that.
+    expect(aiPickForGroup(group, images, true, true)).toBe(1);
+    expect(aiPickForGroup(group, images, false, false)).toBe(1);
   });
 });
 

@@ -117,17 +117,24 @@ function FaceTile({
   return (
     <div className="relative" style={{ width: TILE_PX, height: TILE_PX }}>
       <FaceThumb face={face} photoId={photoId} sizePx={TILE_PX} />
-      {showEyes && face.species === "human" && (
-        <AiEyeIcon
-          leftOpen={face.leftEyeOpen === 1}
-          rightOpen={face.rightEyeOpen === 1}
-        />
-      )}
-      {showSmile && face.species === "human" && (
-        <AiSmileIcon smileScore={face.smileScore} />
-      )}
-      <AiSpeciesIcon species={face.species} />
-      <AiSharpnessBadge score={sharpnessScore} />
+      {/* All per-face badges in a single bottom row. Gradient backdrop
+          keeps them readable on bright face crops. Each badge is
+          self-sized (24x24 square, or wider for the sharpness pill).
+          Tooltips fire on hover per badge. */}
+      <div className="absolute bottom-0 left-0 right-0 px-1.5 pb-1.5 pt-4 bg-gradient-to-t from-black/75 via-black/40 to-transparent flex items-end gap-1">
+        {showEyes && face.species === "human" && (
+          <AiEyeIcon
+            leftOpen={face.leftEyeOpen === 1}
+            rightOpen={face.rightEyeOpen === 1}
+          />
+        )}
+        {showSmile && face.species === "human" && (
+          <AiSmileIcon smileScore={face.smileScore} />
+        )}
+        <AiSpeciesIcon species={face.species} />
+        <div className="flex-1" />
+        <AiSharpnessBadge score={sharpnessScore} />
+      </div>
     </div>
   );
 }

@@ -3,6 +3,10 @@
 /// (one open / one closed). Rendered as an inline SVG so it scales
 /// crisply at icon size without a font dependency.
 ///
+/// Layout-wise this is now an inline 24x24 tile — FaceTile arranges a
+/// row of badges at the bottom of the face thumbnail, so the icon
+/// doesn't self-position anymore.
+///
 /// Only meaningful when backed by a real classifier — callers should
 /// gate on `eyeProvider === "onnx"` to avoid surfacing mock values.
 export function AiEyeIcon({
@@ -21,10 +25,10 @@ export function AiEyeIcon({
 
   const tint =
     state === "open"
-      ? "bg-green-500/85 text-white"
+      ? "bg-green-500/90 text-white"
       : state === "closed"
-        ? "bg-red-500/85 text-white"
-        : "bg-yellow-500/85 text-white";
+        ? "bg-red-500/90 text-white"
+        : "bg-yellow-500/90 text-white";
 
   const label =
     state === "open"
@@ -36,7 +40,7 @@ export function AiEyeIcon({
 
   return (
     <div
-      className={`absolute bottom-1 left-1 ${tint} rounded w-5 h-5 flex items-center justify-center pointer-events-none shadow-sm`}
+      className={`${tint} rounded w-6 h-6 flex items-center justify-center pointer-events-auto shadow-sm`}
       aria-label={label}
       title={title}
     >
@@ -49,7 +53,7 @@ export function AiEyeIcon({
 
 function EyeOpenIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path
         d="M1 10 C4 4, 16 4, 19 10 C16 16, 4 16, 1 10 Z"
         stroke="currentColor"
@@ -63,7 +67,7 @@ function EyeOpenIcon() {
 
 function EyeClosedIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path
         d="M1 12 C5 7, 15 7, 19 12"
         stroke="currentColor"
@@ -77,7 +81,7 @@ function EyeClosedIcon() {
 
 function EyePartialIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
       <path
         d="M1 10 C4 6, 16 6, 19 10"
         stroke="currentColor"
