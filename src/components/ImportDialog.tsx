@@ -25,6 +25,23 @@ interface ScanEntry {
   thumbDataUrl: string | null;
 }
 
+interface ScanProgress {
+  index: number;
+  total: number;
+  entry: ScanEntry;
+}
+
+function compareEntries(a: ScanEntry, b: ScanEntry): number {
+  if (a.capturedAt && b.capturedAt) {
+    if (a.capturedAt !== b.capturedAt) return a.capturedAt < b.capturedAt ? -1 : 1;
+  } else if (a.capturedAt) {
+    return -1;
+  } else if (b.capturedAt) {
+    return 1;
+  }
+  return a.filename.localeCompare(b.filename);
+}
+
 interface ImportDialogProps {
   onClose: () => void;
   onComplete: (shootId: number) => void;
@@ -50,24 +67,42 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
   // Pre-import scan state
   const [scanning, setScanning] = useState(false);
   const [scanEntries, setScanEntries] = useState<ScanEntry[] | null>(null);
+  const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // shift-click range selection uses the last-clicked index as anchor
   const lastClickedIdx = useRef<number | null>(null);
 
   const runScan = useCallback(async (source: string) => {
     setScanning(true);
-    setScanEntries(null);
+    setScanEntries([]);
+    setScanProgress(null);
     setError(null);
     setSelected(new Set());
+
+    // Attach the event listener before invoking so we don't miss early
+    // entries from the parallel pool.
+    const unlisten = await listen<ScanProgress>("scan-progress", (event) => {
+      const { entry } = event.payload;
+      setScanEntries((prev) => {
+        const next = prev ? [...prev, entry] : [entry];
+        next.sort(compareEntries);
+        return next;
+      });
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.add(entry.path);
+        return next;
+      });
+      setScanProgress({ done: event.payload.index + 1, total: event.payload.total });
+    });
+
     try {
-      const entries = await invoke<ScanEntry[]>("scan_folder", { source });
-      setScanEntries(entries);
-      // Default: every scan result selected. User can deselect from there.
-      setSelected(new Set(entries.map((e) => e.path)));
+      await invoke<number>("scan_folder", { source });
     } catch (e) {
       setError(`Scan failed: ${e}`);
       setScanEntries([]);
     } finally {
+      unlisten();
       setScanning(false);
     }
   }, []);
@@ -272,7 +307,9 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
 
             {scanning && (
               <div className="mb-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5 text-sm text-[var(--text-secondary)]">
-                Scanning folder...
+                {scanProgress
+                  ? `Scanning folder... ${scanProgress.done} of ${scanProgress.total}`
+                  : "Scanning folder..."}
               </div>
             )}
 

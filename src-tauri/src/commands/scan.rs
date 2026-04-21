@@ -5,12 +5,14 @@ use image::GenericImageView;
 use jpeg_encoder::{ColorType, Encoder as JpegEncoder};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tauri::{AppHandle, Emitter};
 
 /// One entry in the pre-import scan response. Cheap enough to produce
 /// per-file that scanning a 200-photo folder completes in seconds —
 /// no SHA-256, no copy, just the embedded JPEG plus EXIF metadata we
 /// already know how to extract.
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanEntry {
     /// Absolute path on disk. The frontend passes this back unchanged
@@ -25,26 +27,64 @@ pub struct ScanEntry {
     pub thumb_data_url: Option<String>,
 }
 
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProgress {
+    pub index: usize,
+    pub total: usize,
+    pub entry: ScanEntry,
+}
+
+/// A 200-photo NEF folder will otherwise fan out to `num_cpus` workers, each
+/// reading a 50–200 MB file and decoding the embedded JPEG — the RAM footprint
+/// was the bottleneck, not the CPU. Four is enough to saturate an SSD on the
+/// D750 preview sizes I've tested without piling decodes on top of each other.
+const SCAN_PARALLELISM: usize = 4;
+
 #[tauri::command]
-pub fn scan_folder(source: String) -> Result<Vec<ScanEntry>, String> {
+pub async fn scan_folder(app: AppHandle, source: String) -> Result<usize, String> {
+    // Must run inside spawn_blocking so the synchronous rayon work doesn't
+    // hold the IPC worker: emit() queues events to the webview, but they
+    // only drain while the command task yields. A blocking sync command
+    // would let the scan complete in the background but deliver every
+    // `scan-progress` event in one burst after it returned — the UI would
+    // see a 30-second frozen panel and then 398 thumbnails at once.
+    tauri::async_runtime::spawn_blocking(move || scan_folder_blocking(app, source))
+        .await
+        .map_err(|e| format!("scan task panicked: {}", e))?
+}
+
+fn scan_folder_blocking(app: AppHandle, source: String) -> Result<usize, String> {
     let src_path = PathBuf::from(&source);
     if !src_path.exists() {
         return Err(format!("Source path does not exist: {}", source));
     }
     let files = walker::walk_source(&src_path);
-    // Parallel over files — each scan is independent, disk + decode bound.
-    let mut entries: Vec<ScanEntry> = files
-        .par_iter()
-        .map(|p| scan_one_file(p))
-        .collect();
-    // Sort by capture time when available, then filename — same order the
-    // user would see in Explorer / Finder.
-    entries.sort_by(|a, b| {
-        a.captured_at
-            .cmp(&b.captured_at)
-            .then_with(|| a.filename.cmp(&b.filename))
+    let total = files.len();
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(SCAN_PARALLELISM)
+        .thread_name(|i| format!("photosift-scan-{}", i))
+        .build()
+        .map_err(|e| format!("failed to build scan pool: {}", e))?;
+
+    let counter = AtomicUsize::new(0);
+    pool.install(|| {
+        files.par_iter().for_each(|p| {
+            let entry = scan_one_file(p);
+            let index = counter.fetch_add(1, Ordering::Relaxed);
+            let _ = app.emit(
+                "scan-progress",
+                ScanProgress {
+                    index,
+                    total,
+                    entry,
+                },
+            );
+        });
     });
-    Ok(entries)
+
+    Ok(total)
 }
 
 fn scan_one_file(path: &Path) -> ScanEntry {
@@ -60,6 +100,12 @@ fn scan_one_file(path: &Path) -> ScanEntry {
     let orientation_tag = exif_data.as_ref().and_then(|e| e.orientation);
 
     let thumb_data_url = build_scan_thumb(path, orientation_tag);
+    if thumb_data_url.is_none() {
+        log::warn!(
+            "scan: no preview thumbnail for {} — embedded JPEG decode failed",
+            path.display()
+        );
+    }
 
     ScanEntry {
         path: path.to_string_lossy().into_owned(),
