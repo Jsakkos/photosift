@@ -12,6 +12,7 @@ export function GridView() {
     displayItems,
     setCurrentIndex,
     setFlag,
+    setDestination,
     setViewMode,
     currentView,
     createGroupFromPhotos,
@@ -47,6 +48,12 @@ export function GridView() {
     const columnIndex = focusIndex % columnCount;
     gridRef.current.scrollToItem({ rowIndex, columnIndex, align: "smart" });
   }, [focusIndex, columnCount]);
+
+  // Refs so the keyboard effect can invoke the latest bulk handlers
+  // without pulling them into its dependency array (which would forward-
+  // reference the useCallback decls below and cause a TDZ error).
+  const bulkActionRef = useRef<((flag: string) => void) | null>(null);
+  const bulkDestRef = useRef<((dest: string) => void) | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -100,12 +107,56 @@ export function GridView() {
           if (idx > 0) setColWidth(SIZES[idx - 1]);
           break;
         }
+        // Bulk flag / destination shortcuts. Only fire when a real
+        // selection exists; the single-item case is already handled by
+        // the main useKeyboardNav hook in sequential view. Ctrl/Cmd
+        // combos and modifier-only presses don't match these keys so we
+        // don't stomp on save/export/etc.
+        case "p":
+        case "P":
+          if (e.ctrlKey || e.metaKey || e.altKey) break;
+          if (selection.size === 0) break;
+          e.preventDefault();
+          bulkActionRef.current?.("pick");
+          break;
+        case "x":
+        case "X":
+          if (e.ctrlKey || e.metaKey || e.altKey) break;
+          if (selection.size === 0) break;
+          e.preventDefault();
+          bulkActionRef.current?.("reject");
+          break;
+        case "u":
+        case "U":
+          if (e.ctrlKey || e.metaKey || e.altKey) break;
+          if (selection.size === 0) break;
+          e.preventDefault();
+          if (currentView === "route") {
+            bulkDestRef.current?.("unrouted");
+          } else {
+            bulkActionRef.current?.("unreviewed");
+          }
+          break;
+        case "e":
+        case "E":
+          if (e.ctrlKey || e.metaKey || e.altKey) break;
+          if (currentView !== "route" || selection.size === 0) break;
+          e.preventDefault();
+          bulkDestRef.current?.("edit");
+          break;
+        case "d":
+        case "D":
+          if (e.ctrlKey || e.metaKey || e.altKey) break;
+          if (currentView !== "route" || selection.size === 0) break;
+          e.preventDefault();
+          bulkDestRef.current?.("publish_direct");
+          break;
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, currentView, setActiveInnerGroup]);
+  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, currentView, setActiveInnerGroup, selection]);
 
   const handleClick = useCallback(
     (index: number, e: React.MouseEvent) => {
@@ -138,6 +189,31 @@ export function GridView() {
     },
     [selection, focusIndex, displayItems, setCurrentIndex, setFlag],
   );
+
+  /// Bulk destination — parallel to handleBulkAction but for the E/D
+  /// route keys. Guarded on currentView since destination semantics
+  /// only make sense in the Route pass (Select/Triage have no
+  /// destination keybinds).
+  const handleBulkDestination = useCallback(
+    async (destination: string) => {
+      if (currentView !== "route") return;
+      const indices = selection.size > 0 ? [...selection] : [focusIndex];
+      for (const idx of indices) {
+        const item = displayItems[idx];
+        if (item) {
+          setCurrentIndex(idx);
+          await setDestination(destination);
+        }
+      }
+      setSelection(new Set());
+    },
+    [selection, focusIndex, displayItems, setCurrentIndex, setDestination, currentView],
+  );
+
+  // Keep the key-handler refs pointing at the latest useCallbacks so
+  // their invocations inside the keydown effect always see current state.
+  bulkActionRef.current = handleBulkAction;
+  bulkDestRef.current = handleBulkDestination;
 
   const selectedPhotoIds = useMemo(
     () =>
@@ -334,6 +410,24 @@ export function GridView() {
             >
               U Reset
             </button>
+            {currentView === "route" && (
+              <>
+                <button
+                  onClick={() => handleBulkDestination("edit")}
+                  title="Route to edit (E)"
+                  className="px-3 py-1 rounded border border-amber-500/40 text-amber-400 text-xs hover:bg-amber-500/10"
+                >
+                  E Edit
+                </button>
+                <button
+                  onClick={() => handleBulkDestination("publish_direct")}
+                  title="Publish direct (D)"
+                  className="px-3 py-1 rounded border border-blue-500/40 text-blue-400 text-xs hover:bg-blue-500/10"
+                >
+                  D Publish
+                </button>
+              </>
+            )}
             {selection.size >= 2 && (
               <button
                 onClick={handleGroup}

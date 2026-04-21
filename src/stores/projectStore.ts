@@ -70,6 +70,21 @@ interface UndoEntry {
   }[];
 }
 
+function describeUndoRedoEntry(action: "Undo" | "Redo", entry: UndoEntry): string {
+  const count = entry.batch ? entry.batch.length : 1;
+  const fieldLabel =
+    entry.field === "starRating" ? "rating"
+    : entry.field === "flag" ? "flag"
+    : "destination";
+  const valueLabel = (v: string | number): string =>
+    entry.field === "starRating" ? `${v}★` : String(v);
+  // For batch ops, show the value being restored/reapplied (they're
+  // all the same). For single ops, show both sides for clarity.
+  const shown = action === "Undo" ? entry.oldValue : entry.newValue;
+  const suffix = count > 1 ? ` · ${count} photos` : "";
+  return `${action}: ${fieldLabel} → ${valueLabel(shown)}${suffix}`;
+}
+
 /// Wrapper around `computeDisplayItems` that applies the Narrative-
 /// Select drill-down filter: when an inner group is active, the
 /// visible (keyboard-navigable) set shrinks to just that group's
@@ -846,7 +861,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   undo: async () => {
     const { undoStack, redoStack, images, currentView, groups } = get();
     const entry = undoStack[undoStack.length - 1];
-    if (!entry) return;
+    if (!entry) {
+      get().setToast("Nothing to undo");
+      return;
+    }
 
     const updatedImages = [...images];
     const targets = entry.batch
@@ -896,6 +914,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           await invoke("set_rating", { imageId: t.imageId, rating: t.value });
         }
       }
+      get().setToast(describeUndoRedoEntry("Undo", entry));
     } catch (e) {
       console.error("Undo failed:", e);
       get().setToast(`Undo failed: ${e}`, "error");
@@ -905,7 +924,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   redo: async () => {
     const { redoStack, undoStack, images, currentView, groups } = get();
     const entry = redoStack[redoStack.length - 1];
-    if (!entry) return;
+    if (!entry) {
+      get().setToast("Nothing to redo");
+      return;
+    }
 
     const updatedImages = [...images];
     const targets = entry.batch
@@ -955,6 +977,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           await invoke("set_rating", { imageId: t.imageId, rating: t.value });
         }
       }
+      get().setToast(describeUndoRedoEntry("Redo", entry));
     } catch (e) {
       console.error("Redo failed:", e);
       get().setToast(`Redo failed: ${e}`, "error");
