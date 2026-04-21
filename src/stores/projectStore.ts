@@ -1189,8 +1189,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentAiOptions(get().sortByAi),
     );
 
+    // When drilling INTO a group, snap focus to the top-ranked member
+    // (displayItems[0], since the drill-down sorts by quality desc).
+    // Using the clicked cover's photoId as a hint kept the user sitting
+    // on whatever happened to be the group cover — often a mediocre
+    // frame — forcing an extra arrow-key press before P/X on the best
+    // shot. When drilling OUT (groupId === null) we preserve the
+    // currentPhotoId hint so the user lands back where they were.
     let newIndex = 0;
-    if (currentPhotoId !== undefined) {
+    if (nextActive === null && currentPhotoId !== undefined) {
       const idx = newDisplayItems.findIndex((d) => d.image.id === currentPhotoId);
       if (idx >= 0) newIndex = idx;
     }

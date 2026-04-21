@@ -148,6 +148,44 @@ describe("setActiveInnerGroup", () => {
     expect(useProjectStore.getState().displayItems).toHaveLength(1);
   });
 
+  test("drilling in snaps currentIndex to the top-ranked member, not the cover", () => {
+    // The drill-down sorts by quality score desc, so displayItems[0] is
+    // the best frame. Before this fix, setActiveInnerGroup preserved
+    // the clicked cover photo's position — which for a mediocre cover
+    // meant the user landed mid-list and had to arrow-up before P/X.
+    // The fix forces newIndex=0 when drilling in (groupId != null).
+    const cover = makeImage({ id: 1, qualityScore: 30 });
+    const best = makeImage({ id: 2, qualityScore: 90 });
+    const mid = makeImage({ id: 3, qualityScore: 60 });
+    // Mark all three as analyzed so quality_score sorting kicks in.
+    cover.aiAnalyzedAt = "2026-01-01T00:00:00Z";
+    best.aiAnalyzedAt = "2026-01-01T00:00:00Z";
+    mid.aiAnalyzedAt = "2026-01-01T00:00:00Z";
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+      { photoId: 3 },
+    ]);
+
+    useProjectStore.setState({
+      images: [cover, best, mid],
+      groups: [group],
+      displayItems: computeDisplayItems([cover, best, mid], "triage", [group]),
+      currentView: "triage",
+      // Simulate user focused on the cover before drilling in.
+      currentIndex: 0,
+      activeInnerGroupId: null,
+    });
+
+    useProjectStore.getState().setActiveInnerGroup(group.id);
+
+    const state = useProjectStore.getState();
+    // The top-ranked frame (id=2, quality 90) should be at index 0
+    // AND currentIndex should point to it — no extra click needed.
+    expect(state.displayItems[0].image.id).toBe(2);
+    expect(state.currentIndex).toBe(0);
+  });
+
   test("drilled-in displayItems contains ONLY that group's members — standalone photos and other groups are filtered out", () => {
     // Three groups, one standalone photo. Drilling into group 1 should
     // produce displayItems with exactly group 1's members, nothing else.
