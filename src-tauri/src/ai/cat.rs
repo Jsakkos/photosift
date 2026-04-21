@@ -54,6 +54,36 @@ impl CatDetectorProvider for MockCatDetector {
     }
 }
 
+/// Approximate a cat face bbox from the Tiny-YOLOv3 whole-body detection.
+///
+/// YOLO returns the bounding box of the whole cat; we want the AiPanel
+/// face tile to focus on the head. For upright or sitting cats — by far
+/// the most common pose in portrait photography — the head occupies the
+/// top ~30% of the box, horizontally centered in the top ~60%. This
+/// heuristic degrades gracefully for side-profile or curled poses: the
+/// resulting tile just shows a region nearby the face rather than the
+/// whole body, which is still more identifiable than the alternative.
+///
+/// A proper cat-face detector (OpenCV cat haar, YOLOv8-pet-face) would
+/// replace this, but the cost/value tradeoff favors the heuristic until
+/// an ONNX drop-in is available — it's a 1-line geometry transform with
+/// zero runtime cost.
+pub fn approximate_cat_face(body: &NormBox) -> NormBox {
+    // Face region: horizontally center 60% of the body, top 35% tall.
+    let face_w = body.w * 0.60;
+    let face_h = body.h * 0.35;
+    let face_x = body.x + (body.w - face_w) * 0.5;
+    // Offset slightly *below* the body top to trim off raised ears —
+    // tests on D750 NEFs consistently put the eyes around body.y + 0.05h.
+    let face_y = body.y + body.h * 0.02;
+    NormBox {
+        x: face_x.clamp(0.0, 1.0),
+        y: face_y.clamp(0.0, 1.0),
+        w: face_w.min(1.0 - face_x).max(0.0),
+        h: face_h.min(1.0 - face_y).max(0.0),
+    }
+}
+
 /// COCO class index for "cat". Tiny-YOLOv3 inherits the COCO class list
 /// unchanged; the index is stable across YOLO variants trained on COCO.
 const COCO_CAT_CLASS: i64 = 15;
@@ -267,6 +297,31 @@ impl CatDetectorProvider for OnnxCatDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_approximate_cat_face_geometry() {
+        // Full-body bbox covering top-left quarter of the frame.
+        let body = NormBox { x: 0.1, y: 0.2, w: 0.4, h: 0.5 };
+        let face = approximate_cat_face(&body);
+        // Face is narrower and shorter than the body.
+        assert!(face.w < body.w);
+        assert!(face.h < body.h);
+        // Face sits at the top of the body (within 10% of body top).
+        assert!(face.y >= body.y);
+        assert!(face.y <= body.y + body.h * 0.1);
+        // Face is horizontally centered on the body.
+        let body_cx = body.x + body.w * 0.5;
+        let face_cx = face.x + face.w * 0.5;
+        assert!((body_cx - face_cx).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_approximate_cat_face_clamps_to_frame() {
+        // Body near the right edge — face shouldn't extend past 1.0.
+        let body = NormBox { x: 0.8, y: 0.1, w: 0.25, h: 0.5 };
+        let face = approximate_cat_face(&body);
+        assert!(face.x + face.w <= 1.0 + 1e-6);
+    }
 
     #[test]
     fn test_preprocess_shape_and_fill() {

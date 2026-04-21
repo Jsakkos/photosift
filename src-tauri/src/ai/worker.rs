@@ -1,4 +1,4 @@
-use crate::ai::cat::CatDetectorProvider;
+use crate::ai::cat::{approximate_cat_face, CatDetectorProvider};
 use crate::ai::eye::{eye_crop_pixels, EyeStateProvider};
 use crate::ai::face::FaceProvider;
 use crate::ai::mouth::{face_crop_pixels, MouthStateProvider};
@@ -97,17 +97,23 @@ pub fn process_job(
     // `~/.photosift/models/cat_detector.onnx`.
     if let Ok(cats) = cat_provider.detect(&rgb) {
         for cat in cats {
+            // Tiny-YOLOv3 gives us the whole cat body. Shrink to the
+            // approximate face region so the AiPanel tile crops to the
+            // head rather than the full animal; see doc on
+            // `approximate_cat_face` for the heuristic rationale.
+            let face = approximate_cat_face(&cat.bbox);
             face_rows.push(FaceRow {
                 photo_id: job.photo_id,
-                bbox_x: cat.bbox.x, bbox_y: cat.bbox.y,
-                bbox_w: cat.bbox.w, bbox_h: cat.bbox.h,
-                // No cat eye detector today — leave landmarks at bbox
-                // center so the UI can render a neutral eye position
-                // without stretching off-image when the crop is used.
-                left_eye_x: cat.bbox.x + cat.bbox.w * 0.35,
-                left_eye_y: cat.bbox.y + cat.bbox.h * 0.40,
-                right_eye_x: cat.bbox.x + cat.bbox.w * 0.65,
-                right_eye_y: cat.bbox.y + cat.bbox.h * 0.40,
+                bbox_x: face.x, bbox_y: face.y,
+                bbox_w: face.w, bbox_h: face.h,
+                // No cat eye detector today — land the landmarks on the
+                // upper-third of the face crop so a future per-cat-eye
+                // classifier receives a reasonable starting box even
+                // before its real implementation.
+                left_eye_x: face.x + face.w * 0.30,
+                left_eye_y: face.y + face.h * 0.35,
+                right_eye_x: face.x + face.w * 0.70,
+                right_eye_y: face.y + face.h * 0.35,
                 left_eye_open: 0, right_eye_open: 0,
                 left_eye_sharpness: 0.0, right_eye_sharpness: 0.0,
                 detection_confidence: cat.confidence,
