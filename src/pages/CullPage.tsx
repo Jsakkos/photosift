@@ -78,22 +78,46 @@ export function CullPage() {
   }, [id, loadShoot, navigate]);
 
   // If the shoot was opened before import finished clustering, the
-  // store snapshot has no groups. Listen for `import-complete` and
-  // re-fetch when it's for the current shoot so groups appear as soon
-  // as the Rust side emits them.
+  // store snapshot is stale. Three event subscriptions keep it current:
+  //   - `import-photo-ready`   → append the single new photo to `images`
+  //                              so the filmstrip grows live
+  //   - `shoot-groups-updated` → refetch groups after clustering so
+  //                              newly-imported photos pick up cluster
+  //                              membership
+  //   - `import-complete`      → full reload as a safety net in case
+  //                              any events were missed
   useEffect(() => {
     const shootId = Number(id);
     if (isNaN(shootId) || shootId <= 0) return;
-    let unlisten: (() => void) | null = null;
+    const appendImportedPhoto = useProjectStore.getState().appendImportedPhoto;
+    const refetchGroups = useProjectStore.getState().refetchGroups;
+
+    let unlistenReady: (() => void) | null = null;
+    let unlistenGroups: (() => void) | null = null;
+    let unlistenComplete: (() => void) | null = null;
+
+    listen<{ shootId: number; photoId: number }>("import-photo-ready", (event) => {
+      if (event.payload.shootId === shootId) {
+        appendImportedPhoto(event.payload.photoId);
+      }
+    }).then((fn) => { unlistenReady = fn; });
+
+    listen<{ shootId: number }>("shoot-groups-updated", (event) => {
+      if (event.payload.shootId === shootId) {
+        refetchGroups();
+      }
+    }).then((fn) => { unlistenGroups = fn; });
+
     listen<{ shootId: number }>("import-complete", (event) => {
       if (event.payload.shootId === shootId) {
         loadShoot(shootId);
       }
-    }).then((fn) => {
-      unlisten = fn;
-    });
+    }).then((fn) => { unlistenComplete = fn; });
+
     return () => {
-      unlisten?.();
+      unlistenReady?.();
+      unlistenGroups?.();
+      unlistenComplete?.();
     };
   }, [id, loadShoot]);
 

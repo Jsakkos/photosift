@@ -426,6 +426,14 @@ interface ProjectState {
   ungroupPhotos: (photoIds: number[]) => Promise<void>;
   refreshDisplay: () => void;
   patchImageAiData: (photoId: number) => Promise<void>;
+  /// Append a newly-imported photo to `images` without reloading the
+  /// whole shoot. Called from the CullPage event subscription when an
+  /// `import-photo-ready` event fires for the currently-loaded shoot.
+  /// Idempotent — duplicates the existing image list check before fetching.
+  appendImportedPhoto: (photoId: number) => Promise<void>;
+  /// Refetch groups for the current shoot (called after clustering
+  /// completes mid-import).
+  refetchGroups: () => Promise<void>;
   sortByAi: "none" | "sharpness" | "faces";
   cycleSortByAi: () => void;
   heatmapOn: boolean;
@@ -1390,6 +1398,41 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       get().refreshDisplay();
     } catch (e) {
       console.error("patchImageAiData failed for", photoId, e);
+    }
+  },
+
+  appendImportedPhoto: async (photoId: number) => {
+    const existing = get().images.findIndex((i) => i.id === photoId);
+    if (existing >= 0) return; // already in the list (raced with loadShoot)
+    try {
+      const fresh = await invoke<ImageEntry>("get_image_metadata", { imageId: photoId });
+      // Preserve capture-time order to match what `loadShoot` produced.
+      // Most imports arrive in capture order, so this is usually a
+      // no-op O(1) append; a mis-ordered batch still settles cheaply.
+      const merged = [...get().images, fresh].sort((a, b) => {
+        const at = a.captureTime ?? "";
+        const bt = b.captureTime ?? "";
+        if (at && bt && at !== bt) return at < bt ? -1 : 1;
+        if (at && !bt) return -1;
+        if (!at && bt) return 1;
+        return a.id - b.id;
+      });
+      set({ images: merged });
+      get().refreshDisplay();
+    } catch (e) {
+      console.error("appendImportedPhoto failed for", photoId, e);
+    }
+  },
+
+  refetchGroups: async () => {
+    const shoot = get().currentShoot;
+    if (!shoot) return;
+    try {
+      const groups = await invoke<Group[]>("get_groups_for_shoot", { shootId: shoot.id });
+      set({ groups });
+      get().refreshDisplay();
+    } catch (e) {
+      console.error("refetchGroups failed:", e);
     }
   },
 

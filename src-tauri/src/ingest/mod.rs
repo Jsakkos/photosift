@@ -274,6 +274,14 @@ pub fn run_import(
         }
     }
 
+    // Groups are now persisted. Tell a progressive cull view subscriber to
+    // refetch so the newly-imported photos appear with their cluster
+    // membership instead of as singletons.
+    let _ = app.emit(
+        "shoot-groups-updated",
+        serde_json::json!({ "shootId": shoot_id }),
+    );
+
     // Update photo count
     let photo_count = photo_ids.len();
     {
