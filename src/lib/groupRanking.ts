@@ -83,3 +83,28 @@ export function rankColorClass(color: RankColor | null): string | null {
       return null;
   }
 }
+
+/// Build a photoId → rank color map across every group in the shoot.
+/// Used by rails + grids to hand each thumbnail its rank color via the
+/// Photo primitive's `qualityRank` prop. Photos that aren't in any group
+/// return `undefined` — single-photo sequences have nothing to rank.
+export function buildQualityRankIndex<T extends { id: number; qualityScore?: number | null }>(
+  groups: { members: { photoId: number }[] }[],
+  images: T[],
+): Map<number, RankColor | null> {
+  const byId = new Map<number, T>(images.map((i) => [i.id, i] as const));
+  const out = new Map<number, RankColor | null>();
+  for (const g of groups) {
+    const members = g.members
+      .map((m) => byId.get(m.photoId))
+      .filter((i): i is T => !!i);
+    if (members.length < 2) continue;
+    const ranks = computeGroupRanks(
+      members.map((m) => ({ id: m.id, qualityScore: m.qualityScore ?? null })),
+    );
+    for (const [id, r] of ranks) {
+      out.set(id, r.color);
+    }
+  }
+  return out;
+}

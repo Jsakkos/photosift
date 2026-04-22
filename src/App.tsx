@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ShootListPage } from "./pages/ShootListPage";
 import { CullPage } from "./pages/CullPage";
+import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Toast } from "./components/Toast";
 import { useSettingsStore } from "./stores/settingsStore";
@@ -68,6 +69,7 @@ function App() {
         <Route path="/" element={<Navigate to="/shoots" replace />} />
         <Route path="/shoots" element={<ShootListPage />} />
         <Route path="/shoots/:id" element={<CullPage />} />
+        {import.meta.env.DEV && <Route path="/primitives" element={<PrimitivesPage />} />}
       </Routes>
       <SettingsDialog />
       <Toast />

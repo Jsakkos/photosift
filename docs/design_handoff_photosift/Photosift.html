@@ -1,0 +1,156 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Photosift — UI/UX Design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; }
+  body { background: #f0eee9; }
+  * { box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="theme.jsx"></script>
+<script type="text/babel" src="placeholders.jsx"></script>
+<script type="text/babel" src="logos.jsx"></script>
+<script type="text/babel" src="screens-library.jsx"></script>
+<script type="text/babel" src="screens-triage.jsx"></script>
+<script type="text/babel" src="screens-select.jsx"></script>
+<script type="text/babel" src="screens-route.jsx"></script>
+<script type="text/babel" src="screens-compare.jsx"></script>
+<script type="text/babel" src="screens-grid.jsx"></script>
+
+<script type="text/babel">
+function LogoCard({ Logo, name, desc, bg = '#151515', fg = '#e8e6e2', accent = '#d4a574' }) {
+  return (
+    <div style={{ background: bg, color: fg, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', padding: 28 }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Logo size={140} color={accent} />
+      </div>
+      <div style={{ borderTop: '1px solid rgba(232,230,226,0.08)', paddingTop: 14, display: 'flex', alignItems: 'flex-end', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Logo size={24} color={accent} />
+          <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: -0.3 }}>Photosift</span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'rgba(232,230,226,0.5)' }}>{name}</div>
+      </div>
+      <div style={{ fontSize: 11, color: 'rgba(232,230,226,0.6)', marginTop: 10, lineHeight: 1.5 }}>{desc}</div>
+    </div>
+  );
+}
+
+function LogoLight({ Logo }) {
+  return (
+    <div style={{ background: '#f4f1ec', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28 }}>
+      <Logo size={120} color="#1a1612" />
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <DesignCanvas>
+      <DCSection id="logo" title="Logo" subtitle="Aperture blades as real iris diaphragms (not stars). Four directions — B is my recommended hero mark: progressive filtering as stacked sieves.">
+        <DCArtboard id="logo-b" label="B · Sieves w/ sand (recommended)" width={320} height={320}>
+          <LogoCard Logo={LogoB} name="LogoB" desc="Three apertures stacked as sieves with sand falling through the central openings. Directly reads as 'progressive narrowing' — your core workflow." />
+        </DCArtboard>
+        <DCArtboard id="logo-a" label="A · Aperture hourglass" width={320} height={320}>
+          <LogoCard Logo={LogoA} name="LogoA" desc="Two stacked apertures form an hourglass silhouette. Clean figure-8 at small sizes." />
+        </DCArtboard>
+        <DCArtboard id="logo-c" label="C · Hourglass pinch" width={320} height={320}>
+          <LogoCard Logo={LogoC} name="LogoC" desc="Hourglass whose pinch point is an aperture. Strong silhouette at small sizes." />
+        </DCArtboard>
+        <DCArtboard id="logo-d" label="D · Concentric iris" width={320} height={320}>
+          <LogoCard Logo={LogoD} name="LogoD" desc="Three concentric apertures closing inward. Single-mark version of the sieves concept." />
+        </DCArtboard>
+        <DCArtboard id="logo-b-light" label="B · on light" width={320} height={320}>
+          <LogoLight Logo={LogoB} />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="library" title="Library" subtitle="Entry point. Shoot cards with keep/toss/★ stats. Matches your MVP's home view.">
+        <DCArtboard id="library-idle" label="Library · idle" width={1200} height={760}>
+          <Win11Chrome title="Photosift"><LibraryScreen /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="library-import-form" label="Import modal · form" width={1200} height={760}>
+          <Win11Chrome title="Photosift"><LibraryScreen showImportModal importStage="form" /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="library-import-progress" label="Import modal · progress" width={1200} height={760}>
+          <Win11Chrome title="Photosift"><LibraryScreen showImportModal importStage="progress" /></Win11Chrome>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="triage" title="Triage" subtitle="Narrative-style filmstrip layout. Full filmstrip of all photos · current group strip · main photo · face detection panel.">
+        <DCArtboard id="triage-full" label="All rails visible" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="triage"><TriageScreenV2 /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="triage-focus" label="Filmstrip hidden · photo hero" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="triage"><TriageScreenV2 showAllStrip={false} /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="triage-nofaces" label="No faces · max photo" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="triage"><TriageScreenV2 showAllStrip={false} showFaces={false} /></Win11Chrome>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="select" title="Select" subtitle="Iterative star rating passes — parallel to Triage. Drill-down hero with ★1–5 overlay + all-photos filmstrip (grouped by rating) + current-rating peer strip + detail rail. Grid variant for quick survey passes.">
+        <DCArtboard id="select-hero" label="Pass 2 · hero · all rails" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="select"><SelectScreenV2 /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="select-hero-focus" label="Filmstrip hidden · photo focus" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="select"><SelectScreenV2 showAllStrip={false} /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="select-hero-norail" label="No rail · max photo" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="select"><SelectScreenV2 showAllStrip={false} showRail={false} /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="select-grid" label="Pass 2 · grid" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="select"><SelectScreenV2 variant="grid" /></Win11Chrome>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="route" title="Route" subtitle="Send picks to Capture One / DxO / direct publish. XMP sidecars written beside RAWs.">
+        <DCArtboard id="route-default" label="Destinations" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="route"><RouteScreenV2 /></Win11Chrome>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="compare" title="Compare" subtitle="2-up side-by-side with locked pan/zoom. Invoked from Triage or Select when two frames are neck-and-neck.">
+        <DCArtboard id="compare-mvp" label="MVP · score pills" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="triage"><CompareScreen variant="mvp" /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="compare-lean" label="Lean · minimal metadata" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="triage"><CompareScreen variant="lean" /></Win11Chrome>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="grid" title="Grid mode" subtitle="G hotkey toggles a pure-grid view on any screen. Dense thumbnails with contextual badges (keep/toss, stars, destinations) and stage-specific hint bar. Focused cell has a blue outline; multi-select range uses a tint.">
+        <DCArtboard id="grid-library" label="Library · grid" width={1280} height={760}>
+          <Win11Chrome title="Photosift" stage="library"><GridMode stage="library" /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="grid-triage" label="Triage · grid" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="triage"><GridMode stage="triage" /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="grid-select" label="Select · grid" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="select"><GridMode stage="select" /></Win11Chrome>
+        </DCArtboard>
+        <DCArtboard id="grid-route" label="Route · grid" width={1280} height={760}>
+          <Win11Chrome title="Photosift" project="Bend Weekend · 318" stage="route"><GridMode stage="route" /></Win11Chrome>
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

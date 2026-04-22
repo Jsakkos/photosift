@@ -1,14 +1,110 @@
 import { useRef, useState, useCallback } from "react";
 import { useProjectStore } from "../stores/projectStore";
-import { useImageLoader, thumbUrl } from "../hooks/useImageLoader";
+import { useImageLoader } from "../hooks/useImageLoader";
+import { Kbd, Stars } from "./primitives";
+import type { ImageEntry } from "../types";
+
+type Side = "L" | "R";
+
+type PanelProps = {
+  side: Side;
+  image: ImageEntry | null;
+  url: string | null;
+  picked: boolean;
+  scale: number;
+  imgStyle: React.CSSProperties;
+};
+
+function ScorePill({ label, value }: { label: string; value: number }) {
+  const high = value >= 85;
+  return (
+    <span
+      className="inline-flex items-center gap-[4px] px-[6px] py-[2px] rounded-xs font-mono text-[9px]"
+      style={{
+        background: "rgba(0,0,0,0.45)",
+        color: high ? "var(--color-accent-2)" : "var(--color-fg-dim)",
+        border: `1px solid ${high ? "var(--color-accent-2)" : "var(--color-border)"}`,
+      }}
+    >
+      <span className="uppercase tracking-[0.5px]">{label}</span>
+      <span className="tabular-nums">{value}</span>
+    </span>
+  );
+}
+
+function ComparePanel({ side, image, url, picked, scale, imgStyle }: PanelProps) {
+  if (!image) return <div className="flex-1" style={{ background: "#0a0a0a" }} />;
+  const rating = Math.max(0, Math.min(5, image.starRating)) as 0 | 1 | 2 | 3 | 4 | 5;
+  const sharp = Math.round(image.sharpnessScore ?? 0);
+  const face = Math.round((image.faceCount ?? 0) > 0 ? 90 : 0);
+  const eye = (() => {
+    const pairs = (image.faceCount ?? 0) * 2;
+    if (pairs <= 0) return 0;
+    return Math.round(((image.eyesOpenCount ?? 0) / pairs) * 100);
+  })();
+  const smile = Math.round((image.maxSmileScore ?? 0) * 100);
+
+  return (
+    <div
+      className="flex-1 flex flex-col min-h-0 min-w-0"
+      style={{ background: "#0a0a0a" }}
+    >
+      <div className="flex-1 relative overflow-hidden">
+        <div
+          className="absolute top-3 left-3 z-10 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[1px]"
+          style={{ color: picked ? "var(--color-success)" : "var(--color-fg-dim)" }}
+        >
+          <span>{side}</span>
+          {picked && <span>✓ picked</span>}
+        </div>
+        {scale > 1 && (
+          <div
+            className="absolute top-3 left-1/2 -translate-x-1/2 z-10 font-mono text-[10px] px-2 py-[2px] rounded-xs"
+            style={{ background: "rgba(0,0,0,0.55)", color: "rgba(255,255,255,0.7)" }}
+          >
+            {Math.round(scale * 100)}%
+          </div>
+        )}
+        {url && (
+          <div className="absolute inset-0 p-5 flex items-center justify-center">
+            <img
+              src={url}
+              alt={image.filename}
+              className="max-w-full max-h-full object-contain"
+              style={imgStyle}
+              draggable={false}
+            />
+          </div>
+        )}
+      </div>
+      <div
+        className="px-4 py-3 border-t flex items-center gap-3 flex-wrap"
+        style={{ borderColor: "var(--color-border)", background: "var(--color-bg2)" }}
+      >
+        <span
+          className="font-mono text-[11px] truncate max-w-[220px]"
+          style={{ color: "var(--color-fg)" }}
+          title={image.filepath}
+        >
+          {image.filename}
+        </span>
+        <Stars value={rating} size={11} />
+        <div className="flex-1" />
+        <ScorePill label="sharp" value={sharp} />
+        <ScorePill label="face" value={face} />
+        <ScorePill label="eye" value={eye} />
+        <ScorePill label="smile" value={smile} />
+      </div>
+    </div>
+  );
+}
 
 export function ComparisonView() {
-  const {
-    comparisonPinnedId,
-    comparisonCyclingId,
-    comparisonGroupMembers,
-    images,
-  } = useProjectStore();
+  const comparisonPinnedId = useProjectStore((s) => s.comparisonPinnedId);
+  const comparisonCyclingId = useProjectStore((s) => s.comparisonCyclingId);
+  const comparisonGroupMembers = useProjectStore((s) => s.comparisonGroupMembers);
+  const images = useProjectStore((s) => s.images);
+  const groups = useProjectStore((s) => s.groups);
 
   const pinnedImage = images.find((i) => i.id === comparisonPinnedId) ?? null;
   const cyclingImage = images.find((i) => i.id === comparisonCyclingId) ?? null;
@@ -26,26 +122,28 @@ export function ComparisonView() {
   });
   const cyclingIdx = availableMembers.indexOf(comparisonCyclingId!);
 
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
-      e.preventDefault();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      setTransform((t) => ({
-        ...t,
-        scale: Math.max(0.5, Math.min(10, t.scale * delta)),
-      }));
-    },
-    [],
-  );
+  const groupOrdinal = (() => {
+    if (!pinnedImage) return 0;
+    const ordered = [...groups].sort((a, b) => a.id - b.id);
+    const gid = ordered.find((g) => g.members.some((m) => m.photoId === pinnedImage.id))?.id;
+    if (gid === undefined) return 0;
+    return ordered.findIndex((g) => g.id === gid) + 1;
+  })();
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setTransform((t) => ({
+      ...t,
+      scale: Math.max(0.5, Math.min(10, t.scale * delta)),
+    }));
+  }, []);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       if (transform.scale <= 1) return;
       isDragging.current = true;
-      dragStart.current = {
-        x: e.clientX - transform.x,
-        y: e.clientY - transform.y,
-      };
+      dragStart.current = { x: e.clientX - transform.x, y: e.clientY - transform.y };
     },
     [transform],
   );
@@ -71,160 +169,100 @@ export function ComparisonView() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Panels */}
       <div
-        className="flex-1 flex"
+        className="h-10 flex items-center px-4 gap-3 shrink-0 border-b"
+        style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
+      >
+        <span className="font-mono text-[11px]" style={{ color: "var(--color-fg)" }}>
+          2-up compare
+        </span>
+        {groupOrdinal > 0 && (
+          <span
+            className="font-mono text-[10px]"
+            style={{ color: "var(--color-fg-dim)" }}
+          >
+            · Group G{groupOrdinal} · {cyclingIdx + 1}/{availableMembers.length}
+          </span>
+        )}
+        <span
+          className="font-mono text-[10px]"
+          style={{ color: "var(--color-fg-mute)" }}
+        >
+          · locked zoom {Math.round(transform.scale * 100)}%
+        </span>
+        <div className="flex-1" />
+        <div className="flex items-center gap-[8px]">
+          <Kbd>1</Kbd>
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            style={{ color: "var(--color-fg-dim)" }}
+          >
+            pick L
+          </span>
+        </div>
+        <div className="flex items-center gap-[8px]">
+          <Kbd>2</Kbd>
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            style={{ color: "var(--color-fg-dim)" }}
+          >
+            pick R
+          </span>
+        </div>
+        <div className="flex items-center gap-[8px]">
+          <Kbd>Esc</Kbd>
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            style={{ color: "var(--color-fg-dim)" }}
+          >
+            exit
+          </span>
+        </div>
+      </div>
+
+      <div
+        className="flex-1 grid min-h-0"
+        style={{
+          gridTemplateColumns: "1fr 1fr",
+          gap: 2,
+          background: "var(--color-border)",
+        }}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
-        {/* Left panel (pinned) */}
-        <div className="flex-1 relative overflow-hidden bg-[var(--bg-primary)] flex items-center justify-center">
-          <div className="absolute top-3 left-3 px-2.5 py-1 rounded text-[11px] font-semibold bg-[var(--accent)]/15 border border-[var(--accent)]/30 text-blue-300 z-10">
-            ① Pinned
-          </div>
-          {transform.scale > 1 && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/60 text-white/70 text-[10px] px-2 py-0.5 rounded z-10">
-              {Math.round(transform.scale * 100)}%
-            </div>
-          )}
-          {pinnedUrl && (
-            <img
-              src={pinnedUrl}
-              alt={pinnedImage?.filename}
-              className="max-w-full max-h-full object-contain"
-              style={imgStyle}
-              draggable={false}
-            />
-          )}
-          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-xl font-bold px-4 py-1.5 rounded-lg bg-[var(--accent)]/15 text-blue-300 border border-[var(--accent)]/25 opacity-60 pointer-events-none">
-            1
-          </div>
-        </div>
-
-        {/* Divider */}
-        <div className="w-0.5 bg-white/10 flex-shrink-0" />
-
-        {/* Right panel (cycling) */}
-        <div className="flex-1 relative overflow-hidden bg-[var(--bg-primary)] flex items-center justify-center">
-          <div className="absolute top-3 right-3 px-2.5 py-1 rounded text-[11px] font-semibold bg-purple-500/15 border border-purple-500/30 text-purple-300 z-10">
-            ② Cycling ← →
-          </div>
-          {transform.scale > 1 && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-black/60 text-white/70 text-[10px] px-2 py-0.5 rounded z-10">
-              {Math.round(transform.scale * 100)}%
-            </div>
-          )}
-          {cyclingUrl && (
-            <img
-              src={cyclingUrl}
-              alt={cyclingImage?.filename}
-              className="max-w-full max-h-full object-contain"
-              style={imgStyle}
-              draggable={false}
-            />
-          )}
-          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-xl font-bold px-4 py-1.5 rounded-lg bg-purple-500/15 text-purple-300 border border-purple-500/25 opacity-60 pointer-events-none">
-            2
-          </div>
-          <div className="absolute bottom-3 right-3 text-[10px] text-[var(--text-secondary)] flex items-center gap-1">
-            <span className="text-purple-400">◀</span>
-            {cyclingIdx + 1} / {availableMembers.length}
-            <span className="text-purple-400">▶</span>
-          </div>
-        </div>
+        <ComparePanel
+          side="L"
+          image={pinnedImage}
+          url={pinnedUrl}
+          picked
+          scale={transform.scale}
+          imgStyle={imgStyle}
+        />
+        <ComparePanel
+          side="R"
+          image={cyclingImage}
+          url={cyclingUrl}
+          picked={false}
+          scale={transform.scale}
+          imgStyle={imgStyle}
+        />
       </div>
 
-      {/* EXIF comparison strip */}
-      <div className="flex border-t border-white/5 bg-[#0d0d0d]">
-        <ExifPanel image={pinnedImage} />
-        <div className="w-px bg-white/5" />
-        <ExifPanel image={cyclingImage} />
-      </div>
-
-      {/* Group member strip */}
-      <div className="flex gap-1 justify-center py-2 px-4 bg-[#111] border-t border-white/10">
-        {availableMembers.map((id) => (
-          <MemberThumb
-            key={id}
-            photoId={id}
-            isPinned={id === comparisonPinnedId}
-            isCycling={id === comparisonCyclingId}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ExifPanel({ image }: { image: ReturnType<typeof useProjectStore.getState>["images"][0] | null }) {
-  if (!image) return <div className="flex-1 p-2" />;
-
-  return (
-    <div className="flex-1 flex gap-4 px-4 py-2 text-[11px] text-[var(--text-secondary)]">
-      {image.aperture && (
-        <span>
-          f/<span className="text-[var(--text-primary)]">{image.aperture}</span>
-        </span>
-      )}
-      {image.shutterSpeed && (
-        <span className="text-[var(--text-primary)]">{image.shutterSpeed}</span>
-      )}
-      {image.iso && (
-        <span>
-          ISO <span className="text-[var(--text-primary)]">{image.iso}</span>
-        </span>
-      )}
-      {image.focalLength && (
-        <span className="text-[var(--text-primary)]">{image.focalLength}mm</span>
-      )}
-    </div>
-  );
-}
-
-function MemberThumb({
-  photoId,
-  isPinned,
-  isCycling,
-}: {
-  photoId: number;
-  isPinned: boolean;
-  isCycling: boolean;
-}) {
-  const [loaded, setLoaded] = useState(false);
-
-  return (
-    <div className="relative">
       <div
-        className={`rounded overflow-hidden ${
-          isPinned
-            ? "ring-2 ring-[var(--accent)]"
-            : isCycling
-              ? "ring-2 ring-purple-500"
-              : "brightness-75"
-        }`}
-        style={{ width: 50, height: 38 }}
+        className="h-10 flex items-center px-4 gap-4 shrink-0 border-t"
+        style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
       >
-        <img
-          src={thumbUrl(photoId)}
-          alt=""
-          className={`w-full h-full object-cover ${loaded ? "opacity-100" : "opacity-30"}`}
-          loading="lazy"
-          draggable={false}
-          onLoad={(e) => {
-            if (e.currentTarget.naturalWidth > 1) setLoaded(true);
-          }}
-        />
+        <span className="font-mono text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
+          Winner promoted · pan + zoom synchronised
+        </span>
+        <div className="flex-1" />
+        <span className="font-mono text-[10px]" style={{ color: "var(--color-fg-mute)" }}>
+          ◀ ▶ cycle right panel
+        </span>
       </div>
-      {(isPinned || isCycling) && (
-        <div
-          className={`absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full ${
-            isPinned ? "bg-[var(--accent)]" : "bg-purple-500"
-          }`}
-        />
-      )}
     </div>
   );
 }

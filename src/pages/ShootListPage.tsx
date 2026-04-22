@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import { useShootListStore } from "../stores/shootListStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { ImportDialog } from "../components/ImportDialog";
 import { thumbUrl } from "../hooks/useImageLoader";
-import type { CullView, PublishDirectReport } from "../types";
+import { LogoB } from "../components/primitives";
+import type { ShootSummary } from "../types";
 
 interface ImportPhotoReady {
   shootId: number;
@@ -16,29 +16,149 @@ interface ImportPhotoReady {
   total: number;
 }
 
-/// Compact relative-time formatter. Buckets into "just now / Xm ago /
-/// Xh ago / Xd ago / ISO date". Good enough for a shoot card — no need
-/// to pull in a date library for five buckets.
-function relativeTime(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return null;
-  const diffMs = Date.now() - then;
-  if (diffMs < 0) return "just now";
-  const mins = Math.floor(diffMs / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 14) return `${days}d ago`;
-  return new Date(iso).toISOString().slice(0, 10);
-}
+type ImportingProgress = Map<number, { imported: number; total: number }>;
 
-function viewLabel(v: CullView | null | undefined): string {
-  if (v === "select") return "Select";
-  if (v === "route") return "Route";
-  return "Triage";
+function ShootCard({
+  shoot,
+  progress,
+  onOpen,
+  onDelete,
+}: {
+  shoot: ShootSummary;
+  progress?: { imported: number; total: number };
+  onOpen: () => void;
+  onDelete: (e: React.MouseEvent) => void;
+}) {
+  const picks = shoot.picks ?? 0;
+  const rejects = shoot.rejects ?? 0;
+  const unreviewed = shoot.unreviewed ?? shoot.photoCount;
+  const total = Math.max(1, shoot.photoCount);
+  const pickPct = (picks / total) * 100;
+  const rejectPct = (rejects / total) * 100;
+  const done = unreviewed === 0 && shoot.photoCount > 0;
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="relative rounded-md overflow-hidden cursor-pointer group"
+      style={{
+        background: "var(--color-bg2)",
+        border: "1px solid var(--color-border)",
+      }}
+    >
+      <div className="relative" style={{ aspectRatio: "4/3" }}>
+        {shoot.coverPhotoId != null ? (
+          <img
+            src={thumbUrl(shoot.coverPhotoId)}
+            alt=""
+            loading="lazy"
+            draggable={false}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div
+            className="w-full h-full flex items-center justify-center font-mono text-[10px] uppercase tracking-[0.8px]"
+            style={{
+              background: "var(--color-bg3)",
+              color: "var(--color-fg-mute)",
+            }}
+          >
+            no cover
+          </div>
+        )}
+        {progress && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-[10px] bg-black/50">
+            <div className="font-mono text-[11px]" style={{ color: "var(--color-fg)" }}>
+              importing · {progress.imported} / {progress.total}
+            </div>
+            <div
+              className="w-[140px] h-[3px] rounded-sm overflow-hidden"
+              style={{ background: "rgba(255,255,255,0.1)" }}
+            >
+              <div
+                className="h-full transition-all"
+                style={{
+                  width: `${Math.min(100, (progress.imported / Math.max(1, progress.total)) * 100)}%`,
+                  background: "var(--color-accent-blue)",
+                }}
+              />
+            </div>
+          </div>
+        )}
+        {done && !progress && (
+          <div
+            className="absolute top-2 right-2 font-mono text-[9px] uppercase tracking-[1px] px-[6px] py-[2px] rounded-sm"
+            style={{ color: "var(--color-success)", background: "rgba(0,0,0,0.55)" }}
+          >
+            ✓ routed
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onDelete}
+          title="Delete shoot"
+          aria-label={`Delete shoot ${shoot.slug}`}
+          className="absolute top-2 left-2 w-6 h-6 flex items-center justify-center rounded-xs opacity-0 group-hover:opacity-100 transition-opacity"
+          style={{
+            background: "rgba(0,0,0,0.6)",
+            color: "var(--color-fg-dim)",
+          }}
+        >
+          ×
+        </button>
+      </div>
+      <div className="px-[14px] py-3">
+        <div className="flex items-baseline justify-between mb-1 gap-3">
+          <div
+            className="text-[14px] font-semibold truncate"
+            style={{ color: "var(--color-fg)" }}
+          >
+            {shoot.slug}
+          </div>
+          <div
+            className="font-mono text-[10px] shrink-0"
+            style={{ color: "var(--color-fg-dim)" }}
+          >
+            {shoot.date}
+          </div>
+        </div>
+        <div
+          className="text-[11px] mb-[10px]"
+          style={{ color: "var(--color-fg-dim)" }}
+        >
+          {shoot.photoCount} photos
+        </div>
+        <div className="flex gap-[10px] font-mono text-[10px]">
+          <span style={{ color: "var(--color-success)" }}>● {picks} kept</span>
+          <span style={{ color: "var(--color-danger)" }}>● {rejects} tossed</span>
+          <span style={{ color: "var(--color-warning)" }}>
+            ★ {unreviewed} left
+          </span>
+        </div>
+        {!progress && (
+          <div
+            className="mt-[10px] h-[2px] rounded-[1px] overflow-hidden flex"
+            style={{ background: "var(--color-bg3)" }}
+          >
+            <div
+              style={{ width: `${pickPct}%`, background: "var(--color-success)" }}
+            />
+            <div
+              style={{ width: `${rejectPct}%`, background: "var(--color-danger)" }}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function ShootListPage() {
@@ -46,52 +166,21 @@ export function ShootListPage() {
   const openSettings = useSettingsStore((s) => s.openDialog);
   const navigate = useNavigate();
   const [showImport, setShowImport] = useState(false);
-  const [publishingShootId, setPublishingShootId] = useState<number | null>(null);
-  /// Live import progress per in-flight shoot. Populated by
-  /// `import-photo-ready` events and cleared on `import-complete`.
-  const [importingProgress, setImportingProgress] = useState<
-    Map<number, { imported: number; total: number }>
-  >(new Map());
+  const [importingProgress, setImportingProgress] = useState<ImportingProgress>(new Map());
+  const [query, setQuery] = useState("");
 
-  const handlePublishDirect = async (
-    e: React.MouseEvent,
-    shootId: number,
-    slug: string,
-  ) => {
-    e.stopPropagation();
-    setPublishingShootId(shootId);
-    try {
-      const report = await invoke<PublishDirectReport>("export_publish_direct", {
-        shootId,
-      });
-      const parts = [
-        `${report.copied} copied`,
-        `${report.skipped} skipped`,
-        report.failed > 0 ? `${report.failed} failed` : null,
-      ].filter(Boolean);
-      const body = report.copied + report.skipped + report.failed === 0
-        ? `No photos are flagged for publish direct in "${slug}".`
-        : `"${slug}" → ${report.destDir}\n${parts.join(" · ")}${
-            report.errors.length > 0 ? "\n\n" + report.errors.join("\n") : ""
-          }`;
-      window.alert(body);
-    } catch (err) {
-      const msg = String(err);
-      if (msg.includes("immich_ingest_path not configured")) {
-        if (
-          window.confirm(
-            "Immich ingest folder not configured. Open Settings to set it up?",
-          )
-        ) {
-          openSettings();
-        }
-      } else {
-        window.alert(`Publish failed: ${msg}`);
-      }
-    } finally {
-      setPublishingShootId(null);
-    }
-  };
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return shoots;
+    return shoots.filter(
+      (s) => s.slug.toLowerCase().includes(q) || s.date.includes(q),
+    );
+  }, [shoots, query]);
+
+  const totalPhotos = useMemo(
+    () => shoots.reduce((sum, s) => sum + s.photoCount, 0),
+    [shoots],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -134,10 +223,6 @@ export function ShootListPage() {
         next.set(shootId, { imported, total });
         return next;
       });
-      // Trigger an early refresh when the first photo lands so the shoot
-      // appears on the list even if the user opened ShootListPage after
-      // the import started. Subsequent refreshes piggyback on the 1-in-N
-      // coarser event throttling below.
       if (imported === 1) refresh();
     });
     return () => {
@@ -146,189 +231,147 @@ export function ShootListPage() {
     };
   }, [refresh]);
 
+  const handleDelete = async (shoot: ShootSummary, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (
+      !window.confirm(
+        `Delete shoot "${shoot.slug}"? This removes the DB record and cached thumbnails. RAW files on disk are preserved.`,
+      )
+    )
+      return;
+    try {
+      await deleteShoot(shoot.id);
+    } catch (err) {
+      window.alert(`Delete failed: ${err}`);
+    }
+  };
+
   return (
-    <div className="h-screen w-screen flex flex-col bg-[var(--bg-primary)]">
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
-        <h1 className="text-2xl font-light text-[var(--text-primary)]">PhotoSift</h1>
-        <div className="flex items-center gap-2">
+    <div
+      className="h-screen w-screen flex flex-col overflow-hidden"
+      style={{ background: "var(--color-bg)", color: "var(--color-fg)" }}
+    >
+      <div className="flex items-center justify-between px-8 pt-6 pb-5">
+        <div className="flex items-center gap-[14px]">
+          <div style={{ color: "var(--color-accent)" }}>
+            <LogoB size={28} />
+          </div>
+          <div>
+            <div
+              className="text-[10px] uppercase tracking-[1.4px]"
+              style={{ color: "var(--color-fg-dim)" }}
+            >
+              Library
+            </div>
+            <div
+              className="text-[22px] font-semibold leading-tight"
+              style={{ color: "var(--color-fg)", letterSpacing: -0.4 }}
+            >
+              {shoots.length} shoot{shoots.length === 1 ? "" : "s"} · {totalPhotos} photos
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-[10px]">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search shoots…"
+            className="px-[10px] py-[6px] rounded-md text-[12px] font-mono w-[220px]"
+            style={{
+              background: "var(--color-bg2)",
+              border: "1px solid var(--color-border)",
+              color: "var(--color-fg)",
+            }}
+          />
           <button
+            type="button"
             onClick={openSettings}
             title="Settings (,)"
             aria-label="Settings"
-            className="w-9 h-9 flex items-center justify-center rounded-lg bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+            className="px-[12px] py-[6px] rounded-md text-[12px] cursor-pointer"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--color-border)",
+              color: "var(--color-fg-dim)",
+            }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-            </svg>
+            ⚙ Settings
           </button>
           <button
+            type="button"
             onClick={() => setShowImport(true)}
-            className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-medium transition-colors"
+            className="px-[14px] py-[6px] rounded-md text-[12px] font-medium cursor-pointer"
+            style={{
+              background: "var(--color-accent-blue)",
+              color: "#fff",
+              border: "none",
+            }}
           >
-            New Import
+            ＋ Import
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-6">
+      <div className="flex-1 overflow-auto px-8 pb-8">
         {isLoading && shoots.length === 0 && (
-          <p className="text-[var(--text-secondary)] text-center mt-12">Loading shoots...</p>
+          <p
+            className="text-center mt-16 text-[12px]"
+            style={{ color: "var(--color-fg-dim)" }}
+          >
+            Loading shoots…
+          </p>
         )}
 
         {!isLoading && shoots.length === 0 && (
-          <div className="flex flex-col items-center justify-center mt-24">
-            <p className="text-[var(--text-secondary)] mb-4">No shoots imported yet.</p>
-            <button
-              onClick={() => setShowImport(true)}
-              className="px-6 py-3 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-medium transition-colors"
+          <div className="flex flex-col items-center justify-center mt-24 gap-4">
+            <div style={{ color: "var(--color-accent)", opacity: 0.7 }}>
+              <LogoB size={96} />
+            </div>
+            <p
+              className="text-[13px] max-w-[320px] text-center"
+              style={{ color: "var(--color-fg-dim)" }}
             >
-              Import Your First Shoot
+              Your library is empty. Import a folder of RAW files to start culling.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowImport(true)}
+              className="px-5 py-[8px] rounded-md text-[13px] font-medium cursor-pointer"
+              style={{
+                background: "var(--color-accent-blue)",
+                color: "#fff",
+                border: "none",
+              }}
+            >
+              Import your first shoot
             </button>
           </div>
         )}
 
-        {shoots.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {shoots.map((shoot) => {
-              const open = () => navigate(`/shoots/${shoot.id}`);
-              const handleDelete = async (e: React.MouseEvent) => {
-                e.stopPropagation();
-                if (!window.confirm(
-                  `Delete shoot "${shoot.slug}"? This removes the DB record and cached thumbnails. RAW files on disk are preserved.`
-                )) return;
-                try {
-                  await deleteShoot(shoot.id);
-                } catch (err) {
-                  window.alert(`Delete failed: ${err}`);
-                }
-              };
-
-              const picks = shoot.picks ?? 0;
-              const rejects = shoot.rejects ?? 0;
-              const unreviewed = shoot.unreviewed ?? shoot.photoCount;
-              const reviewed = picks + rejects;
-              const opened = relativeTime(shoot.lastOpenedAt);
-              const resumeLabel = viewLabel(shoot.lastView);
-              const importing = importingProgress.get(shoot.id);
-
-              return (
-                <div
-                  key={shoot.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={open}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      open();
-                    }
-                  }}
-                  className="relative text-left rounded-lg bg-[var(--bg-secondary)] hover:bg-[var(--bg-tertiary)] border border-white/5 hover:border-white/10 transition-colors cursor-pointer flex flex-col overflow-hidden"
-                >
-                  {shoot.coverPhotoId != null ? (
-                    <img
-                      src={thumbUrl(shoot.coverPhotoId)}
-                      alt=""
-                      loading="lazy"
-                      draggable={false}
-                      className="w-full aspect-[3/2] object-cover bg-black/40"
-                    />
-                  ) : (
-                    <div className="w-full aspect-[3/2] bg-[var(--bg-primary)] border-b border-white/5 flex items-center justify-center text-[var(--text-secondary)]/40 text-xs">
-                      No preview
-                    </div>
-                  )}
-
-                  <div className="p-4 flex flex-col gap-2">
-                  <div>
-                    <div className="font-medium text-[var(--text-primary)] text-lg pr-8 leading-tight">
-                      {shoot.slug}
-                    </div>
-                    <div className="text-[var(--text-secondary)] text-sm">
-                      {shoot.date}
-                    </div>
-                  </div>
-
-                  {/* Progress breakdown — spec's at-a-glance status line.
-                      Dots use the same pick/reject/unreviewed colors used
-                      on thumbnails so the vocabulary is consistent. */}
-                  <div className="text-[var(--text-secondary)] text-xs flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span>{shoot.photoCount} photos</span>
-                    <span className="text-[var(--text-secondary)]/60">·</span>
-                    <span>{reviewed} reviewed</span>
-                    <span className="flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                      {picks}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                      {rejects}
-                    </span>
-                    <span className="flex items-center gap-1 text-[var(--text-secondary)]/70">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--text-secondary)]/40" />
-                      {unreviewed}
-                    </span>
-                  </div>
-
-                  {importing && (
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 h-1.5 bg-[var(--bg-primary)] rounded overflow-hidden">
-                        <div
-                          className="h-full bg-[var(--accent)] transition-all"
-                          style={{
-                            width: `${Math.min(100, (importing.imported / Math.max(1, importing.total)) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                      <span className="text-[11px] text-[var(--text-secondary)] tabular-nums">
-                        {importing.imported}/{importing.total}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2 mt-1">
-                    {opened ? (
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); open(); }}
-                        className="px-3 py-1.5 rounded bg-[var(--accent)]/15 hover:bg-[var(--accent)]/25 border border-[var(--accent)]/30 text-[var(--accent)] text-xs font-medium transition-colors"
-                        title={`Last opened ${opened}`}
-                      >
-                        Continue {resumeLabel} · {opened}
-                      </button>
-                    ) : (
-                      <span className="text-[11px] text-[var(--text-secondary)]/60">
-                        Not yet opened
-                      </span>
-                    )}
-                    {picks > 0 && (
-                      <button
-                        type="button"
-                        onClick={(e) => handlePublishDirect(e, shoot.id, shoot.slug)}
-                        disabled={publishingShootId === shoot.id}
-                        title="Copy publish-direct picks to Immich ingest folder"
-                        className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 border border-white/10 text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {publishingShootId === shoot.id ? "Publishing…" : "Publish"}
-                      </button>
-                    )}
-                  </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleDelete}
-                    title="Delete shoot"
-                    aria-label={`Delete shoot ${shoot.slug}`}
-                    className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center rounded text-[var(--text-secondary)]/60 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                  >
-                    ×
-                  </button>
-                </div>
-              );
-            })}
+        {filtered.length > 0 && (
+          <div
+            className="grid gap-5"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
+          >
+            {filtered.map((shoot) => (
+              <ShootCard
+                key={shoot.id}
+                shoot={shoot}
+                progress={importingProgress.get(shoot.id)}
+                onOpen={() => navigate(`/shoots/${shoot.id}`)}
+                onDelete={(e) => void handleDelete(shoot, e)}
+              />
+            ))}
           </div>
+        )}
+
+        {!isLoading && shoots.length > 0 && filtered.length === 0 && (
+          <p
+            className="text-center mt-12 text-[12px]"
+            style={{ color: "var(--color-fg-mute)" }}
+          >
+            No shoots match “{query}”.
+          </p>
         )}
       </div>
 

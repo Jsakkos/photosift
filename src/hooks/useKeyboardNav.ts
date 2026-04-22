@@ -200,7 +200,14 @@ export function useKeyboardNav() {
           if (currentView === "triage") setFlag("pick");
           break;
         case "P":
-          if (currentView === "triage") setFlag("pick");
+          if (currentView === "triage") {
+            if (e.shiftKey) {
+              e.preventDefault();
+              useProjectStore.getState().keepAllInCurrentGroup();
+            } else {
+              setFlag("pick");
+            }
+          }
           break;
         case "x":
         case "X":
@@ -245,8 +252,19 @@ export function useKeyboardNav() {
           break;
         case "f":
         case "F":
+          // Toggles the 220px Faces rail in the new Triage/Select shell.
+          // The legacy aiPanelForced flag is still live for the old
+          // AiPanel path (Select/Route), which stays on F until those
+          // phases land their redesigned shells.
           if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            useProjectStore.getState().toggleFaces();
             useProjectStore.getState().toggleAiPanel();
+          }
+          break;
+        case "t":
+        case "T":
+          if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+            useProjectStore.getState().toggleAllStrip();
           }
           break;
         case "h":

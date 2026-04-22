@@ -99,7 +99,8 @@
       "mcp__tauri-mcp__manage_window",
       "Bash(tasklist //FI \"IMAGENAME eq cargo.exe\" //FI \"IMAGENAME eq photosift.exe\")",
       "Bash(tasklist //FI \"IMAGENAME eq rustc.exe\")",
-      "Bash(taskkill //F //PID 32876)"
+      "Bash(taskkill //F //PID 32876)",
+      "Bash(npx vite *)"
     ]
   },
   "enableAllProjectMcpServers": true,

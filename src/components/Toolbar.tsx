@@ -5,12 +5,10 @@ import { ViewSelector } from "./ViewSelector";
 import { ProgressBar } from "./ProgressBar";
 import { AiProgressIndicator } from "./AiProgressIndicator";
 import { ViewHint } from "./ViewHint";
-import { SelectPassChips } from "./SelectPassChips";
 
 export function Toolbar() {
   const { currentShoot, displayItems, currentIndex, autoAdvance, toggleAutoAdvance, toggleShortcutHints } =
     useProjectStore();
-  const currentView = useProjectStore((s) => s.currentView);
   const openSettings = useSettingsStore((s) => s.openDialog);
   const navigate = useNavigate();
 
@@ -80,8 +78,6 @@ export function Toolbar() {
       <ProgressBar />
       {/* Contextual workflow hint */}
       <ViewHint />
-      {/* Multi-pass star-rating chips — Select only */}
-      {currentView === "select" && <SelectPassChips />}
     </div>
   );
 }

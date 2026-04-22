@@ -49,6 +49,27 @@ function showReviewedFlag(): boolean {
   return useProjectStore.getState().showReviewed;
 }
 
+/// Read a persisted boolean from localStorage, defaulting on first run
+/// or when JSON.parse throws (corrupt value, SSR-like env without
+/// localStorage). Used for session-scoped UI flags like rail visibility.
+function readBoolLS(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === null) return fallback;
+    return JSON.parse(v) === true;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeBoolLS(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Non-fatal — rail visibility falls back to per-session state.
+  }
+}
+
 export interface AiDisplayOptions {
   sortByAi: "none" | "sharpness" | "faces";
   /// When false, AI-pick scoring ignores the `eyes_open` term. Must be
@@ -502,6 +523,16 @@ interface ProjectState {
   activeInnerGroupId: number | null;
   lastFlagAction: { color: string; timestamp: number } | null;
   toast: { message: string; kind: "info" | "error"; timestamp: number } | null;
+  /// Triage/Select rail visibility. Persisted via localStorage so the
+  /// user's last T/F toggle state survives reloads. Not per-shoot.
+  showAllStrip: boolean;
+  showFaces: boolean;
+  toggleAllStrip: () => void;
+  toggleFaces: () => void;
+  /// Triage-only bulk keep. Picks every member of the currently-focused
+  /// photo's burst group, persists via `bulk_set_flag`, and records a
+  /// single batch undo entry so one Z undoes the whole group.
+  keepAllInCurrentGroup: () => Promise<void>;
 
   loadShoot: (shootId: number) => Promise<void>;
   /// Narrative-Select-style drilldown. Pass a groupId to open the inner
@@ -605,6 +636,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   heatmapCache: new Map<number, number[]>(),
   showReviewed: false,
   selectMinStar: 0,
+  showAllStrip: readBoolLS("photosift.rail.allStrip", true),
+  showFaces: readBoolLS("photosift.rail.faces", true),
 
   currentImage: () => {
     const { displayItems, currentIndex } = get();
@@ -693,18 +726,60 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   navigateNext: () => {
-    const { currentIndex, displayItems } = get();
+    const { currentIndex, displayItems, activeInnerGroupId } = get();
     if (currentIndex < displayItems.length - 1) {
       set({ currentIndex: currentIndex + 1, isZoomed: false });
       get().autoDrillIfOnCover();
+      return;
+    }
+    // End of the drilled-in group: step out into the flat view and land
+    // on whatever follows this group's cover. `autoDrillIfOnCover` then
+    // pulls us into the next burst if there is one, so arrow-through
+    // traversal is seamless across group boundaries.
+    if (activeInnerGroupId !== null) {
+      const { images, currentView, groups, sortByAi } = get();
+      const coverIdx = outerIndexOfGroupCover(
+        images,
+        currentView,
+        groups,
+        activeInnerGroupId,
+        currentAiOptions(sortByAi),
+      );
+      get().setActiveInnerGroup(null);
+      const fresh = get();
+      const targetIdx = coverIdx + 1;
+      if (targetIdx >= 0 && targetIdx < fresh.displayItems.length) {
+        set({ currentIndex: targetIdx, isZoomed: false });
+        get().autoDrillIfOnCover();
+      }
     }
   },
 
   navigatePrev: () => {
-    const { currentIndex } = get();
+    const { currentIndex, activeInnerGroupId } = get();
     if (currentIndex > 0) {
       set({ currentIndex: currentIndex - 1, isZoomed: false });
       get().autoDrillIfOnCover();
+      return;
+    }
+    // Start of the drilled-in group: step out into the flat view and
+    // land on whatever precedes this group's cover, mirroring the
+    // forward traversal so arrow keys never dead-end at a drill edge.
+    if (activeInnerGroupId !== null) {
+      const { images, currentView, groups, sortByAi } = get();
+      const coverIdx = outerIndexOfGroupCover(
+        images,
+        currentView,
+        groups,
+        activeInnerGroupId,
+        currentAiOptions(sortByAi),
+      );
+      get().setActiveInnerGroup(null);
+      const targetIdx = coverIdx - 1;
+      if (targetIdx >= 0) {
+        set({ currentIndex: targetIdx, isZoomed: false });
+        get().autoDrillIfOnCover();
+      }
     }
   },
 
@@ -1251,6 +1326,86 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   toggleShortcutHints: () =>
     set((s) => ({ showShortcutHints: !s.showShortcutHints })),
   toggleAiPanel: () => set((s) => ({ aiPanelForced: !s.aiPanelForced })),
+  toggleAllStrip: () =>
+    set((s) => {
+      const next = !s.showAllStrip;
+      writeBoolLS("photosift.rail.allStrip", next);
+      return { showAllStrip: next };
+    }),
+  toggleFaces: () =>
+    set((s) => {
+      const next = !s.showFaces;
+      writeBoolLS("photosift.rail.faces", next);
+      return { showFaces: next };
+    }),
+
+  keepAllInCurrentGroup: async () => {
+    const { displayItems, currentIndex, images, groups, currentView } = get();
+    if (currentView !== "triage") return;
+    const item = displayItems[currentIndex];
+    if (!item) return;
+    const gid = item.groupId
+      ?? groups.find((g) => g.members.some((m) => m.photoId === item.image.id))?.id;
+    if (gid === undefined) return;
+    const group = groups.find((g) => g.id === gid);
+    if (!group) return;
+
+    const targets: { id: number; oldFlag: string }[] = [];
+    for (const member of group.members) {
+      const img = images.find((i) => i.id === member.photoId);
+      if (img && img.flag !== "pick") {
+        targets.push({ id: img.id, oldFlag: img.flag });
+      }
+    }
+    if (targets.length === 0) return;
+
+    const targetIds = new Set(targets.map((t) => t.id));
+    const updatedImages = images.map((img) =>
+      targetIds.has(img.id) ? { ...img, flag: "pick" } : img,
+    );
+
+    try {
+      await invoke("bulk_set_flag", {
+        photoIds: targets.map((t) => t.id),
+        flag: "pick",
+      });
+    } catch (err) {
+      get().setToast(`Keep-group failed: ${err}`, "error");
+      return;
+    }
+
+    const { items: newDisplayItems, activeInnerGroupId: newActive } =
+      computeWithAutoExit(
+        updatedImages,
+        currentView,
+        groups,
+        get().activeInnerGroupId,
+        currentAiOptions(get().sortByAi),
+      );
+
+    const [first, ...rest] = targets;
+    const undoEntry: UndoEntry = {
+      imageId: first.id,
+      field: "flag",
+      oldValue: first.oldFlag,
+      newValue: "pick",
+      batch: [first, ...rest].map((t) => ({
+        imageId: t.id,
+        oldValue: t.oldFlag,
+        newValue: "pick",
+      })),
+    };
+
+    set({
+      images: updatedImages,
+      displayItems: newDisplayItems,
+      activeInnerGroupId: newActive,
+      undoStack: [...get().undoStack.slice(-49), undoEntry],
+      redoStack: [],
+      lastFlagAction: { color: "rgba(34, 197, 94, 0.15)", timestamp: Date.now() },
+    });
+    get().setToast(`Kept ${targets.length} in group`);
+  },
   toggleHeatmap: () => set((s) => ({ heatmapOn: !s.heatmapOn })),
   toggleShowReviewed: () => {
     set((s) => ({ showReviewed: !s.showReviewed }));

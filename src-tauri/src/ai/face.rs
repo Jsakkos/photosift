@@ -43,7 +43,7 @@ pub struct YuNetProvider {
 
 const INPUT_SIDE: usize = 640;
 const STRIDES: [u32; 3] = [8, 16, 32];
-const CONF_THRESHOLD: f32 = 0.6;
+const CONF_THRESHOLD: f32 = 0.5;
 const NMS_IOU_THRESHOLD: f32 = 0.3;
 
 /// Emits one `log::info!` the first time `detect()` observes the output

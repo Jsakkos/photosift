@@ -3,63 +3,13 @@ import { useParams, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { useProjectStore } from "../stores/projectStore";
 import { useKeyboardNav } from "../hooks/useKeyboardNav";
-import { LoupeView } from "../components/LoupeView";
-import { Filmstrip } from "../components/Filmstrip";
-import { InnerStrip } from "../components/InnerStrip";
 import { Toolbar } from "../components/Toolbar";
-import { RatingBar } from "../components/RatingBar";
-import { MetadataOverlay } from "../components/MetadataOverlay";
-import { ShortcutHints } from "../components/ShortcutHints";
-import { GroupStrip } from "../components/GroupStrip";
 import { GridView } from "../components/GridView";
 import { ComparisonView } from "../components/ComparisonView";
-import { AiPanel } from "../components/AiPanel";
-import { HeatmapOverlay } from "../components/HeatmapOverlay";
 import { EmptyViewState } from "../components/EmptyViewState";
-
-function useAiPanelVisibility() {
-  const currentItem = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
-  const aiPanelForced = useProjectStore((s) => s.aiPanelForced);
-  const faceCount = currentItem?.image.faceCount ?? 0;
-  const visible = currentItem != null && (faceCount > 0 || aiPanelForced);
-  return { visible, photoId: currentItem?.image.id };
-}
-
-function AiPanelHost() {
-  const { visible, photoId } = useAiPanelVisibility();
-  if (!photoId) return null;
-  return <AiPanel photoId={photoId} visible={visible} />;
-}
-
-/// Main loupe row: image area flex-grows, AI panel docks into a right
-/// column when visible so face tiles never cover the photo. The width
-/// transition keeps the reflow from snapping when `F` is pressed.
-function LoupeRow() {
-  const { visible } = useAiPanelVisibility();
-  return (
-    <div className="flex-1 flex overflow-hidden">
-      <div className="flex-1 relative overflow-hidden transition-[width] duration-150">
-        <LoupeView />
-        <HeatmapHost />
-        <MetadataOverlay />
-        <ShortcutHints />
-      </div>
-      <div
-        className="transition-[width] duration-150 border-l border-white/10 bg-[rgba(20,20,20,0.92)] overflow-hidden"
-        style={{ width: visible ? 380 : 0 }}
-        aria-hidden={!visible}
-      >
-        {visible && <AiPanelHost />}
-      </div>
-    </div>
-  );
-}
-
-function HeatmapHost() {
-  const currentItem = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
-  if (!currentItem) return null;
-  return <HeatmapOverlay photoId={currentItem.image.id} />;
-}
+import { TriageShell } from "../components/triage/TriageShell";
+import { SelectShell } from "../components/select/SelectShell";
+import { RouteShell } from "../components/route/RouteShell";
 
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
@@ -123,23 +73,35 @@ export function CullPage() {
 
   if (isLoading) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-[var(--bg-primary)]">
-        <p className="text-[var(--text-secondary)]">Loading shoot...</p>
+      <div
+        className="h-screen w-screen flex items-center justify-center"
+        style={{ background: "var(--color-bg)" }}
+      >
+        <p style={{ color: "var(--color-fg-dim)" }}>Loading shoot…</p>
       </div>
     );
   }
 
   if (loadError) {
     return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center gap-4 bg-[var(--bg-primary)]">
-        <p className="text-red-400 font-medium">Could not load shoot</p>
-        <p className="text-[var(--text-secondary)] text-sm max-w-md text-center">
+      <div
+        className="h-screen w-screen flex flex-col items-center justify-center gap-4"
+        style={{ background: "var(--color-bg)" }}
+      >
+        <p className="font-medium" style={{ color: "var(--color-danger)" }}>
+          Could not load shoot
+        </p>
+        <p
+          className="text-sm max-w-md text-center"
+          style={{ color: "var(--color-fg-dim)" }}
+        >
           {loadError}
         </p>
         <button
           type="button"
           onClick={() => navigate("/shoots")}
-          className="px-4 py-2 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm"
+          className="px-4 py-2 rounded-md text-white text-sm cursor-pointer border-0"
+          style={{ background: "var(--color-accent-blue)" }}
         >
           Back to shoots
         </button>
@@ -149,14 +111,20 @@ export function CullPage() {
 
   if (!currentShoot) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-[var(--bg-primary)]">
-        <p className="text-[var(--text-secondary)]">Shoot not found</p>
+      <div
+        className="h-screen w-screen flex items-center justify-center"
+        style={{ background: "var(--color-bg)" }}
+      >
+        <p style={{ color: "var(--color-fg-dim)" }}>Shoot not found</p>
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[var(--bg-primary)]">
+    <div
+      className="h-screen w-screen flex flex-col"
+      style={{ background: "var(--color-bg)" }}
+    >
       <Toolbar />
       {viewMode === "grid" ? (
         displayCount === 0 ? (
@@ -168,19 +136,12 @@ export function CullPage() {
         <ComparisonView />
       ) : displayCount === 0 ? (
         <EmptyViewState view={currentView} />
+      ) : currentView === "triage" ? (
+        <TriageShell />
+      ) : currentView === "select" ? (
+        <SelectShell />
       ) : (
-        <div className="flex-1 flex overflow-hidden">
-          <Filmstrip />
-          <InnerStrip />
-          <div className="flex-1 flex flex-col">
-            <LoupeRow />
-            <GroupStrip />
-            {/* Star rating is a Select-pass concept per spec — keep it
-                out of Triage (where P/X is the only decision) and Route
-                (where stars are a read-only filter gate, not an input). */}
-            {currentView === "select" && <RatingBar />}
-          </div>
-        </div>
+        <RouteShell />
       )}
     </div>
   );

@@ -290,7 +290,6 @@ export function GridView() {
               index={index}
               isFocused={index === focusIndex}
               isSelected={selection.has(index)}
-              isMulti={selection.size > 1}
               showGroupBar={isGroupMember}
               onClick={handleClick}
               onDoubleClick={() => {
@@ -336,32 +335,69 @@ export function GridView() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Size controls */}
-      <div className="flex items-center justify-end gap-2 px-3 py-1.5 bg-[var(--bg-secondary)] border-b border-white/5 text-xs text-[var(--text-secondary)]">
-        <button
-          onClick={() => {
-            const idx = SIZES.indexOf(colWidth);
-            if (idx > 0) setColWidth(SIZES[idx - 1]);
-          }}
-          title="Shrink thumbnails (-)"
-          aria-label="Shrink thumbnails"
-          className="w-6 h-6 flex items-center justify-center rounded bg-[var(--bg-tertiary)] border border-white/10 hover:border-white/20"
-        >
-          −
-        </button>
-        <span>{colWidth === 100 ? "Small" : colWidth === 160 ? "Medium" : "Large"}</span>
-        <button
-          onClick={() => {
-            const idx = SIZES.indexOf(colWidth);
-            if (idx < SIZES.length - 1) setColWidth(SIZES[idx + 1]);
-          }}
-          title="Grow thumbnails (+)"
-          aria-label="Grow thumbnails"
-          className="w-6 h-6 flex items-center justify-center rounded bg-[var(--bg-tertiary)] border border-white/10 hover:border-white/20"
-        >
-          +
-        </button>
-        <span className="ml-4">{displayItems.length} photos</span>
+      {/* Grid chrome — stage-aware title + thumb size + count */}
+      <div
+        className="flex items-center justify-between gap-3 px-4 py-[10px] border-b text-[11px]"
+        style={{
+          borderColor: "var(--color-border)",
+          background: "var(--color-bg)",
+          color: "var(--color-fg-dim)",
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-[10px] uppercase tracking-[1.2px]">
+            {currentView === "triage"
+              ? "Triage"
+              : currentView === "select"
+                ? "Select"
+                : "Route"}
+          </span>
+          <span
+            className="font-mono text-[10px] tabular-nums"
+            style={{ color: "var(--color-fg-mute)" }}
+          >
+            · grid · {displayItems.length} photo{displayItems.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <div className="flex items-center gap-[6px]">
+          <button
+            onClick={() => {
+              const idx = SIZES.indexOf(colWidth);
+              if (idx > 0) setColWidth(SIZES[idx - 1]);
+            }}
+            title="Shrink thumbnails (-)"
+            aria-label="Shrink thumbnails"
+            tabIndex={-1}
+            className="w-6 h-6 flex items-center justify-center rounded-xs cursor-pointer"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--color-border)",
+              color: "var(--color-fg-dim)",
+            }}
+          >
+            −
+          </button>
+          <span className="font-mono text-[10px] min-w-[50px] text-center">
+            {colWidth === 100 ? "Small" : colWidth === 160 ? "Medium" : "Large"}
+          </span>
+          <button
+            onClick={() => {
+              const idx = SIZES.indexOf(colWidth);
+              if (idx < SIZES.length - 1) setColWidth(SIZES[idx + 1]);
+            }}
+            title="Grow thumbnails (+)"
+            aria-label="Grow thumbnails"
+            tabIndex={-1}
+            className="w-6 h-6 flex items-center justify-center rounded-xs cursor-pointer"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--color-border)",
+              color: "var(--color-fg-dim)",
+            }}
+          >
+            +
+          </button>
+        </div>
       </div>
 
       {/* Virtualized grid */}
@@ -384,8 +420,17 @@ export function GridView() {
 
       {/* Bulk action bar */}
       {selection.size > 0 && (
-        <div className="flex items-center justify-between px-4 py-2 bg-[#1a1a2e] border-t border-[var(--accent)]/30 text-sm">
-          <span className="text-[var(--accent)] font-medium">
+        <div
+          className="flex items-center justify-between px-4 py-2 border-t text-sm"
+          style={{
+            background: "var(--color-bg2)",
+            borderColor: "var(--color-accent-blue)",
+          }}
+        >
+          <span
+            className="font-mono text-[11px] font-medium"
+            style={{ color: "var(--color-accent-blue)" }}
+          >
             {selection.size} selected
           </span>
           <div className="flex gap-3">
@@ -469,7 +514,6 @@ function GridThumb({
   index,
   isFocused,
   isSelected,
-  isMulti,
   showGroupBar,
   onClick,
   onDoubleClick,
@@ -479,7 +523,6 @@ function GridThumb({
   index: number;
   isFocused: boolean;
   isSelected: boolean;
-  isMulti: boolean;
   showGroupBar: boolean;
   onClick: (index: number, e: React.MouseEvent) => void;
   onDoubleClick: () => void;
@@ -506,18 +549,16 @@ function GridThumb({
       tabIndex={isFocused ? 0 : -1}
       aria-label={ariaLabel}
       aria-pressed={isSelected}
-      className={`relative w-full h-full rounded overflow-hidden cursor-pointer border-2 transition-all ${
+      className={`relative w-full h-full rounded-xs overflow-hidden cursor-pointer border-2 transition-all ${
         isSelected
-          ? isMulti
-            ? "border-purple-500 shadow-[0_0_0_1px_rgb(168,85,247)]"
-            : "border-[var(--accent)] shadow-[0_0_0_1px_var(--accent)]"
+          ? "border-[var(--color-accent-blue)] shadow-[0_0_0_1px_var(--color-accent-blue)]"
           : isFocused
-            ? "border-[var(--accent)]/50"
+            ? "border-[var(--color-accent-blue)]/60"
             : currentView === "triage" && image.flag === "pick"
-              ? "border-green-500/70 shadow-[inset_0_0_12px_rgba(34,197,94,0.18)]"
+              ? "border-[var(--color-success)]/70 shadow-[inset_0_0_12px_rgba(111,187,123,0.18)]"
               : currentView === "triage" && image.flag === "reject"
-                ? "border-red-500/60"
-                : "border-transparent hover:border-white/20"
+                ? "border-[var(--color-danger)]/60"
+                : "border-transparent hover:border-white/15"
       } ${isRejected ? "opacity-35" : ""}`}
       onClick={(e) => onClick(index, e)}
       onDoubleClick={onDoubleClick}

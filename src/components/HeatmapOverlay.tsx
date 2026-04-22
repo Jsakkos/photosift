@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useProjectStore } from "../stores/projectStore";
+import { imageUrl } from "../hooks/useImageLoader";
 
 // Must match the tile grid emitted by the Rust `get_heatmap` command
 // (see `src-tauri/src/commands/ai.rs`). Fine tiling + bilinear CSS
@@ -16,6 +17,27 @@ export function HeatmapOverlay({ photoId }: Props) {
   const heatmapOn = useProjectStore((s) => s.heatmapOn);
   const getData = useProjectStore((s) => s.getHeatmapData);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Aspect ratio of the underlying image, so the canvas letterboxes
+  // the same way LoupeView's `<img object-contain>` does. Without
+  // this the heatmap stretches across the full container and its
+  // tiles no longer line up with image features.
+  const [aspect, setAspect] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!heatmapOn) return;
+    // The browser has this image cached from LoupeView, so this is
+    // essentially a free naturalWidth/Height read.
+    const img = new Image();
+    img.onload = () => {
+      if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+        setAspect(img.naturalWidth / img.naturalHeight);
+      }
+    };
+    img.src = imageUrl(photoId);
+    return () => {
+      img.onload = null;
+    };
+  }, [heatmapOn, photoId]);
 
   useEffect(() => {
     if (!heatmapOn) return;
@@ -35,18 +57,30 @@ export function HeatmapOverlay({ photoId }: Props) {
       }
     });
     return unsub;
-  }, [heatmapOn, photoId, getData]);
+  }, [heatmapOn, photoId, getData, aspect]);
 
   if (!heatmapOn) return null;
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={GRID_COLS}
-      height={GRID_ROWS}
-      aria-hidden="true"
-      className="absolute inset-0 w-full h-full pointer-events-none z-[5] opacity-35"
-    />
+    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[5]">
+      <canvas
+        ref={canvasRef}
+        width={GRID_COLS}
+        height={GRID_ROWS}
+        aria-hidden="true"
+        className="opacity-35"
+        style={{
+          maxWidth: "100%",
+          maxHeight: "100%",
+          aspectRatio: aspect ?? undefined,
+          // Fall back to filling the box until we know the aspect —
+          // still better than the old always-stretched behavior for
+          // 3:2 shots which are the D750 default.
+          width: aspect ? undefined : "100%",
+          height: aspect ? undefined : "100%",
+        }}
+      />
+    </div>
   );
 }
 
