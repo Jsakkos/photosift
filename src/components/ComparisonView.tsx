@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
+import { currentPair as bracketCurrentPair } from "../lib/bracket";
 import { Kbd, Stars } from "./primitives";
 import type { ImageEntry } from "../types";
 
@@ -10,7 +11,6 @@ type PanelProps = {
   side: Side;
   image: ImageEntry | null;
   url: string | null;
-  picked: boolean;
   scale: number;
   imgStyle: React.CSSProperties;
 };
@@ -32,7 +32,7 @@ function ScorePill({ label, value }: { label: string; value: number }) {
   );
 }
 
-function ComparePanel({ side, image, url, picked, scale, imgStyle }: PanelProps) {
+function ComparePanel({ side, image, url, scale, imgStyle }: PanelProps) {
   if (!image) return <div className="flex-1" style={{ background: "#0a0a0a" }} />;
   const rating = Math.max(0, Math.min(5, image.starRating)) as 0 | 1 | 2 | 3 | 4 | 5;
   const sharp = Math.round(image.sharpnessScore ?? 0);
@@ -52,10 +52,9 @@ function ComparePanel({ side, image, url, picked, scale, imgStyle }: PanelProps)
       <div className="flex-1 relative overflow-hidden">
         <div
           className="absolute top-3 left-3 z-10 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[1px]"
-          style={{ color: picked ? "var(--color-success)" : "var(--color-fg-dim)" }}
+          style={{ color: "var(--color-fg-dim)" }}
         >
           <span>{side}</span>
-          {picked && <span>✓ picked</span>}
         </div>
         {scale > 1 && (
           <div
@@ -100,34 +99,36 @@ function ComparePanel({ side, image, url, picked, scale, imgStyle }: PanelProps)
 }
 
 export function ComparisonView() {
-  const comparisonPinnedId = useProjectStore((s) => s.comparisonPinnedId);
-  const comparisonCyclingId = useProjectStore((s) => s.comparisonCyclingId);
-  const comparisonGroupMembers = useProjectStore((s) => s.comparisonGroupMembers);
+  const selectBracket = useProjectStore((s) => s.selectBracket);
   const images = useProjectStore((s) => s.images);
   const groups = useProjectStore((s) => s.groups);
 
-  const pinnedImage = images.find((i) => i.id === comparisonPinnedId) ?? null;
-  const cyclingImage = images.find((i) => i.id === comparisonCyclingId) ?? null;
+  const pair = selectBracket ? bracketCurrentPair(selectBracket) : null;
+  const leftId = pair?.left ?? null;
+  const rightId = pair?.right ?? null;
 
-  const { displayUrl: pinnedUrl } = useImageLoader(comparisonPinnedId);
-  const { displayUrl: cyclingUrl } = useImageLoader(comparisonCyclingId);
+  const leftImage = images.find((i) => i.id === leftId) ?? null;
+  const rightImage = images.find((i) => i.id === rightId) ?? null;
+
+  const { displayUrl: leftUrl } = useImageLoader(leftId);
+  const { displayUrl: rightUrl } = useImageLoader(rightId);
 
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
 
-  const availableMembers = comparisonGroupMembers.filter((id) => {
-    const img = images.find((i) => i.id === id);
-    return img && img.flag !== "reject";
-  });
-  const cyclingIdx = availableMembers.indexOf(comparisonCyclingId!);
+  const round = selectBracket ? selectBracket.currentRound + 1 : 0;
+  const pairIdx = selectBracket ? selectBracket.currentPairIndex + 1 : 0;
+  const totalRealPairs = selectBracket
+    ? selectBracket.rounds[selectBracket.currentRound]?.pairs.filter(
+        (p) => p.right !== null,
+      ).length ?? 0
+    : 0;
 
   const groupOrdinal = (() => {
-    if (!pinnedImage) return 0;
+    if (!selectBracket) return 0;
     const ordered = [...groups].sort((a, b) => a.id - b.id);
-    const gid = ordered.find((g) => g.members.some((m) => m.photoId === pinnedImage.id))?.id;
-    if (gid === undefined) return 0;
-    return ordered.findIndex((g) => g.id === gid) + 1;
+    return ordered.findIndex((g) => g.id === selectBracket.groupId) + 1;
   })();
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -174,14 +175,14 @@ export function ComparisonView() {
         style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
       >
         <span className="font-mono text-[11px]" style={{ color: "var(--color-fg)" }}>
-          2-up compare
+          2-up bracket
         </span>
         {groupOrdinal > 0 && (
           <span
             className="font-mono text-[10px]"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            · Group G{groupOrdinal} · {cyclingIdx + 1}/{availableMembers.length}
+            · Group G{groupOrdinal} · Round {round} · Pair {pairIdx}/{totalRealPairs}
           </span>
         )}
         <span
@@ -210,12 +211,21 @@ export function ComparisonView() {
           </span>
         </div>
         <div className="flex items-center gap-[8px]">
-          <Kbd>Esc</Kbd>
+          <Kbd>3</Kbd>
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            style={{ color: "var(--color-accent-2)" }}
+          >
+            both
+          </span>
+        </div>
+        <div className="flex items-center gap-[8px]">
+          <Kbd>Tab</Kbd>
           <span
             className="font-mono text-[10px] uppercase tracking-[0.6px]"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            exit
+            single
           </span>
         </div>
       </div>
@@ -235,17 +245,15 @@ export function ComparisonView() {
       >
         <ComparePanel
           side="L"
-          image={pinnedImage}
-          url={pinnedUrl}
-          picked
+          image={leftImage}
+          url={leftUrl}
           scale={transform.scale}
           imgStyle={imgStyle}
         />
         <ComparePanel
           side="R"
-          image={cyclingImage}
-          url={cyclingUrl}
-          picked={false}
+          image={rightImage}
+          url={rightUrl}
           scale={transform.scale}
           imgStyle={imgStyle}
         />
@@ -256,12 +264,9 @@ export function ComparisonView() {
         style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
       >
         <span className="font-mono text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
-          Winner promoted · pan + zoom synchronised
+          Winner(s) promoted · pan + zoom synchronised
         </span>
         <div className="flex-1" />
-        <span className="font-mono text-[10px]" style={{ color: "var(--color-fg-mute)" }}>
-          ◀ ▶ cycle right panel
-        </span>
       </div>
     </div>
   );

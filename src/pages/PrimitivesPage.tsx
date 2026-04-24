@@ -193,7 +193,6 @@ export function PrimitivesPage() {
               src={null}
               placeholderSeed="keep-a"
               verdict="keep"
-              rating={3}
               groupMember
               className="rounded-xs"
               style={{ width: 160, height: 100 }}
@@ -210,7 +209,6 @@ export function PrimitivesPage() {
               src={null}
               placeholderSeed="selected-c"
               selected
-              rating={5}
               colorLabel="green"
               className="rounded-xs"
               style={{ width: 160, height: 100 }}

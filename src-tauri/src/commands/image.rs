@@ -26,6 +26,7 @@ pub struct ImageInfo {
     pub quality_score: Option<f64>,
     pub ai_analyzed_at: Option<String>,
     pub max_smile_score: Option<f64>,
+    pub select_visited_at: Option<String>,
 }
 
 impl From<PhotoRow> for ImageInfo {
@@ -51,6 +52,7 @@ impl From<PhotoRow> for ImageInfo {
             quality_score: row.quality_score,
             ai_analyzed_at: row.ai_analyzed_at,
             max_smile_score: row.max_smile_score,
+            select_visited_at: row.select_visited_at,
         }
     }
 }

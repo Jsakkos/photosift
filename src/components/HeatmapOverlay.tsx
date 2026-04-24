@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { imageUrl } from "../hooks/useImageLoader";
 
@@ -17,16 +17,18 @@ export function HeatmapOverlay({ photoId }: Props) {
   const heatmapOn = useProjectStore((s) => s.heatmapOn);
   const getData = useProjectStore((s) => s.getHeatmapData);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Aspect ratio of the underlying image, so the canvas letterboxes
-  // the same way LoupeView's `<img object-contain>` does. Without
-  // this the heatmap stretches across the full container and its
-  // tiles no longer line up with image features.
+  const containerRef = useRef<HTMLDivElement>(null);
   const [aspect, setAspect] = useState<number | null>(null);
+  // Letterboxed rect matching where LoupeView's `<img object-contain>`
+  // actually draws. CSS alone can't express this: `aspect-ratio` +
+  // `max-*` on a wrapper lets width or height dominate depending on the
+  // container's own aspect, so the wrapper ends up at container size
+  // rather than the image's displayed size. A ResizeObserver measures
+  // the container and we compute the contain-fit rect directly.
+  const [rect, setRect] = useState<{ w: number; h: number } | null>(null);
 
   useEffect(() => {
     if (!heatmapOn) return;
-    // The browser has this image cached from LoupeView, so this is
-    // essentially a free naturalWidth/Height read.
     const img = new Image();
     img.onload = () => {
       if (img.naturalWidth > 0 && img.naturalHeight > 0) {
@@ -39,6 +41,28 @@ export function HeatmapOverlay({ photoId }: Props) {
     };
   }, [heatmapOn, photoId]);
 
+  useLayoutEffect(() => {
+    if (!heatmapOn || !aspect) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const compute = () => {
+      const { width, height } = el.getBoundingClientRect();
+      if (width === 0 || height === 0) return;
+      const containerAspect = width / height;
+      if (containerAspect > aspect) {
+        // Container is wider than the image; letterbox horizontally.
+        setRect({ w: Math.round(height * aspect), h: Math.round(height) });
+      } else {
+        // Container is taller (or equal); letterbox vertically.
+        setRect({ w: Math.round(width), h: Math.round(width / aspect) });
+      }
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [heatmapOn, aspect]);
+
   useEffect(() => {
     if (!heatmapOn) return;
     const data = getData(photoId);
@@ -46,8 +70,6 @@ export function HeatmapOverlay({ photoId }: Props) {
       draw(canvasRef.current, data);
       return;
     }
-    // Data not cached yet — subscribe to the cache map for this photo,
-    // drawing once the backend returns.
     const unsub = useProjectStore.subscribe((state, prev) => {
       if (state.heatmapCache === prev.heatmapCache) return;
       const grid = state.heatmapCache.get(photoId);
@@ -57,29 +79,25 @@ export function HeatmapOverlay({ photoId }: Props) {
       }
     });
     return unsub;
-  }, [heatmapOn, photoId, getData, aspect]);
+  }, [heatmapOn, photoId, getData, rect]);
 
   if (!heatmapOn) return null;
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[5]">
-      <canvas
-        ref={canvasRef}
-        width={GRID_COLS}
-        height={GRID_ROWS}
-        aria-hidden="true"
-        className="opacity-35"
-        style={{
-          maxWidth: "100%",
-          maxHeight: "100%",
-          aspectRatio: aspect ?? undefined,
-          // Fall back to filling the box until we know the aspect —
-          // still better than the old always-stretched behavior for
-          // 3:2 shots which are the D750 default.
-          width: aspect ? undefined : "100%",
-          height: aspect ? undefined : "100%",
-        }}
-      />
+    <div
+      ref={containerRef}
+      className="absolute inset-0 flex items-center justify-center pointer-events-none z-[5]"
+    >
+      {rect && (
+        <canvas
+          ref={canvasRef}
+          width={GRID_COLS}
+          height={GRID_ROWS}
+          aria-hidden="true"
+          className="opacity-35"
+          style={{ width: rect.w, height: rect.h, display: "block" }}
+        />
+      )}
     </div>
   );
 }

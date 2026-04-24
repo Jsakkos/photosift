@@ -40,7 +40,11 @@ export function setupMockIpc(
       case "update_settings":
       case "create_group_from_photos":
       case "ungroup_photos":
+      case "mark_photo_visited_in_select":
+      case "bump_select_max_floor":
         return undefined;
+      case "sync_layout_if_eligible":
+        return null;
       case "get_settings":
         return {
           nearDupThreshold: 4,

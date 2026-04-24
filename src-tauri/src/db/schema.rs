@@ -25,6 +25,8 @@ const SHOOT_SUMMARY_SQL_LIST: &str =
        COALESCE(SUM(CASE WHEN p.flag = 'pick' THEN 1 ELSE 0 END), 0) AS picks, \
        COALESCE(SUM(CASE WHEN p.flag = 'reject' THEN 1 ELSE 0 END), 0) AS rejects, \
        COALESCE(SUM(CASE WHEN p.flag = 'unreviewed' THEN 1 ELSE 0 END), 0) AS unreviewed, \
+       COALESCE(SUM(CASE WHEN p.flag = 'pick' AND p.destination != 'unrouted' THEN 1 ELSE 0 END), 0) AS routed, \
+       COALESCE(SUM(CASE WHEN p.select_visited_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS select_visited, \
        (SELECT view_name FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_view, \
        (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at, \
        s.cover_photo_id AS cover_photo_id \
@@ -36,6 +38,8 @@ const SHOOT_SUMMARY_SQL_ONE: &str =
        COALESCE(SUM(CASE WHEN p.flag = 'pick' THEN 1 ELSE 0 END), 0) AS picks, \
        COALESCE(SUM(CASE WHEN p.flag = 'reject' THEN 1 ELSE 0 END), 0) AS rejects, \
        COALESCE(SUM(CASE WHEN p.flag = 'unreviewed' THEN 1 ELSE 0 END), 0) AS unreviewed, \
+       COALESCE(SUM(CASE WHEN p.flag = 'pick' AND p.destination != 'unrouted' THEN 1 ELSE 0 END), 0) AS routed, \
+       COALESCE(SUM(CASE WHEN p.select_visited_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS select_visited, \
        (SELECT view_name FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_view, \
        (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at, \
        s.cover_photo_id AS cover_photo_id \
@@ -55,9 +59,11 @@ fn row_to_shoot(row: &Row<'_>) -> Result<ShootRow> {
         picks: row.get(8)?,
         rejects: row.get(9)?,
         unreviewed: row.get(10)?,
-        last_view: row.get(11)?,
-        last_opened_at: row.get(12)?,
-        cover_photo_id: row.get(13)?,
+        routed: row.get(11)?,
+        select_visited: row.get(12)?,
+        last_view: row.get(13)?,
+        last_opened_at: row.get(14)?,
+        cover_photo_id: row.get(15)?,
     })
 }
 
@@ -82,6 +88,15 @@ pub struct ShootRow {
     pub picks: i64,
     pub rejects: i64,
     pub unreviewed: i64,
+    /// Picks that already have a destination (edit or export). When
+    /// `routed == picks` and `unreviewed == 0`, the shoot is fully routed
+    /// and the Library badge can flip to "✓ routed". Before that it's
+    /// only "triaged".
+    pub routed: i64,
+    /// Photos the user has focused at least once in Select view. Lets the
+    /// Library surface a subtle "select in progress" hint later without
+    /// needing another query.
+    pub select_visited: i64,
     // Most recent view_cursor for this shoot, so the shoot card can offer
     // a "Continue [view]" CTA that jumps straight back to where the user
     // left off. Null when the user has never opened the shoot.
@@ -131,6 +146,11 @@ pub struct PhotoRow {
     /// INSERT is transactional with the photo aggregate update, so an
     /// on-demand MAX() is always consistent with the per-face values.
     pub max_smile_score: Option<f64>,
+    /// First time this photo was the focused frame in Select view. `None`
+    /// means the user has never looked at it in Select. Used by the
+    /// auto-reorganize trigger to decide whether the Select pass is far
+    /// enough along to finalize the kept set into `selects/`.
+    pub select_visited_at: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -403,6 +423,59 @@ impl Database {
         self.ensure_column("faces", "smile_score", "REAL")?;
         self.ensure_column("settings", "immich_ingest_path", "TEXT")?;
         self.ensure_column("faces", "species", "TEXT NOT NULL DEFAULT 'human'")?;
+        // Auto-reorganize-on-pass-complete tracking.
+        // `photos.select_visited_at` gates the "all picks visited" check
+        // that's half of the Select→Route sync trigger.
+        self.ensure_column("photos", "select_visited_at", "TEXT")?;
+        // `shoots.select_max_floor_reached` is the other half — records
+        // the highest pass-floor (selectMinStar) the user has ever bumped
+        // to for this shoot, so "did they actually run a narrowing pass?"
+        // survives app restarts.
+        self.ensure_column(
+            "shoots",
+            "select_max_floor_reached",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.create_file_moves_table()?;
+        // Destination enum consolidation (2026-04): the Route pass merged
+        // `dxo` into `edit` (one "ready to edit" bucket) and renamed
+        // `publish_direct` to `export`. Gate on `PRAGMA user_version` so we
+        // don't scan the full photos table on every app open once the
+        // one-shot UPDATE has run. Later `sync_shoot_layout` calls will
+        // relocate any files still sitting in the retired `RAW/dxo/` folder.
+        let version: i32 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version < 1 {
+            self.conn.execute(
+                "UPDATE photos SET destination = 'edit' WHERE destination = 'dxo'",
+                [],
+            )?;
+            self.conn.execute(
+                "UPDATE photos SET destination = 'export' WHERE destination = 'publish_direct'",
+                [],
+            )?;
+            // PRAGMA doesn't accept bound parameters, so inline the literal.
+            self.conn.execute_batch("PRAGMA user_version = 1")?;
+        }
+        Ok(())
+    }
+
+    /// Append-only audit log of RAW file moves performed by
+    /// `sync_shoot_layout`. Not used for reversal — reversal happens
+    /// idempotently by flipping metadata and re-running sync — but keeps
+    /// a debuggable history of every move we've made.
+    fn create_file_moves_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS file_moves (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL,
+                from_path TEXT NOT NULL,
+                to_path TEXT NOT NULL,
+                moved_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_file_moves_photo ON file_moves(photo_id);",
+        )?;
         Ok(())
     }
 
@@ -637,7 +710,8 @@ impl Database {
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
                     iso, orientation, flag, destination, star_rating,
                     face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
-                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score
+                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score,
+                    select_visited_at
              FROM photos WHERE id = ?1",
             params![photo_id],
             row_to_photo,
@@ -650,7 +724,8 @@ impl Database {
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
                     iso, orientation, flag, destination, star_rating,
                     face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
-                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score
+                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score,
+                    select_visited_at
              FROM photos
              WHERE shoot_id = ?1
              ORDER BY exif_date ASC NULLS LAST, id ASC",
@@ -672,7 +747,8 @@ impl Database {
                     exif_date, camera, lens, focal_length, aperture, shutter_speed,
                     iso, orientation, flag, destination, star_rating,
                     face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
-                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score
+                    (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score,
+                    select_visited_at
              FROM photos
              WHERE shoot_id = ?1 AND destination = ?2
              ORDER BY exif_date ASC NULLS LAST, id ASC",
@@ -695,6 +771,77 @@ impl Database {
             params![photo_id],
             |row| row.get(0),
         )
+    }
+
+    // ---- Layout sync helpers ----
+
+    /// Record that a photo was the focused frame in Select view. First-
+    /// write wins — `WHERE select_visited_at IS NULL` means revisits
+    /// don't reset the "visited" bit, so the "all picks visited" gate
+    /// is monotonic and can't regress.
+    pub fn mark_select_visited(&self, photo_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE photos SET select_visited_at = datetime('now')
+             WHERE id = ?1 AND select_visited_at IS NULL",
+            params![photo_id],
+        )?;
+        Ok(())
+    }
+
+    /// Number of `flag='pick'` photos in the shoot that haven't been
+    /// visited in Select view yet. The Select→Route trigger only fires
+    /// when this is zero.
+    pub fn unvisited_pick_count(&self, shoot_id: i64) -> Result<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM photos
+             WHERE shoot_id = ?1 AND flag = 'pick' AND select_visited_at IS NULL",
+            params![shoot_id],
+            |r| r.get(0),
+        )
+    }
+
+    /// Bump the per-shoot "max pass floor reached" if `floor` exceeds the
+    /// stored value. Idempotent with respect to lower values — keeps the
+    /// cross-session guarantee that once a user has run a narrowing pass,
+    /// sync can finalize `selects/` without re-requiring the bump.
+    pub fn bump_select_max_floor(&self, shoot_id: i64, floor: i32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE shoots SET select_max_floor_reached = ?2
+             WHERE id = ?1 AND select_max_floor_reached < ?2",
+            params![shoot_id, floor],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_select_max_floor(&self, shoot_id: i64) -> Result<i32> {
+        self.conn
+            .query_row(
+                "SELECT select_max_floor_reached FROM shoots WHERE id = ?1",
+                params![shoot_id],
+                |r| r.get(0),
+            )
+            .or(Ok(0))
+    }
+
+    /// Update the on-disk location tracked for a RAW. Called from
+    /// `sync_shoot_layout` after a successful `fs::rename`. The preview
+    /// and thumbnail paths live in the photo-id-keyed cache at
+    /// `~/.photosift/cache/{shoot_id}/…` so they're untouched by moves.
+    pub fn update_raw_path(&self, photo_id: i64, new_raw_path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE photos SET raw_path = ?2 WHERE id = ?1",
+            params![photo_id, new_raw_path],
+        )?;
+        Ok(())
+    }
+
+    pub fn log_file_move(&self, photo_id: i64, from: &str, to: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO file_moves (photo_id, from_path, to_path)
+             VALUES (?1, ?2, ?3)",
+            params![photo_id, from, to],
+        )?;
+        Ok(())
     }
 
     // ---- Groups ----
@@ -1284,6 +1431,7 @@ fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {
         quality_score: row.get(20)?,
         ai_analyzed_at: row.get(21)?,
         max_smile_score: row.get(22)?,
+        select_visited_at: row.get(23)?,
     })
 }
 

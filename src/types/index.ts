@@ -28,6 +28,10 @@ export interface ImageEntry {
   /// no mouth classifier is loaded or no faces were detected. Drives the
   /// smile factor in the AI pick formula.
   maxSmileScore?: number | null;
+  /// First time this photo was the focused frame in Select view. Null
+  /// until the user lands on it. Read-only in the UI; the
+  /// `mark_photo_visited_in_select` command stamps this server-side.
+  selectVisitedAt?: string | null;
 }
 
 export interface ShootSummary {
@@ -44,6 +48,14 @@ export interface ShootSummary {
   picks?: number;
   rejects?: number;
   unreviewed?: number;
+  /// Picks that already have a destination (edit or export). Lets the
+  /// Library distinguish "triaged" (all flagged, routing pending) from
+  /// "✓ routed" (every pick placed).
+  routed?: number;
+  /// Count of photos the user has focused at least once in Select. A
+  /// non-zero value means the Select pass is in progress even if no
+  /// stars have been assigned yet.
+  selectVisited?: number;
   // Most recent view_cursor row for this shoot, so the shoot card can
   // offer a "Continue [view]" CTA. Null/undefined when the user has
   // never opened the shoot.
@@ -55,7 +67,7 @@ export interface ShootSummary {
 }
 
 export type CullView = "triage" | "select" | "route";
-export type ViewMode = "sequential" | "grid" | "comparison";
+export type ViewMode = "sequential" | "grid";
 
 export interface DisplayItem {
   imageIndex: number;
@@ -135,6 +147,17 @@ export interface PublishDirectReport {
   skipped: number;
   failed: number;
   destDir: string;
+  errors: string[];
+}
+
+/// Summary of a `sync_shoot_layout` run. Returned from the
+/// `sync_layout_if_eligible` IPC; `null` means the trigger was gated out
+/// server-side and nothing ran.
+export interface SyncReport {
+  moved: { photoId: number; from: string; to: string }[];
+  skippedAlreadyPlaced: number;
+  missing: string[];
+  collisions: string[];
   errors: string[];
 }
 

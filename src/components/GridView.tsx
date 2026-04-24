@@ -12,7 +12,6 @@ export function GridView() {
     displayItems,
     setCurrentIndex,
     setFlag,
-    setDestination,
     setViewMode,
     currentView,
     createGroupFromPhotos,
@@ -49,11 +48,10 @@ export function GridView() {
     gridRef.current.scrollToItem({ rowIndex, columnIndex, align: "smart" });
   }, [focusIndex, columnCount]);
 
-  // Refs so the keyboard effect can invoke the latest bulk handlers
-  // without pulling them into its dependency array (which would forward-
+  // Ref so the keyboard effect can invoke the latest bulk handler
+  // without pulling it into its dependency array (which would forward-
   // reference the useCallback decls below and cause a TDZ error).
   const bulkActionRef = useRef<((flag: string) => void) | null>(null);
-  const bulkDestRef = useRef<((dest: string) => void) | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -131,25 +129,7 @@ export function GridView() {
           if (e.ctrlKey || e.metaKey || e.altKey) break;
           if (selection.size === 0) break;
           e.preventDefault();
-          if (currentView === "route") {
-            bulkDestRef.current?.("unrouted");
-          } else {
-            bulkActionRef.current?.("unreviewed");
-          }
-          break;
-        case "e":
-        case "E":
-          if (e.ctrlKey || e.metaKey || e.altKey) break;
-          if (currentView !== "route" || selection.size === 0) break;
-          e.preventDefault();
-          bulkDestRef.current?.("edit");
-          break;
-        case "d":
-        case "D":
-          if (e.ctrlKey || e.metaKey || e.altKey) break;
-          if (currentView !== "route" || selection.size === 0) break;
-          e.preventDefault();
-          bulkDestRef.current?.("publish_direct");
+          bulkActionRef.current?.("unreviewed");
           break;
       }
     };
@@ -190,30 +170,9 @@ export function GridView() {
     [selection, focusIndex, displayItems, setCurrentIndex, setFlag],
   );
 
-  /// Bulk destination — parallel to handleBulkAction but for the E/D
-  /// route keys. Guarded on currentView since destination semantics
-  /// only make sense in the Route pass (Select/Triage have no
-  /// destination keybinds).
-  const handleBulkDestination = useCallback(
-    async (destination: string) => {
-      if (currentView !== "route") return;
-      const indices = selection.size > 0 ? [...selection] : [focusIndex];
-      for (const idx of indices) {
-        const item = displayItems[idx];
-        if (item) {
-          setCurrentIndex(idx);
-          await setDestination(destination);
-        }
-      }
-      setSelection(new Set());
-    },
-    [selection, focusIndex, displayItems, setCurrentIndex, setDestination, currentView],
-  );
-
-  // Keep the key-handler refs pointing at the latest useCallbacks so
-  // their invocations inside the keydown effect always see current state.
+  // Keep the key-handler ref pointing at the latest useCallback so its
+  // invocation inside the keydown effect always sees current state.
   bulkActionRef.current = handleBulkAction;
-  bulkDestRef.current = handleBulkDestination;
 
   const selectedPhotoIds = useMemo(
     () =>
@@ -455,24 +414,6 @@ export function GridView() {
             >
               U Reset
             </button>
-            {currentView === "route" && (
-              <>
-                <button
-                  onClick={() => handleBulkDestination("edit")}
-                  title="Route to edit (E)"
-                  className="px-3 py-1 rounded border border-amber-500/40 text-amber-400 text-xs hover:bg-amber-500/10"
-                >
-                  E Edit
-                </button>
-                <button
-                  onClick={() => handleBulkDestination("publish_direct")}
-                  title="Publish direct (D)"
-                  className="px-3 py-1 rounded border border-blue-500/40 text-blue-400 text-xs hover:bg-blue-500/10"
-                >
-                  D Publish
-                </button>
-              </>
-            )}
             {selection.size >= 2 && (
               <button
                 onClick={handleGroup}
@@ -591,19 +532,19 @@ function GridThumb({
       {image.destination === "edit" && (
         <div
           className={`absolute ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}
-          title={"Route: edit\nHeaded to Capture One / DxO for develop work.\nPress E in Route view to set."}
-          aria-label="Route: edit"
+          title={"Route: Capture One\nReady to drag into Capture One (or DxO)."}
+          aria-label="Route: Capture One"
         >
-          EDIT
+          C1
         </div>
       )}
-      {image.destination === "publish_direct" && (
+      {image.destination === "export" && (
         <div
           className={`absolute ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}
-          title={"Route: publish direct\nCached JPEG copied to Immich ingest folder by the Publish button.\nPress D in Route view to set."}
-          aria-label="Route: publish direct"
+          title={"Route: Export\nCached JPEG copied to Immich ingest folder by the Publish button."}
+          aria-label="Route: Export"
         >
-          PUBLISH
+          EXP
         </div>
       )}
       {/* Group stack indicator */}

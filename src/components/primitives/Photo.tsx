@@ -1,7 +1,6 @@
 import { memo, type CSSProperties, type ReactNode } from "react";
 import type { ColorLabelValue } from "./ColorLabel";
 import { ColorLabelChip } from "./ColorLabel";
-import { Stars, type StarCount } from "./Stars";
 
 export type Verdict = "keep" | "toss" | null;
 
@@ -15,7 +14,6 @@ type PhotoProps = {
   sharp?: number;
 
   verdict?: Verdict;
-  rating?: StarCount;
   colorLabel?: ColorLabelValue | null;
   groupMember?: boolean;
   selected?: boolean;
@@ -69,7 +67,6 @@ function PhotoInner({
   dim = 1,
   sharp = 1,
   verdict = null,
-  rating,
   colorLabel,
   groupMember = false,
   selected = false,
@@ -126,12 +123,6 @@ function PhotoInner({
       )}
 
       {verdict !== null && <VerdictBadge verdict={verdict} />}
-
-      {rating !== undefined && rating > 0 && (
-        <div className="absolute bottom-1 left-1 px-[4px] py-[2px] rounded-xs bg-black/55 backdrop-blur-sm">
-          <Stars value={rating} size={9} />
-        </div>
-      )}
 
       {colorLabel && (
         <div className="absolute bottom-1 right-1">

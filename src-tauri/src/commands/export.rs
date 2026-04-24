@@ -1,49 +1,8 @@
 use crate::db::schema::shoot_cache_dir;
-use crate::metadata::xmp;
 use crate::state::AppState;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::State;
-
-/// Write XMP sidecars for the current shoot.
-/// `filter` selects the subset:
-///  - "picks"      → all photos with flag = 'pick'
-///  - "picks_edit" → picks with destination = 'edit'
-///  - "all"        → every photo in the shoot
-/// Returns the number of sidecars written.
-#[tauri::command]
-pub fn export_xmp(
-    shoot_id: i64,
-    filter: String,
-    state: State<'_, Mutex<AppState>>,
-) -> Result<usize, String> {
-    let app_state = state.lock().map_err(|e| e.to_string())?;
-    let db = app_state.db.as_ref().ok_or("Database not open")?;
-
-    let photos = db.photos_for_shoot(shoot_id).map_err(|e| e.to_string())?;
-
-    let filtered: Vec<_> = photos
-        .into_iter()
-        .filter(|p| match filter.as_str() {
-            "picks" => p.flag == "pick",
-            "picks_edit" => p.flag == "pick" && p.destination == "edit",
-            "all" => true,
-            _ => false,
-        })
-        .collect();
-
-    let mut written = 0usize;
-    for p in &filtered {
-        let path = Path::new(&p.raw_path);
-        if let Err(e) = xmp::write_cull_metadata(path, p.star_rating, &p.flag, &p.destination) {
-            log::error!("XMP export failed for {:?}: {}", path, e);
-            continue;
-        }
-        written += 1;
-    }
-
-    Ok(written)
-}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,8 +19,8 @@ pub struct PublishDirectReport {
 const MAX_REPORT_ERRORS: usize = 5;
 
 /// Copy the cached JPEG preview for every photo whose destination is
-/// "publish_direct" into the configured external ingest folder (e.g.
-/// Immich's upload directory).
+/// "export" into the configured external ingest folder (e.g. Immich's
+/// upload directory).
 ///
 /// Errors with "immich_ingest_path not configured" when the setting is
 /// unset so the UI can prompt the user. Idempotent: existing files at
@@ -88,7 +47,7 @@ pub fn export_publish_direct(
         .map_err(|e| format!("cannot create ingest dir {}: {}", dest_dir.display(), e))?;
 
     let photos = db
-        .photos_by_destination(shoot_id, "publish_direct")
+        .photos_by_destination(shoot_id, "export")
         .map_err(|e| e.to_string())?;
 
     let preview_dir = shoot_cache_dir(shoot_id).join("previews");

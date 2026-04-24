@@ -14,6 +14,63 @@ import type { Face } from "../types";
 /// from a thumb requires a ~2x CSS upscale that looks blurry. The
 /// full-res preview is already in the LoupeView's cache by the time
 /// the panel renders, so there's no extra network hit.
+///
+/// Auto-exposure: once the image loads, sample the face region into a
+/// tiny offscreen canvas and compute mean luminance + p5/p95. We then
+/// apply a `brightness()/contrast()` CSS filter to lift underexposed
+/// crops into a readable range. Clamps the brightness floor at 1.0 so
+/// already-exposed faces are never darkened. Rust-free; tauri:// assets
+/// are same-origin so getImageData works without CORS headers.
+function autoExposureFilter(
+  img: HTMLImageElement,
+  face: Face,
+  natural: { w: number; h: number },
+): string | undefined {
+  const SAMPLE = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = SAMPLE;
+  canvas.height = SAMPLE;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return undefined;
+
+  const sx = Math.max(0, face.bboxX * natural.w);
+  const sy = Math.max(0, face.bboxY * natural.h);
+  const sw = Math.max(1, face.bboxW * natural.w);
+  const sh = Math.max(1, face.bboxH * natural.h);
+
+  try {
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, SAMPLE, SAMPLE);
+    const { data } = ctx.getImageData(0, 0, SAMPLE, SAMPLE);
+    const lums = new Float32Array(SAMPLE * SAMPLE);
+    let sum = 0;
+    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+      const L = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+      lums[j] = L;
+      sum += L;
+    }
+    const mean = sum / lums.length;
+    // Float32Array.sort() is numeric by default and sorts in place; no
+    // comparator needed and no JS-heap copy.
+    lums.sort();
+    const p5 = lums[Math.floor(lums.length * 0.05)];
+    const p95 = lums[Math.floor(lums.length * 0.95)];
+
+    const TARGET_MEAN = 130;
+    const brightness = Math.max(
+      1.0,
+      Math.min(2.5, TARGET_MEAN / Math.max(mean, 20)),
+    );
+    const range = p95 - p5;
+    const contrast =
+      range < 120 ? Math.max(1.0, Math.min(1.6, 150 / Math.max(range, 30))) : 1.0;
+
+    if (brightness < 1.02 && contrast < 1.02) return undefined;
+    return `brightness(${brightness.toFixed(2)}) contrast(${contrast.toFixed(2)})`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function FaceThumb({
   face,
   photoId,
@@ -24,11 +81,14 @@ export function FaceThumb({
   sizePx: number;
 }) {
   const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
+  const [filter, setFilter] = useState<string | undefined>(undefined);
 
   const onLoad = (e: SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
     if (img.naturalWidth > 0 && img.naturalHeight > 0) {
-      setNatural({ w: img.naturalWidth, h: img.naturalHeight });
+      const nat = { w: img.naturalWidth, h: img.naturalHeight };
+      setNatural(nat);
+      setFilter(autoExposureFilter(img, face, nat));
     }
   };
 
@@ -59,6 +119,7 @@ export function FaceThumb({
         className="absolute top-0 left-0 max-w-none origin-top-left"
         style={{
           transform,
+          filter,
           visibility: natural ? "visible" : "hidden",
         }}
       />

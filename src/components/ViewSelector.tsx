@@ -15,11 +15,18 @@ function useViewStats() {
   const total = images.length;
   const remaining = total - rejects;
   const editCount = images.filter((i) => i.destination === "edit").length;
-  const publishCount = images.filter(
-    (i) => i.destination === "publish_direct",
-  ).length;
-  const unrouted = picks - editCount - publishCount;
-  return { picks, rejects, reviewed, total, remaining, editCount, publishCount, unrouted };
+  const exportCount = images.filter((i) => i.destination === "export").length;
+  const unrouted = picks - editCount - exportCount;
+  return {
+    picks,
+    rejects,
+    reviewed,
+    total,
+    remaining,
+    editCount,
+    exportCount,
+    unrouted,
+  };
 }
 
 export function ViewSelector() {
@@ -38,7 +45,7 @@ export function ViewSelector() {
       statsText = `${stats.remaining} remaining · ${stats.picks} picks`;
       break;
     case "route":
-      statsText = `${stats.editCount} → Edit · ${stats.publishCount} → Publish Direct · ${stats.unrouted} unrouted`;
+      statsText = `${stats.editCount} → C1 · ${stats.exportCount} → Export · ${stats.unrouted} unrouted`;
       break;
   }
 

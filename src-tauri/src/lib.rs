@@ -2,6 +2,7 @@ mod ai;
 mod commands;
 mod db;
 mod ingest;
+mod layout;
 mod metadata;
 mod pipeline;
 mod state;
@@ -287,7 +288,6 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::recluster_shoot,
-            commands::export::export_xmp,
             commands::export::export_publish_direct,
             commands::ai::get_ai_status,
             commands::ai::cancel_ai_analysis,
@@ -295,6 +295,11 @@ pub fn run() {
             commands::ai::get_faces_for_photo,
             commands::ai::get_heatmap,
             commands::ai::get_shoot_sharpness_percentiles,
+            commands::layout::sync_layout_if_eligible,
+            commands::layout::mark_photo_visited_in_select,
+            commands::layout::bump_select_max_floor,
+            commands::layout::get_shoot_bucket_path,
+            commands::layout::open_shoot_folder,
         ]);
 
     let builder = protocol::register_protocol(builder);

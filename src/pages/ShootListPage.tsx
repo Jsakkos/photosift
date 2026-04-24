@@ -32,10 +32,21 @@ function ShootCard({
   const picks = shoot.picks ?? 0;
   const rejects = shoot.rejects ?? 0;
   const unreviewed = shoot.unreviewed ?? shoot.photoCount;
+  const routed = shoot.routed ?? 0;
   const total = Math.max(1, shoot.photoCount);
   const pickPct = (picks / total) * 100;
   const rejectPct = (rejects / total) * 100;
-  const done = unreviewed === 0 && shoot.photoCount > 0;
+  // Three-state status. "Triage done" (unreviewed === 0) is necessary
+  // but not sufficient for "routed" — every pick also needs a
+  // destination. Shoots with zero picks skip straight to a neutral
+  // state since there's nothing to route.
+  type Status = "in_progress" | "triaged" | "routed";
+  const status: Status =
+    shoot.photoCount === 0 || unreviewed > 0
+      ? "in_progress"
+      : picks > 0 && routed >= picks
+        ? "routed"
+        : "triaged";
 
   return (
     <div
@@ -93,12 +104,18 @@ function ShootCard({
             </div>
           </div>
         )}
-        {done && !progress && (
+        {status !== "in_progress" && !progress && (
           <div
             className="absolute top-2 right-2 font-mono text-[9px] uppercase tracking-[1px] px-[6px] py-[2px] rounded-sm"
-            style={{ color: "var(--color-success)", background: "rgba(0,0,0,0.55)" }}
+            style={{
+              color:
+                status === "routed"
+                  ? "var(--color-success)"
+                  : "var(--color-fg-dim)",
+              background: "rgba(0,0,0,0.55)",
+            }}
           >
-            ✓ routed
+            {status === "routed" ? "✓ routed" : "triaged"}
           </div>
         )}
         <button

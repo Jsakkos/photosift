@@ -102,7 +102,7 @@ describe("setDestination", () => {
     setupRouteView([img1, img2], 1);
 
     // Route the last item (index 1)
-    await useProjectStore.getState().setDestination("publish_direct");
+    await useProjectStore.getState().setDestination("export");
 
     const state = useProjectStore.getState();
     // Only img1 remains, index should clamp to 0

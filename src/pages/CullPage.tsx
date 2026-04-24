@@ -1,22 +1,58 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useProjectStore } from "../stores/projectStore";
 import { useKeyboardNav } from "../hooks/useKeyboardNav";
 import { Toolbar } from "../components/Toolbar";
 import { GridView } from "../components/GridView";
-import { ComparisonView } from "../components/ComparisonView";
 import { EmptyViewState } from "../components/EmptyViewState";
 import { TriageShell } from "../components/triage/TriageShell";
 import { SelectShell } from "../components/select/SelectShell";
 import { RouteShell } from "../components/route/RouteShell";
+import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentShoot, isLoading, loadError, loadShoot, viewMode, currentView } = useProjectStore();
   const displayCount = useProjectStore((s) => s.displayItems.length);
+  const currentIndex = useProjectStore((s) => s.currentIndex);
   useKeyboardNav();
+
+  // Focus the shell container whenever the shoot opens or the active
+  // photo changes. The keyboard listener is window-level (see
+  // useKeyboardNav), but after react-router navigation focus often lives
+  // on `body`, which on some platforms swallows the first keystroke
+  // until an element receives focus. Making the main shell focusable
+  // (tabIndex=-1) and calling .focus() on mount removes the "click
+  // before keys work" priming step.
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (isLoading || !currentShoot) return;
+    const raf = requestAnimationFrame(() => {
+      shellRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isLoading, currentShoot?.id, currentIndex]);
+
+  // Tauri window refocus (Alt-Tab back, minimize→restore) doesn't
+  // automatically re-home DOM focus to our container. Listen for the
+  // focus event and refocus so keystrokes resume without a click.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused) shellRef.current?.focus({ preventScroll: true });
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const shootId = Number(id);
@@ -122,7 +158,9 @@ export function CullPage() {
 
   return (
     <div
-      className="h-screen w-screen flex flex-col"
+      ref={shellRef}
+      tabIndex={-1}
+      className="h-screen w-screen flex flex-col outline-none"
       style={{ background: "var(--color-bg)" }}
     >
       <Toolbar />
@@ -132,8 +170,6 @@ export function CullPage() {
         ) : (
           <GridView />
         )
-      ) : viewMode === "comparison" ? (
-        <ComparisonView />
       ) : displayCount === 0 ? (
         <EmptyViewState view={currentView} />
       ) : currentView === "triage" ? (
@@ -143,6 +179,7 @@ export function CullPage() {
       ) : (
         <RouteShell />
       )}
+      <ShortcutsOverlay />
     </div>
   );
 }

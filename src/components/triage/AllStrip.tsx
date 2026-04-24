@@ -7,9 +7,12 @@ import type { DisplayItem } from "../../types";
 
 // 108px leaves ~16px room for the vertical scrollbar on overflow, so
 // thumbs (78 + 14 padding = 92) aren't clipped when the list scrolls.
-const STRIP_WIDTH = 108;
-const THUMB_W = 78;
-const THUMB_H = 52;
+// Strip width accounts for a permanently-reserved 16px scrollbar
+// gutter (so layout doesn't jump when overflow appears) plus 14px row
+// padding. 160 - 30 = 130 visible for the thumbnail.
+const STRIP_WIDTH = 160;
+const THUMB_W = 124;
+const THUMB_H = 82;
 const CELL_H = THUMB_H + 8;
 
 function verdictFromFlag(flag: string): Verdict {
@@ -109,7 +112,6 @@ export function AllStrip() {
       const item = flatItems[index];
       if (!item) return null;
       const image = item.image;
-      const rating = Math.max(0, Math.min(5, image.starRating)) as 0 | 1 | 2 | 3 | 4 | 5;
       return (
         <div style={style} className="px-[7px] py-1">
           <Photo
@@ -117,7 +119,6 @@ export function AllStrip() {
             alt={image.filename}
             fit="cover"
             verdict={verdictFromFlag(image.flag)}
-            rating={rating}
             groupMember={item.isGroupCover === true}
             selected={index === selectedFlatIndex}
             dim={image.flag === "reject" ? 0.45 : 1}
@@ -151,6 +152,7 @@ export function AllStrip() {
           itemSize={CELL_H}
           layout="vertical"
           overscanCount={6}
+          style={{ scrollbarGutter: "stable" }}
         >
           {Row}
         </List>

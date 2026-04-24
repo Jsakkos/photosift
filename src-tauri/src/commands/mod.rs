@@ -3,6 +3,7 @@ pub mod culling;
 pub mod export;
 pub mod image;
 pub mod import;
+pub mod layout;
 pub mod rating;
 pub mod scan;
 pub mod settings;

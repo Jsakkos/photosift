@@ -7,12 +7,59 @@ import type {
   ViewMode,
   DisplayItem,
   Group,
+  SyncReport,
 } from "../types";
 import { useSettingsStore } from "./settingsStore";
 import { useAiStore } from "./aiStore";
+import {
+  createBracket,
+  applyDecision,
+  currentPair,
+  type BracketState,
+  type Decision,
+} from "../lib/bracket";
 
 function selectRequiresPick(): boolean {
   return useSettingsStore.getState().settings.selectRequiresPick ?? false;
+}
+
+/// Pick the pass the user should land in when they reopen a shoot.
+/// Cascades forward from the seed view (usually `shoot.lastView`) and
+/// skips any pass whose work is done. Never demotes: if they left off in
+/// Route we don't drag them back to Select just because a newer photo
+/// landed unreviewed. The completion predicates mirror the filters used
+/// by `passesSelectGate` and the Route view so this stays honest as those
+/// evolve.
+function computeActivePass(images: ImageEntry[], start: CullView): CullView {
+  const hasTriageWork = images.some((i) => i.flag === "unreviewed");
+  const hasSelectWork = images.some(
+    (i) => i.flag === "pick" && i.starRating === 0,
+  );
+  const hasRouteWork = images.some(
+    (i) =>
+      i.flag === "pick" &&
+      i.starRating >= 3 &&
+      i.destination === "unrouted",
+  );
+  if (start === "triage" && hasTriageWork) return "triage";
+  if ((start === "triage" || start === "select") && hasSelectWork)
+    return "select";
+  if (hasRouteWork) return "route";
+  return start;
+}
+
+/// Map a view transition to the layout-sync trigger name the Rust side
+/// knows about, or `null` when the transition doesn't finalize a pass.
+/// Leaving triage for anything finalizes rejects; leaving select *for
+/// route specifically* finalizes selects (matches the user's mental
+/// model: "I'm moving on to route now"); leaving route finalizes routed
+/// picks into edit/export. Returning to a pass view never finalizes —
+/// that would move files back prematurely.
+function resolveSyncTrigger(from: CullView, to: CullView): string | null {
+  if (from === "triage" && to !== "triage") return "triage_complete";
+  if (from === "select" && to === "route") return "select_complete";
+  if (from === "route" && to !== "route") return "route_complete";
+  return null;
 }
 
 function routeMinStar(): number {
@@ -96,6 +143,11 @@ interface UndoEntry {
     imageId: number;
     oldValue: string | number;
     newValue: string | number;
+    // When present, overrides the parent `field` for this item — lets
+    // a single undo entry mix multiple field types (e.g. bracket
+    // decisions bundle several star promotions). Falls back to parent
+    // `field` otherwise.
+    field?: "starRating" | "flag" | "destination";
   }[];
 }
 
@@ -510,7 +562,6 @@ interface ProjectState {
   currentIndex: number;
   isLoading: boolean;
   loadError: string | null;
-  showMetadata: boolean;
   showShortcutHints: boolean;
   autoAdvance: boolean;
   isZoomed: boolean;
@@ -550,9 +601,13 @@ interface ProjectState {
   setRating: (rating: number) => Promise<void>;
   setFlag: (flag: string) => Promise<void>;
   setDestination: (dest: string) => Promise<void>;
+  /// Apply `dest` to every photo in `photoIds` in one batch. Persists each
+  /// via `set_destination`, updates local state once, and records a single
+  /// undo entry so Ctrl+Z reverts the whole bulk action. Used by Route's
+  /// "Route selected" / "Route all" buttons.
+  bulkSetDestination: (photoIds: number[], dest: string) => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
-  toggleMetadata: () => void;
   toggleShortcutHints: () => void;
   aiPanelForced: boolean;
   toggleAiPanel: () => void;
@@ -569,13 +624,33 @@ interface ProjectState {
   setGroupCover: (groupId: number, photoId: number) => Promise<void>;
   acceptAiPick: () => Promise<void>;
   getGroupForCurrentItem: () => Group | null;
-  comparisonPinnedId: number | null;
-  comparisonCyclingId: number | null;
-  comparisonGroupMembers: number[];
-  enterComparison: () => void;
-  exitComparison: () => void;
-  cycleComparison: (direction: 1 | -1) => void;
-  comparisonQuickPick: (side: "left" | "right") => Promise<void>;
+  /// 2-up tournament bracket state for Select. Null when not in 2-up
+  /// mode. Entered automatically when the cursor lands on a group cover
+  /// with ≥2 reviewable members; exited when the bracket completes or
+  /// the user toggles Tab. See `src/lib/bracket.ts` for the engine.
+  selectBracket: BracketState | null;
+  /// Group id the user explicitly toggled 2-up off for via Tab. Tracked
+  /// per-group so the next group still auto-enters 2-up even if the
+  /// previous one was manually suppressed.
+  selectBracketSuppressedForGroup: number | null;
+  /// Photo ids the user has focused at least once at the current
+  /// `selectMinStar` floor. Reset whenever the floor changes. When every
+  /// visible displayItem is in the set, the floor auto-bumps and the
+  /// cursor resets to 0.
+  selectVisitedAtFloor: Set<number>;
+  enterBracket: () => void;
+  exitBracket: () => void;
+  bracketDecision: (decision: Decision) => Promise<void>;
+  /// Space in single-photo mode: +1 star (clamped at 5) + advance.
+  pickCurrent: () => Promise<void>;
+  /// → in single-photo mode: advance without mutating rating.
+  skipCurrent: () => void;
+  /// Record a Select-mode visit. Fires pass-complete detection.
+  markVisitedAtFloor: (photoId: number) => void;
+  /// Bump floor + reset cursor when every visible photo has been
+  /// visited at the current tier. Internal helper; call sites use
+  /// `markVisitedAtFloor` which invokes this.
+  maybeBumpFloor: () => void;
   createGroupFromPhotos: (photoIds: number[]) => Promise<void>;
   ungroupPhotos: (photoIds: number[]) => Promise<void>;
   refreshDisplay: () => void;
@@ -614,7 +689,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentIndex: 0,
   isLoading: false,
   loadError: null,
-  showMetadata: false,
   showShortcutHints: false,
   aiPanelForced: false,
   autoAdvance: true,
@@ -628,15 +702,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   activeInnerGroupId: null,
   lastFlagAction: null,
   toast: null,
-  comparisonPinnedId: null,
-  comparisonCyclingId: null,
-  comparisonGroupMembers: [],
+  selectBracket: null,
+  selectBracketSuppressedForGroup: null,
+  selectVisitedAtFloor: new Set<number>(),
   sortByAi: "none" as const,
   heatmapOn: false,
   heatmapCache: new Map<number, number[]>(),
   showReviewed: false,
   selectMinStar: 0,
-  showAllStrip: readBoolLS("photosift.rail.allStrip", true),
+  // Immersive Select mode defaults to a hidden filmstrip; users opt in
+  // with T. localStorage still wins if they previously toggled it on.
+  showAllStrip: readBoolLS("photosift.rail.allStrip", false),
   showFaces: readBoolLS("photosift.rail.faces", true),
 
   currentImage: () => {
@@ -654,10 +730,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         shootId,
       }).catch(() => [] as Group[]);
 
-      // Resume in whichever view the user last opened for this shoot.
-      // Falls back to triage for first-time opens so the standard flow
-      // still kicks off on ingest.
-      const resumeView: CullView = shoot.lastView ?? "triage";
+      // Resume in whichever view the user last opened for this shoot,
+      // then cascade past any pass that has no work left. Skipping
+      // completed passes on reopen means users land where they can
+      // actually act (e.g. finished triage ➜ Select) instead of on an
+      // empty list.
+      const seedView: CullView = shoot.lastView ?? "triage";
+      const resumeView: CullView = computeActivePass(images, seedView);
 
       const cursor = await invoke<number | null>("get_view_cursor", {
         shootId,
@@ -722,6 +801,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (index >= 0 && index < displayItems.length) {
       set({ currentIndex: index, isZoomed: false });
       get().autoDrillIfOnCover();
+      const landed = get().displayItems[get().currentIndex]?.image.id;
+      if (landed != null) get().markVisitedAtFloor(landed);
     }
   },
 
@@ -730,6 +811,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (currentIndex < displayItems.length - 1) {
       set({ currentIndex: currentIndex + 1, isZoomed: false });
       get().autoDrillIfOnCover();
+      const landed = get().displayItems[get().currentIndex]?.image.id;
+      if (landed != null) get().markVisitedAtFloor(landed);
       return;
     }
     // End of the drilled-in group: step out into the flat view and land
@@ -760,6 +843,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (currentIndex > 0) {
       set({ currentIndex: currentIndex - 1, isZoomed: false });
       get().autoDrillIfOnCover();
+      const landed = get().displayItems[get().currentIndex]?.image.id;
+      if (landed != null) get().markVisitedAtFloor(landed);
       return;
     }
     // Start of the drilled-in group: step out into the flat view and
@@ -820,26 +905,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       redoStack: [],
     });
 
+    // Mark visited at floor *before* advancing — the photo we just
+    // rated counts as reviewed for this pass.
+    if (get().currentView === "select") {
+      const visited = new Set(get().selectVisitedAtFloor);
+      visited.add(image.id);
+      set({ selectVisitedAtFloor: visited });
+    }
+
     if (autoAdvance && currentIndex < newDisplayItems.length - 1) {
       set({ currentIndex: currentIndex + 1, isZoomed: false });
     }
 
-    // Auto-advance the pass floor when the current tier is "used up" —
-    // every visible photo has been rated above the floor, so there's
-    // nothing left to decide at this tier. Bump by 1 so the user moves
-    // to the next pass without pressing `]`. Clamped at 5 and only
-    // fires when the next tier would have at least one member, so a
-    // newly-promoted single photo doesn't strand the user on an empty
-    // Pass N+1.
+    // Pass-complete check: if every visible photo at the current floor
+    // has been visited, bump the floor and reset the cursor.
     if (get().currentView === "select") {
-      const floor = get().selectMinStar;
-      if (
-        floor < 5 &&
-        newDisplayItems.length > 0 &&
-        newDisplayItems.every((d) => d.image.starRating > floor)
-      ) {
-        get().setSelectMinStar(floor + 1);
-      }
+      get().maybeBumpFloor();
     }
 
     try {
@@ -1125,6 +1206,69 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
   },
 
+  bulkSetDestination: async (photoIds: number[], dest: string) => {
+    const { images, currentView, groups, undoStack } = get();
+    if (photoIds.length === 0) return;
+
+    // Snapshot the old destinations so undo can restore each photo
+    // individually — per-photo oldValue means a bulk Ctrl+Z reverts to
+    // the exact prior state, not a uniform one.
+    const batch: NonNullable<UndoEntry["batch"]> = [];
+    const updatedImages = [...images];
+    for (const id of photoIds) {
+      const idx = updatedImages.findIndex((i) => i.id === id);
+      if (idx < 0) continue;
+      const oldDest = updatedImages[idx].destination;
+      if (oldDest === dest) continue;
+      batch.push({
+        imageId: id,
+        field: "destination",
+        oldValue: oldDest,
+        newValue: dest,
+      });
+      updatedImages[idx] = { ...updatedImages[idx], destination: dest };
+    }
+    if (batch.length === 0) return;
+
+    const newDisplayItems = computeDisplayItemsFiltered(
+      updatedImages,
+      currentView,
+      groups,
+      get().activeInnerGroupId,
+      selectRequiresPick(),
+      routeMinStar(),
+      currentAiOptions(get().sortByAi),
+    );
+
+    set({
+      images: updatedImages,
+      displayItems: newDisplayItems,
+      undoStack: [
+        ...undoStack.slice(-49),
+        {
+          imageId: batch[0].imageId,
+          field: "destination",
+          oldValue: batch[0].oldValue,
+          newValue: dest,
+          batch,
+        },
+      ],
+      redoStack: [],
+    });
+
+    try {
+      for (const entry of batch) {
+        await invoke("set_destination", {
+          photoId: entry.imageId,
+          destination: dest,
+        });
+      }
+    } catch (e) {
+      console.error("Bulk destination failed:", e);
+      get().setToast(`Some destinations failed: ${e}`, "error");
+    }
+  },
+
   undo: async () => {
     const { undoStack, redoStack, images, currentView, groups } = get();
     const entry = undoStack[undoStack.length - 1];
@@ -1135,17 +1279,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     const targets = entry.batch
-      ? entry.batch.map((b) => ({ imageId: b.imageId, value: b.oldValue }))
-      : [{ imageId: entry.imageId, value: entry.oldValue }];
+      ? entry.batch.map((b) => ({
+          imageId: b.imageId,
+          value: b.oldValue,
+          field: b.field ?? entry.field,
+        }))
+      : [{ imageId: entry.imageId, value: entry.oldValue, field: entry.field }];
 
     for (const t of targets) {
       const idx = updatedImages.findIndex((img) => img.id === t.imageId);
       if (idx < 0) continue;
-      if (entry.field === "starRating") {
+      if (t.field === "starRating") {
         updatedImages[idx] = { ...updatedImages[idx], starRating: t.value as number };
-      } else if (entry.field === "flag") {
+      } else if (t.field === "flag") {
         updatedImages[idx] = { ...updatedImages[idx], flag: t.value as string };
-      } else if (entry.field === "destination") {
+      } else if (t.field === "destination") {
         updatedImages[idx] = { ...updatedImages[idx], destination: t.value as string };
       }
     }
@@ -1173,11 +1321,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     try {
       for (const t of targets) {
-        if (entry.field === "flag") {
+        if (t.field === "flag") {
           await invoke("set_flag", { photoId: t.imageId, flag: t.value });
-        } else if (entry.field === "destination") {
+        } else if (t.field === "destination") {
           await invoke("set_destination", { photoId: t.imageId, destination: t.value });
-        } else if (entry.field === "starRating") {
+        } else if (t.field === "starRating") {
           await invoke("set_rating", { imageId: t.imageId, rating: t.value });
         }
       }
@@ -1198,17 +1346,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const updatedImages = [...images];
     const targets = entry.batch
-      ? entry.batch.map((b) => ({ imageId: b.imageId, value: b.newValue }))
-      : [{ imageId: entry.imageId, value: entry.newValue }];
+      ? entry.batch.map((b) => ({
+          imageId: b.imageId,
+          value: b.newValue,
+          field: b.field ?? entry.field,
+        }))
+      : [{ imageId: entry.imageId, value: entry.newValue, field: entry.field }];
 
     for (const t of targets) {
       const idx = updatedImages.findIndex((img) => img.id === t.imageId);
       if (idx < 0) continue;
-      if (entry.field === "starRating") {
+      if (t.field === "starRating") {
         updatedImages[idx] = { ...updatedImages[idx], starRating: t.value as number };
-      } else if (entry.field === "flag") {
+      } else if (t.field === "flag") {
         updatedImages[idx] = { ...updatedImages[idx], flag: t.value as string };
-      } else if (entry.field === "destination") {
+      } else if (t.field === "destination") {
         updatedImages[idx] = { ...updatedImages[idx], destination: t.value as string };
       }
     }
@@ -1236,11 +1388,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     try {
       for (const t of targets) {
-        if (entry.field === "flag") {
+        if (t.field === "flag") {
           await invoke("set_flag", { photoId: t.imageId, flag: t.value });
-        } else if (entry.field === "destination") {
+        } else if (t.field === "destination") {
           await invoke("set_destination", { photoId: t.imageId, destination: t.value });
-        } else if (entry.field === "starRating") {
+        } else if (t.field === "starRating") {
           await invoke("set_rating", { imageId: t.imageId, rating: t.value });
         }
       }
@@ -1256,10 +1408,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!currentShoot) return;
 
     const currentPhotoId = displayItems[currentIndex]?.image.id;
+    const fromView = get().currentView;
     if (currentPhotoId !== undefined) {
       invoke("set_view_cursor", {
         shootId: currentShoot.id,
-        viewName: get().currentView,
+        viewName: fromView,
         photoId: currentPhotoId,
       }).catch(() => {});
     }
@@ -1293,9 +1446,33 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       displayItems: newDisplayItems,
       currentIndex: newIndex,
       isZoomed: false,
-      showMetadata: view === "route" ? true : get().showMetadata,
     });
     get().autoDrillIfOnCover();
+
+    // Auto-reorganize on pass completion. Runs AFTER the view has
+    // already switched so the sync's IPC round-trip doesn't delay the
+    // UI transition. When files actually move, we reload images and
+    // recompute displayItems so tooltips/metadata reflect the new
+    // paths — but the user sees the view change immediately.
+    const trigger = resolveSyncTrigger(fromView, view);
+    if (trigger) {
+      invoke<SyncReport | null>("sync_layout_if_eligible", {
+        shootId: currentShoot.id,
+        trigger,
+      })
+        .then(async (report) => {
+          if (!report || report.moved.length === 0) return;
+          const fresh = await invoke<ImageEntry[]>("get_image_list");
+          set({ images: fresh });
+          get().refreshDisplay();
+          get().setToast(
+            `Moved ${report.moved.length} file${report.moved.length === 1 ? "" : "s"}`,
+          );
+        })
+        .catch((e) => {
+          console.error("sync_layout_if_eligible failed", e);
+        });
+    }
   },
 
   setViewMode: (mode: ViewMode) => set({ viewMode: mode }),
@@ -1322,7 +1499,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ toast: { message, kind, timestamp: Date.now() } }),
   clearToast: () => set({ toast: null }),
 
-  toggleMetadata: () => set((s) => ({ showMetadata: !s.showMetadata })),
   toggleShortcutHints: () =>
     set((s) => ({ showShortcutHints: !s.showShortcutHints })),
   toggleAiPanel: () => set((s) => ({ aiPanelForced: !s.aiPanelForced })),
@@ -1415,8 +1591,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setSelectMinStar: (n: number) => {
     const clamped = Math.max(0, Math.min(5, n));
     if (get().selectMinStar === clamped) return;
-    set({ selectMinStar: clamped });
+    // Moving between tiers (manual `[` / `]` or auto-bump) resets the
+    // visited-at-floor tracking so each pass starts fresh. Also drop
+    // any active bracket — a tier change invalidates pairings.
+    set({
+      selectMinStar: clamped,
+      selectVisitedAtFloor: new Set<number>(),
+      selectBracket: null,
+      selectBracketSuppressedForGroup: null,
+    });
     get().refreshDisplay();
+    const shootId = get().currentShoot?.id;
+    if (shootId != null && clamped >= 1) {
+      invoke("bump_select_max_floor", { shootId, floor: clamped }).catch(() => {});
+    }
   },
 
   getHeatmapData: (photoId: number) => {
@@ -1640,132 +1828,215 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     return groups.find((g) => g.id === item.groupId) ?? null;
   },
 
-  enterComparison: () => {
-    const { displayItems, currentIndex, groups, currentView, images } = get();
+  enterBracket: () => {
+    const {
+      currentView,
+      displayItems,
+      currentIndex,
+      groups,
+      images,
+      selectBracket,
+    } = get();
     if (currentView !== "select") return;
+    if (selectBracket && !selectBracket.isComplete) return;
     const item = displayItems[currentIndex];
     if (!item?.groupId) return;
 
     const group = groups.find((g) => g.id === item.groupId);
     if (!group) return;
 
-    const memberIds = group.members
-      .filter((m) => {
-        const img = images.find((i) => i.id === m.photoId);
-        return img && img.flag !== "reject";
-      })
-      .map((m) => m.photoId);
+    const members = group.members
+      .map((m) => images.find((i) => i.id === m.photoId))
+      .filter((i): i is ImageEntry => !!i && i.flag !== "reject")
+      .map((i) => ({ id: i.id, qualityScore: i.qualityScore ?? null }));
 
-    if (memberIds.length < 2) return;
+    if (members.length < 2) return;
 
-    const pinnedId = item.image.id;
-    const cyclingId = memberIds.find((id) => id !== pinnedId) ?? memberIds[0];
-
+    // Explicit enter (keyboard Tab or direct call) clears any prior
+    // suppression for this group. Auto-enter (SelectShell effect) is
+    // gated separately by checking suppressedForGroup at the call site.
     set({
-      viewMode: "comparison",
-      comparisonPinnedId: pinnedId,
-      comparisonCyclingId: cyclingId,
-      comparisonGroupMembers: memberIds,
+      selectBracket: createBracket(group.id, members),
+      selectBracketSuppressedForGroup: null,
     });
   },
 
-  exitComparison: () => {
-    const { comparisonPinnedId, displayItems } = get();
-    const idx = displayItems.findIndex(
-      (d) => d.image.id === comparisonPinnedId,
-    );
+  exitBracket: () => {
+    const { selectBracket } = get();
+    const suppressGroupId = selectBracket?.groupId ?? null;
     set({
-      viewMode: "sequential",
-      currentIndex: idx >= 0 ? idx : 0,
-      comparisonPinnedId: null,
-      comparisonCyclingId: null,
-      comparisonGroupMembers: [],
+      selectBracket: null,
+      selectBracketSuppressedForGroup: suppressGroupId,
     });
   },
 
-  cycleComparison: (direction: 1 | -1) => {
-    const { comparisonCyclingId, comparisonPinnedId, comparisonGroupMembers, images } = get();
-    const available = comparisonGroupMembers.filter((id) => {
-      if (id === comparisonPinnedId) return false;
-      const img = images.find((i) => i.id === id);
-      return img && img.flag !== "reject";
-    });
-    if (available.length === 0) return;
+  bracketDecision: async (decision: Decision) => {
+    const { selectBracket, images } = get();
+    if (!selectBracket || selectBracket.isComplete) return;
+    const pair = currentPair(selectBracket);
+    if (!pair || pair.right === null) return;
 
-    const curIdx = available.indexOf(comparisonCyclingId!);
-    let nextIdx = curIdx + direction;
-    if (nextIdx < 0) nextIdx = available.length - 1;
-    if (nextIdx >= available.length) nextIdx = 0;
+    const nextBracket = applyDecision(selectBracket, decision);
+    const promoted = nextBracket.lastPromoted;
 
-    set({ comparisonCyclingId: available[nextIdx] });
-  },
-
-  comparisonQuickPick: async (side: "left" | "right") => {
-    const { comparisonPinnedId, comparisonCyclingId, images, currentView, groups, undoStack } = get();
-    if (!comparisonPinnedId || !comparisonCyclingId) return;
-
-    const pickId = side === "left" ? comparisonPinnedId : comparisonCyclingId;
-    const rejectId = side === "left" ? comparisonCyclingId : comparisonPinnedId;
-
+    // Apply +1 star to each promoted photo. Clamp at 5. Single batch
+    // undo entry so one Ctrl+Z reverts the whole decision.
     const updatedImages = [...images];
-    const pickIdx = updatedImages.findIndex((i) => i.id === pickId);
-    const rejectIdx = updatedImages.findIndex((i) => i.id === rejectId);
-    if (pickIdx < 0 || rejectIdx < 0) return;
-
-    const oldPickFlag = updatedImages[pickIdx].flag;
-    const oldRejectFlag = updatedImages[rejectIdx].flag;
-    updatedImages[pickIdx] = { ...updatedImages[pickIdx], flag: "pick" };
-    updatedImages[rejectIdx] = { ...updatedImages[rejectIdx], flag: "reject" };
+    const batchEntries: NonNullable<UndoEntry["batch"]> = [];
+    for (const pid of promoted) {
+      const idx = updatedImages.findIndex((i) => i.id === pid);
+      if (idx < 0) continue;
+      const oldRating = updatedImages[idx].starRating;
+      const newRating = Math.min(5, oldRating + 1);
+      if (newRating === oldRating) continue;
+      updatedImages[idx] = { ...updatedImages[idx], starRating: newRating };
+      batchEntries.push({
+        imageId: pid,
+        field: "starRating",
+        oldValue: oldRating,
+        newValue: newRating,
+      });
+    }
 
     const newDisplayItems = computeDisplayItemsFiltered(
       updatedImages,
-      currentView,
-      groups,
+      get().currentView,
+      get().groups,
       get().activeInnerGroupId,
       selectRequiresPick(),
       routeMinStar(),
       currentAiOptions(get().sortByAi),
     );
 
+    const undoPatch: Partial<ProjectState> = {};
+    if (batchEntries.length > 0) {
+      undoPatch.undoStack = [
+        ...get().undoStack.slice(-49),
+        {
+          imageId: batchEntries[0].imageId,
+          field: "starRating",
+          oldValue: batchEntries[0].oldValue,
+          newValue: batchEntries[0].newValue,
+          batch: batchEntries,
+        },
+      ];
+      undoPatch.redoStack = [];
+    }
+
+    // Mark every member of the pair visited-at-floor regardless of
+    // decision — we've now "seen" them for this pass.
+    const visited = new Set(get().selectVisitedAtFloor);
+    visited.add(pair.left);
+    if (pair.right !== null) visited.add(pair.right);
+
     set({
       images: updatedImages,
       displayItems: newDisplayItems,
-      undoStack: [
-        ...undoStack.slice(-49),
-        {
-          imageId: pickId,
-          field: "flag",
-          oldValue: oldPickFlag,
-          newValue: "pick",
-          batch: [
-            { imageId: pickId, oldValue: oldPickFlag, newValue: "pick" },
-            { imageId: rejectId, oldValue: oldRejectFlag, newValue: "reject" },
-          ],
-        },
-      ],
-      redoStack: [],
-      lastFlagAction: { color: "rgba(34, 197, 94, 0.15)", timestamp: Date.now() },
+      selectBracket: nextBracket,
+      selectVisitedAtFloor: visited,
+      ...undoPatch,
     });
+
+    // If the bracket is now complete, mark every original seed as
+    // visited (they've all been reviewed in this group) and drop the
+    // bracket state. Advance the cursor past the current group so the
+    // user lands on the next item in the flat displayItems list. If
+    // we're drilled in, step out first — otherwise "past the group" is
+    // past the filtered member list, which dead-ends.
+    if (nextBracket.isComplete) {
+      const fullyVisited = new Set(get().selectVisitedAtFloor);
+      for (const pid of nextBracket.seedOrder) fullyVisited.add(pid);
+      set({
+        selectBracket: null,
+        selectVisitedAtFloor: fullyVisited,
+      });
+      if (get().activeInnerGroupId !== null) {
+        get().setActiveInnerGroup(null);
+      }
+      const finishedGroupId = nextBracket.groupId;
+      const freshDisplay = get().displayItems;
+      const cursor = get().currentIndex;
+      let nextCursor = cursor;
+      while (
+        nextCursor < freshDisplay.length &&
+        freshDisplay[nextCursor].groupId === finishedGroupId
+      ) {
+        nextCursor++;
+      }
+      const target = nextCursor >= freshDisplay.length ? cursor : nextCursor;
+      if (target !== cursor) {
+        set({ currentIndex: target });
+      }
+    }
 
     try {
-      await invoke("set_flag", { photoId: pickId, flag: "pick" });
-      await invoke("set_flag", { photoId: rejectId, flag: "reject" });
+      for (const entry of batchEntries) {
+        await invoke("set_rating", {
+          imageId: entry.imageId,
+          rating: entry.newValue,
+        });
+      }
     } catch (e) {
-      console.error("Failed quick pick:", e);
-      get().setToast(`Quick pick failed: ${e}`, "error");
+      console.error("Failed bracket decision:", e);
+      get().setToast(`Bracket save failed: ${e}`, "error");
     }
 
-    const available = get().comparisonGroupMembers.filter((id) => {
-      if (id === comparisonPinnedId) return false;
-      const img = get().images.find((i) => i.id === id);
-      return img && img.flag !== "reject";
-    });
-    if (available.length < 1) {
-      get().exitComparison();
-    } else {
-      const newCycling = available.find((id) => id !== rejectId) ?? available[0];
-      set({ comparisonCyclingId: newCycling });
+    // After the bracket completed and we advance out of the group,
+    // check if this tier is done.
+    if (nextBracket.isComplete) {
+      get().maybeBumpFloor();
     }
+  },
+
+  pickCurrent: async () => {
+    const { displayItems, currentIndex } = get();
+    const item = displayItems[currentIndex];
+    if (!item) return;
+    const photoId = item.image.id;
+    const current = item.image.starRating;
+    const next = Math.min(5, current + 1);
+    if (next !== current) {
+      await get().setRating(next);
+    } else {
+      // Already capped; still count as visited + advance.
+      get().markVisitedAtFloor(photoId);
+      get().navigateNext();
+    }
+  },
+
+  skipCurrent: () => {
+    const { displayItems, currentIndex } = get();
+    const item = displayItems[currentIndex];
+    if (item) get().markVisitedAtFloor(item.image.id);
+    get().navigateNext();
+  },
+
+  markVisitedAtFloor: (photoId: number) => {
+    const { currentView, selectVisitedAtFloor } = get();
+    if (currentView !== "select") return;
+    if (selectVisitedAtFloor.has(photoId)) {
+      get().maybeBumpFloor();
+      return;
+    }
+    const next = new Set(selectVisitedAtFloor);
+    next.add(photoId);
+    set({ selectVisitedAtFloor: next });
+    get().maybeBumpFloor();
+  },
+
+  /// Check if every visible displayItem has been visited at the current
+  /// floor. If so, bump the floor by 1 and reset the cursor. Internal
+  /// helper, invoked by markVisitedAtFloor and setRating.
+  maybeBumpFloor: () => {
+    const { currentView, displayItems, selectMinStar, selectVisitedAtFloor } = get();
+    if (currentView !== "select") return;
+    if (selectMinStar >= 5) return;
+    if (displayItems.length === 0) return;
+    const allVisited = displayItems.every((d) => selectVisitedAtFloor.has(d.image.id));
+    if (!allVisited) return;
+    // Bump and reset.
+    get().setSelectMinStar(selectMinStar + 1);
+    set({ currentIndex: 0, isZoomed: false });
   },
 
   createGroupFromPhotos: async (photoIds: number[]) => {

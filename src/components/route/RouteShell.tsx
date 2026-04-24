@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
-import { Photo, Kbd } from "../primitives";
+import { Photo } from "../primitives";
 import type { ImageEntry } from "../../types";
 
-type DestinationId = "capture_one" | "dxo" | "publish_direct";
+type DestinationId = "edit" | "export";
 
 const PASS_TIERS: { floor: number; label: string }[] = [
   { floor: 0, label: "all" },
@@ -16,65 +16,50 @@ const PASS_TIERS: { floor: number; label: string }[] = [
   { floor: 5, label: "★≥5" },
 ];
 
-function destTag(image: ImageEntry): { label: string; tone: string } | null {
-  if (image.destination === "edit") return { label: "C1", tone: "var(--color-accent-2)" };
-  if (image.destination === "publish_direct") return { label: "Pub", tone: "var(--color-accent)" };
+type DestMeta = {
+  label: string;
+  tone: string;
+};
+
+// Route destinations collapse to two buckets (Capture One / Export). The
+// small corner badge on each thumbnail makes the user's routing decision
+// scannable from the grid without having to hover.
+function destMeta(dest: string): DestMeta | null {
+  if (dest === "edit") return { label: "C1", tone: "var(--color-accent-2)" };
+  if (dest === "export") return { label: "Exp", tone: "var(--color-accent)" };
   return null;
-}
-
-function PassPills() {
-  const selectMinStar = useProjectStore((s) => s.selectMinStar);
-  const setSelectMinStar = useProjectStore((s) => s.setSelectMinStar);
-
-  return (
-    <div
-      className="inline-flex items-center gap-[1px] rounded-md p-[2px]"
-      style={{ background: "var(--color-bg2)" }}
-    >
-      {PASS_TIERS.map((tier) => {
-        const active = tier.floor === selectMinStar;
-        return (
-          <button
-            key={tier.floor}
-            type="button"
-            tabIndex={-1}
-            onClick={() => setSelectMinStar(tier.floor)}
-            className="px-[10px] py-[4px] rounded-xs font-mono text-[10px] border-0 cursor-pointer"
-            style={{
-              background: active ? "var(--color-accent)" : "transparent",
-              color: active ? "#1a1a1a" : "var(--color-fg-dim)",
-              fontWeight: active ? 600 : 400,
-            }}
-            aria-pressed={active}
-          >
-            {tier.label}
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
 function Stars9({ n }: { n: number }) {
   return (
     <span className="font-mono text-[9px]" style={{ color: "var(--color-warning)" }}>
       {"★".repeat(Math.max(0, Math.min(5, n)))}
-      {n > 0 && n < 5 ? "" : ""}
     </span>
   );
 }
 
-function PickCell({ image }: { image: ImageEntry }) {
-  const tag = destTag(image);
+function PickCell({
+  image,
+  selected,
+  onToggle,
+  onOpen,
+}: {
+  image: ImageEntry;
+  selected: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+}) {
+  const tag = destMeta(image.destination);
   const rating = Math.max(0, Math.min(5, image.starRating));
   return (
-    <div className="relative">
-      <Photo
-        src={thumbUrl(image.id)}
-        alt={image.filename}
-        fit="cover"
-        style={{ width: "100%", height: 110, borderRadius: 2 }}
-      />
+    <Photo
+      src={thumbUrl(image.id)}
+      alt={image.filename}
+      fit="cover"
+      selected={selected}
+      onClick={onToggle}
+      style={{ width: "100%", aspectRatio: "3 / 2", borderRadius: 2 }}
+    >
       <div
         className="absolute top-[4px] left-[4px] rounded-xs px-[5px] py-[2px]"
         style={{ background: "rgba(0,0,0,0.6)" }}
@@ -89,57 +74,89 @@ function PickCell({ image }: { image: ImageEntry }) {
           → {tag.label}
         </div>
       )}
-    </div>
+      <button
+        type="button"
+        tabIndex={-1}
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpen();
+        }}
+        title="Open in sequential view"
+        className="absolute top-[4px] right-[4px] rounded-xs w-[18px] h-[18px] flex items-center justify-center cursor-pointer border-0"
+        style={{
+          background: "rgba(0,0,0,0.55)",
+          color: "var(--color-fg)",
+          fontSize: 11,
+          lineHeight: 1,
+        }}
+      >
+        ⤢
+      </button>
+    </Photo>
   );
 }
 
-function DestCard({
-  name,
-  sub,
-  kbds,
+function ShipStrip({
+  title,
+  subtitle,
   count,
-  disabled = false,
-  onClick,
+  accentTone,
+  onOpenFolder,
+  onCopyPath,
 }: {
-  name: string;
-  sub: string;
-  kbds: string[];
+  title: string;
+  subtitle: string;
   count: number;
-  disabled?: boolean;
-  onClick?: () => void;
+  accentTone: string;
+  onOpenFolder: () => void;
+  onCopyPath: () => void;
 }) {
   return (
-    <button
-      type="button"
-      tabIndex={-1}
-      disabled={disabled}
-      onClick={onClick}
-      className="w-full text-left p-[10px] rounded-md cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 border bg-transparent"
+    <div
+      className="rounded-md p-[10px] border"
       style={{
         background: "var(--color-hover)",
         borderColor: "var(--color-border)",
       }}
     >
-      <div className="flex items-center justify-between mb-[3px]">
-        <span className="text-[12px] font-medium" style={{ color: "var(--color-fg)" }}>
-          {name}
+      <div className="flex items-baseline justify-between mb-[3px]">
+        <span className="text-[12px] font-medium" style={{ color: accentTone }}>
+          {title}
         </span>
-        <div className="flex gap-[3px]">
-          {kbds.map((k, i) => (
-            <Kbd key={i}>{k}</Kbd>
-          ))}
-        </div>
-      </div>
-      <div className="text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
-        {sub}
+        <span
+          className="font-mono text-[10px]"
+          style={{ color: "var(--color-fg-dim)" }}
+        >
+          {count} ready
+        </span>
       </div>
       <div
-        className="font-mono text-[9px] mt-[3px]"
-        style={{ color: "var(--color-accent)" }}
+        className="text-[10px] leading-[1.4] mb-[8px]"
+        style={{ color: "var(--color-fg-dim)" }}
       >
-        {count} routed
+        {subtitle}
       </div>
-    </button>
+      <div className="flex gap-[6px]">
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={onOpenFolder}
+          className="flex-1 px-[10px] py-[5px] rounded-xs text-[10px] border bg-transparent cursor-pointer"
+          style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
+        >
+          Open folder
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={onCopyPath}
+          className="flex-1 px-[10px] py-[5px] rounded-xs text-[10px] border bg-transparent cursor-pointer"
+          style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
+        >
+          Copy path
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -148,70 +165,116 @@ export function RouteShell() {
   const images = useProjectStore((s) => s.images);
   const displayItems = useProjectStore((s) => s.displayItems);
   const selectMinStar = useProjectStore((s) => s.selectMinStar);
-  const setDestination = useProjectStore((s) => s.setDestination);
+  const setSelectMinStar = useProjectStore((s) => s.setSelectMinStar);
+  const setCurrentIndex = useProjectStore((s) => s.setCurrentIndex);
+  const setViewMode = useProjectStore((s) => s.setViewMode);
+  const bulkSetDestination = useProjectStore((s) => s.bulkSetDestination);
   const setToast = useProjectStore((s) => s.setToast);
-  const [exporting, setExporting] = useState(false);
+  const [destChoice, setDestChoice] = useState<DestinationId>("edit");
 
   const picks = useMemo(() => displayItems.map((d) => d.image), [displayItems]);
 
+  // Local selection state. Drop entries that fall out of the current
+  // filter so the Route bar's count stays consistent with what's visible.
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(picks.map((p) => p.id));
+      let changed = false;
+      const next = new Set<number>();
+      for (const id of prev) {
+        if (visible.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [picks]);
+
   const counts = useMemo(() => {
-    const pickImages = images.filter(
-      (img) => img.flag === "pick" && img.starRating >= selectMinStar,
-    );
     let captureOne = 0;
-    let publish = 0;
+    let exportN = 0;
     let pending = 0;
-    for (const img of pickImages) {
+    for (const img of images) {
+      if (img.flag !== "pick" || img.starRating < selectMinStar) continue;
       if (img.destination === "edit") captureOne++;
-      else if (img.destination === "publish_direct") publish++;
+      else if (img.destination === "export") exportN++;
       else pending++;
     }
-    return { captureOne, publish, pending, total: pickImages.length };
+    return { captureOne, export: exportN, pending };
   }, [images, selectMinStar]);
 
-  const handleExport = async () => {
+  const hasSelection = selectedIds.size > 0;
+  const actionScopeCount = hasSelection ? selectedIds.size : picks.length;
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = () =>
+    setSelectedIds(new Set(picks.map((p) => p.id)));
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const openInLoupe = (id: number) => {
+    const idx = displayItems.findIndex((d) => d.image.id === id);
+    if (idx < 0) return;
+    setCurrentIndex(idx);
+    setViewMode("sequential");
+  };
+
+  const applyDestination = async (dest: DestinationId | "unrouted") => {
+    const ids = hasSelection ? [...selectedIds] : picks.map((p) => p.id);
+    if (ids.length === 0) {
+      setToast("Nothing to route at this pass level", "error");
+      return;
+    }
+    await bulkSetDestination(ids, dest);
+    if (dest === "unrouted") {
+      setToast(`Unrouted ${ids.length}`);
+    } else {
+      const label = dest === "edit" ? "Capture One" : "Export";
+      setToast(`Routed ${ids.length} → ${label}`);
+    }
+    clearSelection();
+  };
+
+  const handleOpenFolder = async (bucket: DestinationId) => {
     if (!currentShoot) return;
-    setExporting(true);
     try {
-      const count = await invoke<number>("export_xmp", {
+      await invoke<string>("open_shoot_folder", {
         shootId: currentShoot.id,
-        filter: "picks",
+        bucket,
       });
-      setToast(`Exported ${count} XMP sidecar${count === 1 ? "" : "s"}`);
     } catch (err) {
-      setToast(`Export failed: ${err}`, "error");
-    } finally {
-      setExporting(false);
+      setToast(`Open failed: ${err}`, "error");
     }
   };
 
-  const handleRouteAll = async (dest: DestinationId) => {
-    const routeValue = dest === "publish_direct" ? "publish_direct" : "edit";
-    const pending = picks.filter((img) => img.destination !== routeValue);
-    for (const img of pending) {
-      try {
-        await invoke("set_destination", { photoId: img.id, destination: routeValue });
-      } catch {
-        /* ignore per-photo errors; toast at end */
-      }
+  const handleCopyPath = async (bucket: DestinationId) => {
+    if (!currentShoot) return;
+    try {
+      const path = await invoke<string>("get_shoot_bucket_path", {
+        shootId: currentShoot.id,
+        bucket,
+      });
+      await navigator.clipboard.writeText(path);
+      setToast(`Copied path: ${path}`);
+    } catch (err) {
+      setToast(`Copy failed: ${err}`, "error");
     }
-    // Trigger display recompute by calling the action through the store
-    // (setDestination also persists the last clicked + updates local state).
-    if (pending[0]) {
-      try {
-        await setDestination(routeValue);
-      } catch {
-        /* ignore */
-      }
-    }
-    setToast(`Routed ${pending.length} to ${dest === "publish_direct" ? "Publish Direct" : "Capture One"}`);
   };
 
   const selectedFloorLabel =
     PASS_TIERS.find((t) => t.floor === selectMinStar)?.label ?? "all";
 
   return (
-    <div className="flex-1 grid min-h-0" style={{ gridTemplateColumns: "1fr 300px" }}>
+    <div className="flex-1 grid min-h-0" style={{ gridTemplateColumns: "1fr 320px" }}>
       <div className="flex flex-col min-h-0 p-4">
         <div className="flex items-baseline justify-between mb-[14px] gap-4">
           <div>
@@ -231,7 +294,65 @@ export function RouteShell() {
               <span>· {picks.length} picks ready</span>
             </div>
           </div>
-          <PassPills />
+          <div
+            className="inline-flex items-center gap-[1px] rounded-md p-[2px]"
+            style={{ background: "var(--color-bg2)" }}
+          >
+            {PASS_TIERS.map((tier) => {
+              const active = tier.floor === selectMinStar;
+              return (
+                <button
+                  key={tier.floor}
+                  type="button"
+                  tabIndex={-1}
+                  onClick={() => setSelectMinStar(tier.floor)}
+                  className="px-[10px] py-[4px] rounded-xs font-mono text-[10px] border-0 cursor-pointer"
+                  style={{
+                    background: active ? "var(--color-accent)" : "transparent",
+                    color: active ? "#1a1a1a" : "var(--color-fg-dim)",
+                    fontWeight: active ? 600 : 400,
+                  }}
+                  aria-pressed={active}
+                >
+                  {tier.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div
+          className="flex items-center gap-[10px] mb-[10px] text-[11px]"
+          style={{ color: "var(--color-fg-dim)" }}
+        >
+          <span className="font-mono text-[11px]" style={{ color: "var(--color-fg)" }}>
+            {hasSelection
+              ? `${selectedIds.size} selected`
+              : `${picks.length} in view`}
+          </span>
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={selectAll}
+            disabled={picks.length === 0}
+            className="px-[10px] py-[4px] rounded-xs text-[10px] border bg-transparent cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={clearSelection}
+            disabled={!hasSelection}
+            className="px-[10px] py-[4px] rounded-xs text-[10px] border bg-transparent cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
+          >
+            Clear
+          </button>
+          <span className="text-[10px] opacity-70">
+            · Click to toggle · ⤢ to open in loupe
+          </span>
         </div>
 
         <div
@@ -239,7 +360,13 @@ export function RouteShell() {
           style={{ gridTemplateColumns: "repeat(5, 1fr)" }}
         >
           {picks.map((image) => (
-            <PickCell key={image.id} image={image} />
+            <PickCell
+              key={image.id}
+              image={image}
+              selected={selectedIds.has(image.id)}
+              onToggle={() => toggleSelect(image.id)}
+              onOpen={() => openInLoupe(image.id)}
+            />
           ))}
           {picks.length === 0 && (
             <div
@@ -255,28 +382,14 @@ export function RouteShell() {
           className="mt-3 pt-[10px] px-3 flex gap-[14px] items-center border-t text-[11px]"
           style={{ borderColor: "var(--color-border)", color: "var(--color-fg-dim)" }}
         >
-          <span className="inline-flex items-center gap-[6px]">
-            <Kbd>E</Kbd>
-            Capture One
-          </span>
-          <span className="inline-flex items-center gap-[6px]">
-            <Kbd>D</Kbd>
-            publish
-          </span>
-          <span className="inline-flex items-center gap-[6px]">
-            <Kbd>⌘</Kbd>
-            <Kbd>E</Kbd>
-            export XMP
-          </span>
-          <div className="flex-1" />
           <span className="font-mono text-[11px]">
-            {counts.captureOne + counts.publish} routed · {counts.pending} pending
+            {counts.captureOne} → C1 · {counts.export} → Export · {counts.pending} pending
           </span>
         </div>
       </div>
 
       <div
-        className="flex flex-col gap-[10px] p-4 border-l"
+        className="flex flex-col gap-[10px] p-4 border-l overflow-auto"
         style={{
           borderColor: "var(--color-border)",
           background: "#111",
@@ -286,62 +399,73 @@ export function RouteShell() {
           className="text-[9px] uppercase tracking-[1.2px]"
           style={{ color: "var(--color-fg-dim)" }}
         >
-          Destinations
+          Route {hasSelection ? `${selectedIds.size} selected` : `all ${picks.length}`} to
         </div>
-        <DestCard
-          name="Capture One Pro"
-          sub="opens selected RAWs · reads XMP"
-          kbds={["E"]}
-          count={counts.captureOne}
-          onClick={() => void handleRouteAll("capture_one")}
-        />
-        <DestCard
-          name="DxO PhotoLab"
-          sub="post-MVP · open source in DxO"
-          kbds={["⌘", "E"]}
-          count={0}
-          disabled
-        />
-        <DestCard
-          name="Publish direct"
-          sub="cached JPEG → Immich ingest folder"
-          kbds={["D"]}
-          count={counts.publish}
-          onClick={() => void handleRouteAll("publish_direct")}
-        />
 
-        <div
-          className="text-[9px] uppercase tracking-[1.2px] mt-[6px]"
+        <label
+          className="flex flex-col gap-[5px] text-[11px]"
           style={{ color: "var(--color-fg-dim)" }}
         >
-          XMP sidecars
-        </div>
-        <div
-          className="rounded-sm p-[10px] font-mono text-[10px] leading-[1.5]"
-          style={{ background: "var(--color-hover)", color: "var(--color-fg-dim)" }}
-        >
-          <div style={{ color: "var(--color-fg)" }}>
-            {counts.total} picks · ratings + labels
-          </div>
-          <div>writes beside each RAW</div>
-          <div>
-            filter · picks {selectedFloorLabel}
-          </div>
-        </div>
+          <span>Destination</span>
+          <select
+            value={destChoice}
+            onChange={(e) => setDestChoice(e.target.value as DestinationId)}
+            className="px-[10px] py-[6px] rounded-xs text-[12px] border cursor-pointer"
+            style={{
+              background: "var(--color-hover)",
+              borderColor: "var(--color-border)",
+              color: "var(--color-fg)",
+            }}
+          >
+            <option value="edit">Capture One</option>
+            <option value="export">Export</option>
+          </select>
+        </label>
 
         <button
           type="button"
-          onClick={() => void handleExport()}
-          disabled={exporting || !currentShoot}
-          className="mt-auto px-[14px] py-[8px] rounded-md text-[12px] font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={() => void applyDestination(destChoice)}
+          disabled={actionScopeCount === 0}
+          className="px-[14px] py-[8px] rounded-md text-[12px] font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border-0"
           style={{
-            background: "var(--color-accent-blue)",
-            color: "#fff",
-            border: "none",
+            background: "var(--color-accent)",
+            color: "#1a1a1a",
           }}
         >
-          {exporting ? "Exporting…" : "Export XMP sidecars"}
+          Route {actionScopeCount} {actionScopeCount === 1 ? "photo" : "photos"}
         </button>
+
+        <button
+          type="button"
+          onClick={() => void applyDestination("unrouted")}
+          disabled={actionScopeCount === 0}
+          className="px-[10px] py-[5px] rounded-xs text-[10px] border bg-transparent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed self-start"
+          style={{ borderColor: "var(--color-border)", color: "var(--color-fg-dim)" }}
+        >
+          Unroute
+        </button>
+
+        {counts.captureOne > 0 && (
+          <ShipStrip
+            title="Ship to Capture One"
+            subtitle="Drag the folder onto Capture One, or use File → Import Images → Choose Folder."
+            count={counts.captureOne}
+            accentTone="var(--color-accent-2)"
+            onOpenFolder={() => void handleOpenFolder("edit")}
+            onCopyPath={() => void handleCopyPath("edit")}
+          />
+        )}
+
+        {counts.export > 0 && (
+          <ShipStrip
+            title="Ship to Export"
+            subtitle="Ready for direct publish. JPEG copy to Immich happens via Settings."
+            count={counts.export}
+            accentTone="var(--color-accent)"
+            onOpenFolder={() => void handleOpenFolder("export")}
+            onCopyPath={() => void handleCopyPath("export")}
+          />
+        )}
       </div>
     </div>
   );

@@ -1,12 +1,15 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useEffect, useRef } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
 import { Photo, Stars } from "../primitives";
 import type { ImageEntry } from "../../types";
 
-const STRIP_WIDTH = 92;
-const THUMB_W = 78;
-const THUMB_H = 52;
+// Strip width accounts for a permanently-reserved 16px scrollbar
+// gutter (so layout doesn't jump when overflow appears) plus 14px
+// internal padding. 160 - 30 = 130 visible for the thumbnail.
+const STRIP_WIDTH = 160;
+const THUMB_W = 124;
+const THUMB_H = 82;
 
 type Section = {
   rating: 5 | 4 | 3 | 2 | 1 | 0;
@@ -63,6 +66,13 @@ export function StarGroupedStrip() {
     [displayItems, activeInnerGroupId, setActiveInnerGroup, setCurrentIndex, setViewMode],
   );
 
+  // Scroll the active thumb into view when arrow-nav crosses a star
+  // boundary or moves selection past the strip's visible window.
+  const activeRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [currentImageId]);
+
   return (
     <div
       className="shrink-0 overflow-y-auto"
@@ -70,6 +80,7 @@ export function StarGroupedStrip() {
         width: STRIP_WIDTH,
         background: "var(--color-bg)",
         borderRight: "1px solid var(--color-border)",
+        scrollbarGutter: "stable",
       }}
     >
       {sections.map((section) => {
@@ -103,18 +114,17 @@ export function StarGroupedStrip() {
             <div className="flex flex-col gap-1 p-[7px]">
               {section.items.map((img) => {
                 const active = img.id === currentImageId;
-                const rating = Math.max(0, Math.min(5, img.starRating)) as 0 | 1 | 2 | 3 | 4 | 5;
                 return (
-                  <Photo
-                    key={img.id}
-                    src={thumbUrl(img.id)}
-                    alt={img.filename}
-                    fit="cover"
-                    rating={rating}
-                    selected={active}
-                    onClick={() => onClick(img.id)}
-                    style={{ width: THUMB_W, height: THUMB_H, borderRadius: 2 }}
-                  />
+                  <div key={img.id} ref={active ? activeRef : null}>
+                    <Photo
+                      src={thumbUrl(img.id)}
+                      alt={img.filename}
+                      fit="cover"
+                      selected={active}
+                      onClick={() => onClick(img.id)}
+                      style={{ width: THUMB_W, height: THUMB_H, borderRadius: 2 }}
+                    />
+                  </div>
                 );
               })}
             </div>

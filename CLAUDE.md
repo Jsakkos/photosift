@@ -54,14 +54,14 @@ src/
 - **Database**: `~/.photosift/photosift.db`
 - **Preview cache**: `~/.photosift/cache/{shoot_id}/previews/` (full-res embedded JPEGs)
 - **Thumbnail cache**: `~/.photosift/cache/{shoot_id}/thumbs/` (512px longest edge)
-- **Imported photos**: `DSLR/YYYY/YYYY-MM_Description/RAW/` (user-configured root)
-- **XMP sidecars**: written alongside RAW files in the same directory
+- **Imported photos**: land in `DSLR/YYYY/YYYY-MM_Description/RAW/` (user-configured root). As the user completes each pass, `sync_shoot_layout` relocates them into buckets nested under `RAW/`: `RAW/rejects/`, `RAW/selects/`, `RAW/edit/`, `RAW/export/`. `raw_path` in the DB always tracks the current on-disk location.
+- **XMP sidecars**: every move (re)writes a fresh XMP alongside the RAW at its new location, reflecting the current `(star_rating, flag, destination)`. Stale sidecars at the previous location are cleaned up as part of the move.
 
 ## Data Model
 
 Six tables: `shoots`, `photos`, `groups`, `group_members`, `view_cursors`, `undo_log`. Full schema is in the spec. Key points:
 
-- Photos have three orthogonal attributes: `flag` (unreviewed/pick/reject), `destination` (unrouted/edit/publish_direct), `star_rating` (0-5, not used during culling).
+- Photos have three orthogonal attributes: `flag` (unreviewed/pick/reject), `destination` (unrouted/edit/export), `star_rating` (0-5, not used during culling).
 - Groups are perceptual hash clusters computed at import. Two tiers: near-duplicate (hamming ≤4) and related (hamming 5-12).
 - `view_cursors` stores resume position per shoot per view.
 - `undo_log` is append-only during a session, pruned on app close.
@@ -70,7 +70,7 @@ Six tables: `shoots`, `photos`, `groups`, `group_members`, `view_cursors`, `undo
 
 - **Every culling action persists immediately to SQLite.** No save button, no unsaved state. The user can close the app at any time and resume later.
 - **Keyboard-first.** Every action has a keystroke. Mouse/trackpad is supported but not required.
-- **Non-destructive.** No files are deleted or modified. All decisions are metadata (SQLite + XMP sidecars).
+- **Non-destructive data, layout-managing.** Pixel data, EXIF, and metadata are never mutated. The *layout* under a shoot folder IS managed by PhotoSift: as the user finishes triage/select/route, `sync_shoot_layout` moves RAWs into nested buckets (`RAW/`, `RAW/rejects/`, `RAW/selects/`, `RAW/edit/`, `RAW/export/`) to reflect `(flag, destination)`, and writes a fresh XMP sidecar at each new location. The sidecar carries `xmp:Rating` + `photosift:destination` only — no `xmp:Label`, because Capture One and DxO interpret that as a color tag the user never chose. Moves are idempotent and reversible — flip the metadata, re-run sync, the file and its sidecar follow. See `src-tauri/src/layout.rs` for the bucket map and trigger gating.
 - **Preview hot path.** The Rust preview module preloads N+1..N+5 forward and N-1..N-3 backward as decoded pixel buffers. Target is zero perceptible load time on advance. This is the most performance-critical code path.
 - **IPC is typed.** Tauri commands return typed structs, not raw JSON. Define shared types in `src-tauri/src/` and mirror them in TypeScript.
 
@@ -82,7 +82,7 @@ Each "pass" is a view preset (filter + available actions), not a separate mode:
 |---|---|---|---|
 | Triage | `flag = unreviewed` | Collapsed | `P` pick, `X` reject, `Space` next |
 | Select | `flag != reject` | Expanded + comparison | `P` pick (auto-rejects group), `Tab` 2-up |
-| Route | `flag = pick, dest = unrouted` | None | `E` edit, `D` publish direct |
+| Route | `flag = pick` | None | Mouse-driven: select photos, pick Capture One / Export from the Route dropdown. No per-view hotkeys; `Ctrl+E` still exports XMP sidecars. |
 
 ## Common Tasks
 

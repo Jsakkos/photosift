@@ -4,7 +4,6 @@ import { useNavigate } from "react-router-dom";
 import { ViewSelector } from "./ViewSelector";
 import { ProgressBar } from "./ProgressBar";
 import { AiProgressIndicator } from "./AiProgressIndicator";
-import { ViewHint } from "./ViewHint";
 
 export function Toolbar() {
   const { currentShoot, displayItems, currentIndex, autoAdvance, toggleAutoAdvance, toggleShortcutHints } =
@@ -76,8 +75,6 @@ export function Toolbar() {
       <ViewSelector />
       {/* Progress bar */}
       <ProgressBar />
-      {/* Contextual workflow hint */}
-      <ViewHint />
     </div>
   );
 }

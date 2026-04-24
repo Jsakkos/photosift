@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use tauri::State;
 
 const VALID_FLAGS: &[&str] = &["unreviewed", "pick", "reject"];
-const VALID_DESTS: &[&str] = &["unrouted", "edit", "publish_direct"];
+const VALID_DESTS: &[&str] = &["unrouted", "edit", "export"];
 
 #[tauri::command]
 pub fn set_flag(

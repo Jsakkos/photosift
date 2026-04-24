@@ -8,7 +8,6 @@ afterEach(() => {
     images: [],
     currentIndex: 0,
     isLoading: false,
-    showMetadata: false,
     showShortcutHints: false,
     autoAdvance: true,
     isZoomed: false,
@@ -19,8 +18,8 @@ afterEach(() => {
     groups: [],
     displayItems: [],
     lastFlagAction: null,
-    comparisonPinnedId: null,
-    comparisonCyclingId: null,
-    comparisonGroupMembers: [],
+    selectBracket: null,
+    selectBracketSuppressedForGroup: null,
+    selectVisitedAtFloor: new Set<number>(),
   });
 });

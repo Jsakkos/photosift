@@ -129,11 +129,11 @@ describe("undo", () => {
     expect(state.redoStack).toHaveLength(0);
   });
 
-  test("undo of comparison quickPick restores BOTH images", async () => {
+  test("undo of bracket decision rolls back every promotion in the batch", async () => {
     setupMockIpc({});
 
-    const img1 = makeImage({ id: 1, flag: "unreviewed" });
-    const img2 = makeImage({ id: 2, flag: "unreviewed" });
+    const img1 = makeImage({ id: 1, flag: "pick", starRating: 1, qualityScore: 90 });
+    const img2 = makeImage({ id: 2, flag: "pick", starRating: 1, qualityScore: 80 });
     const group = makeGroup([
       { photoId: 1, isCover: true },
       { photoId: 2 },
@@ -145,23 +145,23 @@ describe("undo", () => {
       displayItems: computeDisplayItems([img1, img2], "select", [group]),
       currentView: "select",
       currentIndex: 0,
-      comparisonPinnedId: 1,
-      comparisonCyclingId: 2,
-      comparisonGroupMembers: [1, 2],
-      viewMode: "comparison",
       undoStack: [],
       redoStack: [],
     });
 
-    await useProjectStore.getState().comparisonQuickPick("left");
-    expect(useProjectStore.getState().images.find((i) => i.id === 1)!.flag).toBe("pick");
-    expect(useProjectStore.getState().images.find((i) => i.id === 2)!.flag).toBe("reject");
+    useProjectStore.getState().enterBracket();
+    expect(useProjectStore.getState().selectBracket).not.toBeNull();
+
+    await useProjectStore.getState().bracketDecision("both");
+    // Both promoted by 1 star.
+    expect(useProjectStore.getState().images.find((i) => i.id === 1)!.starRating).toBe(2);
+    expect(useProjectStore.getState().images.find((i) => i.id === 2)!.starRating).toBe(2);
 
     await useProjectStore.getState().undo();
 
     const state = useProjectStore.getState();
-    expect(state.images.find((i) => i.id === 1)!.flag).toBe("unreviewed");
-    expect(state.images.find((i) => i.id === 2)!.flag).toBe("unreviewed");
+    expect(state.images.find((i) => i.id === 1)!.starRating).toBe(1);
+    expect(state.images.find((i) => i.id === 2)!.starRating).toBe(1);
   });
 
   test("undo stack cap: each batch counts as one entry", async () => {

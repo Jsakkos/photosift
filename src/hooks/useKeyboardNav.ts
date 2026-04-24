@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../stores/projectStore";
 import { useSettingsStore } from "../stores/settingsStore";
 
@@ -9,10 +8,8 @@ export function useKeyboardNav() {
     navigatePrev,
     setRating,
     setFlag,
-    setDestination,
     undo,
     redo,
-    toggleMetadata,
     toggleShortcutHints,
     toggleAutoAdvance,
     toggleZoom,
@@ -25,19 +22,25 @@ export function useKeyboardNav() {
     setGroupCover,
     setViewMode,
     getGroupForCurrentItem,
-    enterComparison,
-    exitComparison,
-    cycleComparison,
-    comparisonQuickPick,
+    enterBracket,
+    exitBracket,
+    bracketDecision,
+    pickCurrent,
+    skipCurrent,
     setActiveInnerGroup,
   } = useProjectStore();
+  const selectBracket = useProjectStore((s) => s.selectBracket);
   const openSettings = useSettingsStore((s) => s.openDialog);
   const setToast = useProjectStore((s) => s.setToast);
-  const currentShoot = useProjectStore((s) => s.currentShoot);
 
   useEffect(() => {
-    if (displayItems.length === 0) return;
-
+    // Don't guard on `displayItems.length === 0` here — view-level keys
+    // like `[` / `]` (Select pass floor), `,` (settings), and `?`
+    // (shortcut hints) must still work when the current filter yields
+    // zero photos, otherwise the user gets trapped in an empty tier with
+    // no way back. Per-branch handlers that dereference the current item
+    // are already defensive (setRating/setFlag early-return on `!item`,
+    // navigateNext bounds-checks, etc.).
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
         e.target instanceof HTMLInputElement ||
@@ -48,31 +51,31 @@ export function useKeyboardNav() {
       }
 
       const mode = viewMode as string;
-      if (mode === "comparison") {
+      // Bracket sub-state of Select: overrides 1/2/3 + Tab + arrows so
+      // pair decisions and single/2-up toggling work without conflict
+      // with the single-photo bindings below.
+      if (selectBracket !== null) {
         switch (e.key) {
-          case "ArrowRight":
-            e.preventDefault();
-            cycleComparison(1);
-            return;
-          case "ArrowLeft":
-            e.preventDefault();
-            cycleComparison(-1);
-            return;
           case "1":
-            comparisonQuickPick("left");
+            e.preventDefault();
+            void bracketDecision("L");
             return;
           case "2":
-            comparisonQuickPick("right");
+            e.preventDefault();
+            void bracketDecision("R");
+            return;
+          case "3":
+          case " ":
+            e.preventDefault();
+            void bracketDecision("both");
             return;
           case "Tab":
-            if (e.shiftKey) {
-              e.preventDefault();
-              exitComparison();
-            }
+            e.preventDefault();
+            exitBracket();
             return;
           case "Escape":
             e.preventDefault();
-            exitComparison();
+            exitBracket();
             return;
           case "z":
           case "Z":
@@ -101,16 +104,6 @@ export function useKeyboardNav() {
         return;
       }
 
-      if (primaryMod && (e.key === "e" || e.key === "E")) {
-        e.preventDefault();
-        if (currentShoot) {
-          invoke<number>("export_xmp", { shootId: currentShoot.id, filter: "picks" })
-            .then((count) => setToast(`Exported ${count} XMP sidecar${count === 1 ? "" : "s"}`))
-            .catch((err) => setToast(`Export failed: ${err}`, "error"));
-        }
-        return;
-      }
-
       if (e.key === ",") {
         e.preventDefault();
         openSettings();
@@ -134,7 +127,14 @@ export function useKeyboardNav() {
       switch (e.key) {
         case "ArrowRight":
           e.preventDefault();
-          navigateNext();
+          // In Select, the right arrow is the "skip" verb — move to
+          // next photo without changing rating. In other views it's
+          // plain navigation.
+          if (currentView === "select") {
+            skipCurrent();
+          } else {
+            navigateNext();
+          }
           break;
         case "ArrowLeft":
           e.preventDefault();
@@ -229,22 +229,17 @@ export function useKeyboardNav() {
           break;
         case "u":
         case "U":
-          if (currentView === "route") {
-            setDestination("unrouted");
-          } else {
-            setFlag("unreviewed");
-          }
-          break;
-        case "e":
-          if (!e.ctrlKey && currentView === "route") setDestination("edit");
-          break;
-        case "d":
-        case "D":
-          if (currentView === "route") setDestination("publish_direct");
+          setFlag("unreviewed");
           break;
         case " ":
           e.preventDefault();
-          advanceToNextUnreviewed();
+          // In Select, Space is "pick + advance" (+1 star). In Triage/
+          // Route it keeps the legacy "advance to next unreviewed" verb.
+          if (currentView === "select") {
+            void pickCurrent();
+          } else {
+            advanceToNextUnreviewed();
+          }
           break;
         case "z":
         case "Z":
@@ -285,7 +280,7 @@ export function useKeyboardNav() {
         case "Tab":
           if (!e.shiftKey && currentView === "select") {
             e.preventDefault();
-            enterComparison();
+            enterBracket();
           }
           break;
         case "c":
@@ -296,10 +291,6 @@ export function useKeyboardNav() {
               setGroupCover(group.id, item.image.id);
             }
           }
-          break;
-        case "i":
-        case "I":
-          toggleMetadata();
           break;
         case "a":
         case "A":
@@ -346,14 +337,13 @@ export function useKeyboardNav() {
     currentIndex,
     currentView,
     viewMode,
+    selectBracket,
     navigateNext,
     navigatePrev,
     setRating,
     setFlag,
-    setDestination,
     undo,
     redo,
-    toggleMetadata,
     toggleShortcutHints,
     toggleAutoAdvance,
     toggleZoom,
@@ -362,13 +352,13 @@ export function useKeyboardNav() {
     setGroupCover,
     setViewMode,
     getGroupForCurrentItem,
-    enterComparison,
-    exitComparison,
-    cycleComparison,
-    comparisonQuickPick,
+    enterBracket,
+    exitBracket,
+    bracketDecision,
+    pickCurrent,
+    skipCurrent,
     openSettings,
     setToast,
-    currentShoot,
     setActiveInnerGroup,
   ]);
 }

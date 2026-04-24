@@ -19,6 +19,10 @@ pub fn read_rating(image_path: &Path) -> Option<i32> {
 /// Read the XMP label from an existing sidecar and map to PhotoSift flag.
 /// Returns Some("pick") for Green-ish labels, Some("reject") for Red-ish,
 /// None otherwise (or if no sidecar).
+///
+/// Kept for backward-compat re-import of sidecars written by older PhotoSift
+/// builds; current `write_cull_metadata` no longer emits `xmp:Label`, so new
+/// exports will not round-trip a flag through this path.
 pub fn read_flag_from_label(image_path: &Path) -> Option<String> {
     let xmp_path = sidecar_path(image_path);
     let content = std::fs::read_to_string(&xmp_path).ok()?;
@@ -95,56 +99,58 @@ pub fn write_rating(image_path: &Path, rating: i32) -> Result<(), String> {
     }
 }
 
-/// Write the full set of culling metadata (rating, label, PhotoSift destination)
-/// to the XMP sidecar alongside `image_path`. If a sidecar already exists, its
-/// other contents are preserved; only the three managed attributes are updated
-/// (and the xmp: / photosift: namespaces added as needed).
+/// Write culling metadata (rating + PhotoSift destination) to the XMP sidecar
+/// alongside `image_path`. If a sidecar already exists, its other contents are
+/// preserved; only the two managed attributes are updated (with `xmp:` and
+/// `photosift:` namespaces added as needed).
+///
+/// We deliberately do **not** write `xmp:Label`. The pick/reject flag is carried
+/// by the filesystem (rejects live under `RAW/rejects/`, picks under
+/// `RAW/edit/` etc.), and emitting Green/Red labels would surface as spurious
+/// color labels in Capture One and DxO — which honor `xmp:Label` as a real
+/// color-tag signal. Any pre-existing user-set label is passed through
+/// unchanged.
 pub fn write_cull_metadata(
     image_path: &Path,
     rating: i32,
-    flag: &str,
     destination: &str,
 ) -> Result<(), String> {
     let xmp_path = sidecar_path(image_path);
-    let label = match flag {
-        "pick" => Some("Green"),
-        "reject" => Some("Red"),
-        _ => None, // leave Label untouched for unreviewed
+    let (base, existing) = if xmp_path.exists() {
+        let content = std::fs::read_to_string(&xmp_path).map_err(|e| e.to_string())?;
+        (content.clone(), Some(content))
+    } else {
+        (empty_xmp_skeleton().to_string(), None)
     };
 
-    if xmp_path.exists() {
-        let content = std::fs::read_to_string(&xmp_path).map_err(|e| e.to_string())?;
-        let updated = update_cull_attrs_in_xml(&content, rating, label, destination)?;
-        std::fs::write(&xmp_path, updated).map_err(|e| e.to_string())
-    } else {
-        let xml = create_full_xmp(rating, label, destination);
-        std::fs::write(&xmp_path, xml).map_err(|e| e.to_string())
+    let updated = update_cull_attrs_in_xml(&base, rating, destination)?;
+
+    // Skip the disk write when the sidecar already matches. Every sync pass
+    // runs this for every photo (including the skip branch for files already
+    // at their target); avoiding no-op writes keeps sync cheap and preserves
+    // sidecar mtime for unchanged photos. Only meaningful when `existing` is
+    // Some — a fresh file is always written.
+    if let Some(content) = existing {
+        if updated == content {
+            return Ok(());
+        }
     }
+
+    std::fs::write(&xmp_path, updated).map_err(|e| e.to_string())
 }
 
-fn create_full_xmp(rating: i32, label: Option<&str>, destination: &str) -> String {
-    let label_attr = label
-        .map(|l| format!("\n      xmp:Label=\"{}\"", l))
-        .unwrap_or_default();
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
-  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-    <rdf:Description
-      xmlns:xmp="http://ns.adobe.com/xap/1.0/"
-      xmlns:photosift="https://photosift.local/ns/1.0/"
-      xmp:Rating="{rating}"{label_attr}
-      photosift:destination="{destination}">
-    </rdf:Description>
-  </rdf:RDF>
-</x:xmpmeta>"#
-    )
+// Minimal XMP skeleton that the parser can inject our managed attributes
+// into. Routes every write through `update_cull_attrs_in_xml` so the
+// bytes we produce are stable across create/update paths — otherwise a
+// pretty-printed create followed by a parser-canonical update would
+// rewrite the file on every pass just to normalize formatting.
+fn empty_xmp_skeleton() -> &'static str {
+    r#"<?xml version="1.0" encoding="UTF-8"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description></rdf:Description></rdf:RDF></x:xmpmeta>"#
 }
 
 fn update_cull_attrs_in_xml(
     xml: &str,
     rating: i32,
-    label: Option<&str>,
     destination: &str,
 ) -> Result<String, String> {
     let mut reader = Reader::from_str(xml);
@@ -156,7 +162,7 @@ fn update_cull_attrs_in_xml(
             Ok(Event::Eof) => break,
             Ok(Event::Start(ref e)) => {
                 let elem = if has_rdf_description_name(e) {
-                    update_cull_attrs(e, rating, label, destination)
+                    update_cull_attrs(e, rating, destination)
                 } else {
                     e.clone()
                 };
@@ -164,7 +170,7 @@ fn update_cull_attrs_in_xml(
             }
             Ok(Event::Empty(ref e)) => {
                 let elem = if has_rdf_description_name(e) {
-                    update_cull_attrs(e, rating, label, destination)
+                    update_cull_attrs(e, rating, destination)
                 } else {
                     e.clone()
                 };
@@ -185,7 +191,6 @@ fn update_cull_attrs_in_xml(
 fn update_cull_attrs(
     e: &BytesStart,
     rating: i32,
-    label: Option<&str>,
     destination: &str,
 ) -> BytesStart<'static> {
     let mut new_elem = BytesStart::new(
@@ -193,7 +198,6 @@ fn update_cull_attrs(
     );
 
     let mut saw_rating = false;
-    let mut saw_label = false;
     let mut saw_dest = false;
     let mut has_xmp_ns = false;
     let mut has_photosift_ns = false;
@@ -205,21 +209,13 @@ fn update_cull_attrs(
                 new_elem.push_attribute(("xmp:Rating", rating.to_string().as_str()));
                 saw_rating = true;
             }
-            "xmp:Label" => {
-                if let Some(l) = label {
-                    new_elem.push_attribute(("xmp:Label", l));
-                } else {
-                    // Preserve existing label when we have no opinion (unreviewed).
-                    let val = String::from_utf8_lossy(&attr.value).to_string();
-                    new_elem.push_attribute(("xmp:Label", val.as_str()));
-                }
-                saw_label = true;
-            }
             "photosift:destination" => {
                 new_elem.push_attribute(("photosift:destination", destination));
                 saw_dest = true;
             }
             _ => {
+                // Every other attribute passes through untouched — including a
+                // user-set `xmp:Label`, which we intentionally do not manage.
                 let val = String::from_utf8_lossy(&attr.value).to_string();
                 new_elem.push_attribute((key.as_str(), val.as_str()));
                 if key == "xmlns:xmp" {
@@ -239,11 +235,6 @@ fn update_cull_attrs(
     }
     if !saw_rating {
         new_elem.push_attribute(("xmp:Rating", rating.to_string().as_str()));
-    }
-    if !saw_label {
-        if let Some(l) = label {
-            new_elem.push_attribute(("xmp:Label", l));
-        }
     }
     if !saw_dest {
         new_elem.push_attribute(("photosift:destination", destination));
@@ -410,5 +401,87 @@ mod tests {
 
         write_rating(&img_path, 5).unwrap();
         assert_eq!(read_rating(&img_path), Some(5));
+    }
+
+    #[test]
+    fn test_write_cull_metadata_does_not_emit_xmp_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("shot.NEF");
+        std::fs::write(&img_path, b"fake").unwrap();
+
+        write_cull_metadata(&img_path, 3, "edit").unwrap();
+
+        let content = std::fs::read_to_string(sidecar_path(&img_path)).unwrap();
+        assert!(content.contains("xmp:Rating=\"3\""));
+        assert!(content.contains("photosift:destination=\"edit\""));
+        assert!(
+            !content.contains("xmp:Label"),
+            "xmp:Label must not be written — it would show as a color label in Capture One / DxO: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn test_write_cull_metadata_is_byte_stable_on_no_op() {
+        // Writing identical metadata twice must leave the file's mtime
+        // untouched. This is what lets sync_shoot_layout safely refresh
+        // XMP on every pass without rewriting every sidecar on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("shot.NEF");
+        std::fs::write(&img_path, b"fake").unwrap();
+
+        write_cull_metadata(&img_path, 3, "edit").unwrap();
+        let sidecar = sidecar_path(&img_path);
+        let first_mtime = std::fs::metadata(&sidecar).unwrap().modified().unwrap();
+
+        // Sleep past the coarsest common filesystem timestamp granularity
+        // (FAT: 2s, NTFS: 100ns, ext4: ~1ms) so any real write would shift
+        // the mtime even on slow filesystems.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        write_cull_metadata(&img_path, 3, "edit").unwrap();
+        let second_mtime = std::fs::metadata(&sidecar).unwrap().modified().unwrap();
+
+        assert_eq!(
+            first_mtime, second_mtime,
+            "no-op write must not touch the sidecar on disk",
+        );
+    }
+
+    #[test]
+    fn test_write_cull_metadata_preserves_existing_user_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("shot.NEF");
+        std::fs::write(&img_path, b"fake").unwrap();
+
+        // Simulate a sidecar written by Capture One with a user-chosen
+        // color label the photographer actually picked. A subsequent
+        // PhotoSift write should leave it alone.
+        let sidecar = sidecar_path(&img_path);
+        std::fs::write(
+            &sidecar,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description
+      xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+      xmp:Rating="1"
+      xmp:Label="Blue">
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>"#,
+        )
+        .unwrap();
+
+        write_cull_metadata(&img_path, 4, "export").unwrap();
+
+        let content = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(content.contains("xmp:Rating=\"4\""));
+        assert!(
+            content.contains("xmp:Label=\"Blue\""),
+            "user-set xmp:Label should pass through unchanged: {}",
+            content
+        );
+        assert!(content.contains("photosift:destination=\"export\""));
     }
 }

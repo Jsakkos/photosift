@@ -1,12 +1,12 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { LoupeView } from "../LoupeView";
-import { MetadataOverlay } from "../MetadataOverlay";
 import { HeatmapOverlay } from "../HeatmapOverlay";
+import { ComparisonView } from "../ComparisonView";
 import { Kbd, Stars } from "../primitives";
 import { StarGroupedStrip } from "./StarGroupedStrip";
-import { RatingPeerStrip } from "./RatingPeerStrip";
 import { DetailRail } from "./DetailRail";
 
 function HeatmapHost() {
@@ -72,6 +72,20 @@ function PassPills() {
   );
 }
 
+function VisitedProgress() {
+  const visited = useProjectStore((s) => s.selectVisitedAtFloor.size);
+  const total = useProjectStore((s) => s.displayItems.length);
+  if (total === 0) return null;
+  return (
+    <span
+      className="font-mono text-[10px] tabular-nums"
+      style={{ color: "var(--color-fg-mute)" }}
+    >
+      · visited {visited}/{total}
+    </span>
+  );
+}
+
 function TopBar() {
   const current = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
   const total = useProjectStore((s) => s.displayItems.length);
@@ -113,6 +127,7 @@ function TopBar() {
       >
         Pass {passNumber} · {total === 0 ? "0 / 0" : `${index + 1} / ${total}`}
       </span>
+      <VisitedProgress />
     </div>
   );
 }
@@ -198,11 +213,11 @@ function RatingColumn() {
   );
 }
 
-function CompareNarrowHints() {
+function ImmersiveHints() {
   return (
     <div
       className="pointer-events-none absolute top-1/2 -translate-y-1/2 right-6 flex flex-col gap-[10px] items-end"
-      aria-label="Compare and narrow-pass hints"
+      aria-label="Select-mode hints"
     >
       <div
         className="flex items-center gap-[8px] px-[12px] py-[8px] rounded-md"
@@ -213,8 +228,20 @@ function CompareNarrowHints() {
           backdropFilter: "blur(8px)",
         }}
       >
-        <Kbd>Tab</Kbd>
-        <span className="font-mono text-[10px] uppercase tracking-[1px]">compare</span>
+        <Kbd>Space</Kbd>
+        <span className="font-mono text-[10px] uppercase tracking-[1px]">pick</span>
+      </div>
+      <div
+        className="flex items-center gap-[8px] px-[10px] py-[6px] rounded-md"
+        style={{
+          background: "rgba(21,21,21,0.72)",
+          border: "1px solid var(--color-border)",
+          backdropFilter: "blur(8px)",
+          color: "var(--color-fg-dim)",
+        }}
+      >
+        <Kbd>→</Kbd>
+        <span className="font-mono text-[10px] uppercase tracking-[0.6px]">skip</span>
       </div>
       <div
         className="flex items-center gap-[6px] px-[10px] py-[6px] rounded-md"
@@ -225,28 +252,38 @@ function CompareNarrowHints() {
           color: "var(--color-fg-dim)",
         }}
       >
-        <Kbd>[</Kbd>
-        <Kbd>]</Kbd>
-        <span className="font-mono text-[10px] uppercase tracking-[0.6px]">narrow</span>
+        <Kbd>T</Kbd>
+        <span className="font-mono text-[10px] uppercase tracking-[0.6px]">filmstrip</span>
       </div>
     </div>
   );
 }
 
 function BottomBar() {
+  const inBracket = useProjectStore((s) => s.selectBracket !== null);
+  const items = inBracket
+    ? [
+        { kbd: "1", label: "pick L" },
+        { kbd: "2", label: "pick R" },
+        { kbd: "3", label: "both" },
+        { kbd: "Tab", label: "single" },
+        { kbd: "Esc", label: "exit" },
+      ]
+    : [
+        { kbd: "Space", label: "pick" },
+        { kbd: "→", label: "skip" },
+        { kbd: "1–5", label: "rate" },
+        { kbd: "Tab", label: "2-up" },
+        { kbd: "[", label: "narrow" },
+        { kbd: "]", label: "widen" },
+        { kbd: "G", label: "grid" },
+      ];
   return (
     <div
       className="h-10 flex items-center px-4 gap-4 shrink-0 border-t"
       style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
     >
-      {[
-        { kbd: "1–5", label: "rate" },
-        { kbd: "0", label: "clear" },
-        { kbd: "Tab", label: "2-up" },
-        { kbd: "[", label: "narrow" },
-        { kbd: "]", label: "widen" },
-        { kbd: "G", label: "grid" },
-      ].map((s) => (
+      {items.map((s) => (
         <span key={s.label} className="inline-flex items-center gap-[6px]">
           <Kbd>{s.kbd}</Kbd>
           <span
@@ -261,23 +298,72 @@ function BottomBar() {
   );
 }
 
+/// Stamp `photos.select_visited_at` the first time each photo is the
+/// focused frame in Select. Rust-side `WHERE select_visited_at IS NULL`
+/// makes repeats a no-op, so the effect fires freely without needing
+/// local dedup. The visit bit gates the Select→Route layout-sync trigger.
+function SelectVisitTracker() {
+  const currentPhotoId = useProjectStore(
+    (s) => s.displayItems[s.currentIndex]?.image.id ?? null,
+  );
+  const currentFlag = useProjectStore(
+    (s) => s.displayItems[s.currentIndex]?.image.flag ?? null,
+  );
+
+  useEffect(() => {
+    if (currentPhotoId === null) return;
+    if (currentFlag !== "pick") return;
+    invoke("mark_photo_visited_in_select", { photoId: currentPhotoId }).catch(
+      () => {},
+    );
+  }, [currentPhotoId, currentFlag]);
+
+  return null;
+}
+
+/// Auto-enter 2-up when the cursor lands on a group cover with ≥2
+/// reviewable members, unless the user has manually toggled 2-up off
+/// for that specific group (via Tab).
+function BracketAutoEnter() {
+  const groupId = useProjectStore(
+    (s) => s.displayItems[s.currentIndex]?.groupId ?? null,
+  );
+  const selectBracket = useProjectStore((s) => s.selectBracket);
+  const suppressedFor = useProjectStore((s) => s.selectBracketSuppressedForGroup);
+  const enterBracket = useProjectStore((s) => s.enterBracket);
+
+  useEffect(() => {
+    if (groupId === null) return;
+    if (selectBracket) return;
+    if (suppressedFor === groupId) return;
+    enterBracket();
+  }, [groupId, selectBracket, suppressedFor, enterBracket]);
+
+  return null;
+}
+
 export function SelectShell() {
   const showAllStrip = useProjectStore((s) => s.showAllStrip);
   const showFaces = useProjectStore((s) => s.showFaces);
+  const inBracket = useProjectStore((s) => s.selectBracket !== null);
 
   return (
     <div className="flex-1 flex overflow-hidden">
+      <SelectVisitTracker />
+      <BracketAutoEnter />
       {showAllStrip && <StarGroupedStrip />}
-      <RatingPeerStrip />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar />
-        <div className="flex-1 relative overflow-hidden" style={{ background: "#0c0c0c" }}>
-          <LoupeView />
-          <HeatmapHost />
-          <MetadataOverlay />
-          <RatingColumn />
-          <CompareNarrowHints />
-        </div>
+        {inBracket ? (
+          <ComparisonView />
+        ) : (
+          <div className="flex-1 relative overflow-hidden" style={{ background: "#0c0c0c" }}>
+            <LoupeView />
+            <HeatmapHost />
+            <RatingColumn />
+            <ImmersiveHints />
+          </div>
+        )}
         <BottomBar />
       </div>
       {showFaces && <DetailRail />}

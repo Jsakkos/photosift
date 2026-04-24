@@ -1,0 +1,179 @@
+import { useEffect } from "react";
+import { useProjectStore } from "../stores/projectStore";
+import { Kbd } from "./primitives";
+
+// Source of truth for key bindings lives in src/hooks/useKeyboardNav.ts.
+// Keep this table in sync by hand when you add or rename a shortcut.
+type Row = { keys: string[]; label: string };
+type Section = { heading: string; rows: Row[] };
+
+const SECTIONS: Section[] = [
+  {
+    heading: "Navigation",
+    rows: [
+      { keys: ["←", "→"], label: "Previous / next photo" },
+      { keys: ["↑", "↓"], label: "Previous / next group" },
+      { keys: ["Home"], label: "Jump to first" },
+      { keys: ["End"], label: "Jump to last" },
+      { keys: ["Space"], label: "Advance to next unreviewed" },
+      { keys: ["G"], label: "Toggle grid view" },
+      { keys: ["Enter"], label: "Drill into group (from cover)" },
+      { keys: ["Esc"], label: "Exit drilled group" },
+    ],
+  },
+  {
+    heading: "Triage",
+    rows: [
+      { keys: ["P"], label: "Keep (pick)" },
+      { keys: ["Shift", "P"], label: "Keep everything in current group" },
+      { keys: ["X"], label: "Reject" },
+      { keys: ["U"], label: "Mark unreviewed" },
+      { keys: ["A"], label: "Toggle auto-advance" },
+    ],
+  },
+  {
+    heading: "Select",
+    rows: [
+      { keys: ["1"], label: "Rate ★1 (through 5)" },
+      { keys: ["0"], label: "Clear rating" },
+      { keys: ["["], label: "Lower pass floor" },
+      { keys: ["]"], label: "Raise pass floor" },
+      { keys: ["Tab"], label: "Enter 2-up comparison" },
+      { keys: ["X"], label: "Reject" },
+      { keys: ["C"], label: "Set current as group cover" },
+      { keys: ["Shift", "A"], label: "Accept AI pick as cover" },
+      { keys: ["Alt", "S"], label: "Cycle AI sort" },
+    ],
+  },
+  {
+    heading: "Comparison (Tab)",
+    rows: [
+      { keys: ["←", "→"], label: "Cycle opposite member" },
+      { keys: ["1"], label: "Pick left" },
+      { keys: ["2"], label: "Pick right" },
+      { keys: ["Z"], label: "Toggle zoom" },
+      { keys: ["Shift", "Tab"], label: "Exit comparison" },
+    ],
+  },
+  {
+    heading: "Panels & overlays",
+    rows: [
+      { keys: ["F"], label: "Toggle faces rail" },
+      { keys: ["T"], label: "Toggle all-strip" },
+      { keys: ["H"], label: "Toggle heatmap" },
+      { keys: ["Z"], label: "Toggle zoom" },
+    ],
+  },
+  {
+    heading: "App",
+    rows: [
+      { keys: ["?"], label: "Toggle this overlay" },
+      { keys: [","], label: "Open settings" },
+      { keys: ["Ctrl", "Z"], label: "Undo" },
+      { keys: ["Ctrl", "Shift", "Z"], label: "Redo" },
+    ],
+  },
+];
+
+export function ShortcutsOverlay() {
+  const show = useProjectStore((s) => s.showShortcutHints);
+  const toggle = useProjectStore((s) => s.toggleShortcutHints);
+
+  // Esc closes the overlay even when focus lives on the main shell.
+  // The main keydown handler in useKeyboardNav already forwards `?`, so
+  // we only need a local Esc listener while open.
+  useEffect(() => {
+    if (!show) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        toggle();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [show, toggle]);
+
+  if (!show) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-6"
+      style={{ background: "rgba(0,0,0,0.72)" }}
+      onClick={toggle}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keyboard shortcuts"
+    >
+      <div
+        className="max-w-[880px] max-h-[85vh] overflow-auto rounded-md"
+        style={{
+          background: "var(--color-bg2, #181818)",
+          border: "1px solid var(--color-border, rgba(255,255,255,0.1))",
+          color: "var(--color-fg, #e8e8e8)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="flex items-center justify-between px-5 py-3 border-b"
+          style={{ borderColor: "var(--color-border, rgba(255,255,255,0.08))" }}
+        >
+          <div>
+            <div
+              className="text-[9px] uppercase tracking-[1.4px]"
+              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.5))" }}
+            >
+              Keyboard
+            </div>
+            <div className="text-[16px] font-semibold mt-[1px]">
+              Shortcuts
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={toggle}
+            className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent"
+            style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
+            aria-label="Close shortcuts"
+          >
+            Close · <Kbd>Esc</Kbd>
+          </button>
+        </div>
+
+        <div
+          className="grid gap-x-10 gap-y-6 p-5"
+          style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}
+        >
+          {SECTIONS.map((section) => (
+            <div key={section.heading}>
+              <div
+                className="text-[9px] uppercase tracking-[1.2px] mb-2"
+                style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.5))" }}
+              >
+                {section.heading}
+              </div>
+              <div className="flex flex-col gap-[6px]">
+                {section.rows.map((row, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between gap-3 text-[12px]"
+                  >
+                    <span style={{ color: "var(--color-fg, #e8e8e8)" }}>
+                      {row.label}
+                    </span>
+                    <span className="flex items-center gap-[3px]">
+                      {row.keys.map((k, ki) => (
+                        <Kbd key={ki}>{k}</Kbd>
+                      ))}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -2,27 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAiStore, sharpnessBadgeScore } from "../../stores/aiStore";
-import { FaceThumb } from "../FaceThumb";
+import { FaceChip } from "../FaceChip";
 import { ExifChip, ScoreBar, Stars, ColorLabelRow } from "../primitives";
+import { verdictFor } from "../../lib/faceVerdict";
 import type { Face, ImageEntry } from "../../types";
 
-const RAIL_WIDTH = 220;
-const FACE_SIZE = 86;
-
-type Verdict = "keep" | "blink" | "blur";
-
-function verdictFor(face: Face): Verdict {
-  if (face.leftEyeOpen === 0 && face.rightEyeOpen === 0) return "blink";
-  const eyeSharp = (face.leftEyeSharpness + face.rightEyeSharpness) / 2;
-  if (eyeSharp < 0.3) return "blur";
-  return "keep";
-}
-
-function verdictMeta(v: Verdict): { tone: string; symbol: string; label: string } {
-  if (v === "keep") return { tone: "var(--color-success)", symbol: "✓", label: "keep" };
-  if (v === "blink") return { tone: "var(--color-warning)", symbol: "◑", label: "blink" };
-  return { tone: "var(--color-danger)", symbol: "⌀", label: "blur" };
-}
+const RAIL_WIDTH = 330;
+const FACE_SIZE = 120;
 
 function noteFor(_image: ImageEntry, faces: Face[] | null, rating: number): string {
   if (rating >= 4) return `Top-tier pick (${"★".repeat(rating)}).`;
@@ -31,31 +17,6 @@ function noteFor(_image: ImageEntry, faces: Face[] | null, rating: number): stri
   if (blinks > 0) return `${blinks} blink${blinks === 1 ? "" : "s"} in this frame.`;
   const topConf = Math.max(...faces.map((f) => f.detectionConfidence));
   return `Strongest face ${Math.round(topConf * 100)}%.`;
-}
-
-function FaceChip({ face, photoId }: { face: Face; photoId: number }) {
-  const verdict = verdictFor(face);
-  const meta = verdictMeta(verdict);
-  const conf = Math.round(face.detectionConfidence * 100);
-  return (
-    <div className="flex flex-col gap-[6px]">
-      <FaceThumb face={face} photoId={photoId} sizePx={FACE_SIZE} />
-      <div className="flex items-center gap-[6px] font-mono text-[9px] leading-tight">
-        <span
-          className="inline-flex items-center gap-[3px] px-[5px] py-[2px] rounded-xs"
-          style={{
-            color: meta.tone,
-            background: "rgba(255,255,255,0.04)",
-            border: `1px solid ${meta.tone}`,
-          }}
-        >
-          <span>{meta.symbol}</span>
-          <span className="uppercase tracking-[0.5px]">{meta.label}</span>
-        </span>
-        <span style={{ color: "var(--color-fg-dim)" }}>{conf}%</span>
-      </div>
-    </div>
-  );
 }
 
 export function DetailRail() {
@@ -152,7 +113,14 @@ export function DetailRail() {
         {!disabled && analyzedAt && faces !== null && faces.length > 0 && photoId !== null && (
           <div className="grid grid-cols-2 gap-2">
             {faces.map((f, i) => (
-              <FaceChip key={`${photoId}-${i}`} face={f} photoId={photoId} />
+              <FaceChip
+                key={`${photoId}-${i}`}
+                face={f}
+                photoId={photoId}
+                sizePx={FACE_SIZE}
+                showEyes={showEyes}
+                showSmile={showSmile}
+              />
             ))}
           </div>
         )}

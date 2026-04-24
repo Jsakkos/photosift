@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { LoupeView } from "../LoupeView";
-import { MetadataOverlay } from "../MetadataOverlay";
 import { HeatmapOverlay } from "../HeatmapOverlay";
 import { Kbd } from "../primitives";
 import { AllStrip } from "./AllStrip";
@@ -168,7 +167,6 @@ export function TriageShell() {
         <div className="flex-1 relative overflow-hidden" style={{ background: "#0c0c0c" }}>
           <LoupeView />
           <HeatmapHost />
-          <MetadataOverlay />
           <VerdictHint side="left" label="keep" kbd="P" tone="var(--color-success)" />
           <VerdictHint side="right" label="toss" kbd="X" tone="var(--color-danger)" />
         </div>

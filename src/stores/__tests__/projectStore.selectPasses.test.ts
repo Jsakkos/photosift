@@ -92,55 +92,64 @@ describe("Select multi-pass star-rating filter", () => {
     expect(useProjectStore.getState().selectMinStar).toBe(3);
   });
 
-  test("auto-advance floor: bumps when every visible photo clears the next tier", async () => {
-    // Pass 1 (floor=0): two picks already at 1★, one still at 0★ in the
-    // focused slot. Rating the last 0★ photo up to 1★ makes every
-    // visible photo > 0, so auto-advance bumps floor to 1.
+  test("pass complete: bumps floor and resets cursor when every visible photo is visited", async () => {
+    // Pass 1 (floor=0): three picks visible. Navigating through all
+    // three marks each visited. On the third visit, the pass is done →
+    // floor auto-bumps to 1 and cursor resets to 0.
     setupMockIpc();
 
     const images = [
-      makeImage({ id: 1, flag: "pick", starRating: 0 }),
+      makeImage({ id: 1, flag: "pick", starRating: 1 }),
       makeImage({ id: 2, flag: "pick", starRating: 1 }),
       makeImage({ id: 3, flag: "pick", starRating: 1 }),
     ];
     seedSelect(images, 0);
 
-    // The focused item (currentIndex=0) is id=1 at 0★; rating it to 1★
-    // is the action that "uses up" the current tier.
-    await useProjectStore.getState().setRating(1);
+    useProjectStore.getState().markVisitedAtFloor(1);
+    useProjectStore.getState().markVisitedAtFloor(2);
+    useProjectStore.getState().markVisitedAtFloor(3);
 
     expect(useProjectStore.getState().selectMinStar).toBe(1);
+    expect(useProjectStore.getState().currentIndex).toBe(0);
   });
 
-  test("auto-advance floor: does NOT fire while some photos remain at the floor", async () => {
-    setupMockIpc();
-
+  test("pass complete: does NOT fire while any visible photo is unvisited", () => {
     const images = [
-      makeImage({ id: 1, flag: "pick", starRating: 0 }),
-      makeImage({ id: 2, flag: "pick", starRating: 0 }),
-      makeImage({ id: 3, flag: "pick", starRating: 0 }),
+      makeImage({ id: 1, flag: "pick", starRating: 1 }),
+      makeImage({ id: 2, flag: "pick", starRating: 1 }),
+      makeImage({ id: 3, flag: "pick", starRating: 1 }),
     ];
     seedSelect(images, 0);
 
-    // Rate only one photo up to 1★; the other two stay at 0★. The current
-    // tier is not "used up" — floor stays put.
-    await useProjectStore.getState().setRating(1);
+    // Only visit two of three; floor stays put.
+    useProjectStore.getState().markVisitedAtFloor(1);
+    useProjectStore.getState().markVisitedAtFloor(2);
 
     expect(useProjectStore.getState().selectMinStar).toBe(0);
   });
 
-  test("auto-advance floor: lands at 5 without overshooting", async () => {
+  test("pass complete: lands at 5 without overshooting", async () => {
+    // Floor=4, one visible photo at 4★. Rating it to 5★ fires visited
+    // tracking. Only one photo visible, so visiting it triggers the
+    // bump; clamp prevents going above 5.
     setupMockIpc();
 
-    // Floor=4, one visible photo at 4★. Rating it to 5★ fires auto-
-    // advance: every visible photo is now > 4, so floor bumps to 5.
-    // The clamp ensures it doesn't continue past 5.
     const images = [makeImage({ id: 1, flag: "pick", starRating: 4 })];
     seedSelect(images, 4);
 
     await useProjectStore.getState().setRating(5);
 
     expect(useProjectStore.getState().selectMinStar).toBe(5);
+  });
+
+  test("setSelectMinStar clears visited-at-floor so each pass starts fresh", () => {
+    const images = [makeImage({ id: 1, flag: "pick", starRating: 1 })];
+    seedSelect(images, 0);
+    useProjectStore.setState({
+      selectVisitedAtFloor: new Set<number>([1, 2, 3]),
+    });
+    useProjectStore.getState().setSelectMinStar(1);
+    expect(useProjectStore.getState().selectVisitedAtFloor.size).toBe(0);
   });
 
   test("rejecting from Select still removes the photo from the visible tier", () => {
