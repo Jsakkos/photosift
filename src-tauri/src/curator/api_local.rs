@@ -3,12 +3,14 @@
 //! llama.cpp server, …).
 //!
 //! Differences vs. the cloud providers:
-//! - No tool calling — many small vision models flake on `tool_calls`,
-//!   so we use `response_format: { "type": "json_object" }` plus a
-//!   schema embedded in the system prompt and parse the JSON content.
-//! - Markdown code fences (```json … ```) are stripped before parsing.
-//!   Ollama with default settings sometimes wraps JSON in fences even
-//!   when JSON-mode is requested.
+//! - No tool calling and no `response_format: json_object` — both are
+//!   wildly inconsistent across local servers. LM Studio in particular
+//!   silently *hangs* the inference loop when it accepts json_object
+//!   for a model whose runtime grammar support is missing (observed
+//!   2026-05 with Gemma 4 E4B). Instead we embed the JSON Schema in
+//!   the system prompt and parse the model's text content.
+//! - Markdown code fences (```json … ```) are stripped before parsing
+//!   since smaller models often wrap JSON in them even when told not to.
 //! - Cost is always 0 (handled in `cost.rs`); usage is still tracked
 //!   when the server returns it so the UI can show token throughput.
 
@@ -117,7 +119,6 @@ impl CuratorProvider for LocalProvider {
         let probe = ChatRequest {
             model: &self.model,
             messages: vec![ChatMessage::user_text("ping")],
-            response_format: None,
             max_tokens: Some(8),
             stream: false,
         };
@@ -160,7 +161,6 @@ impl CuratorProvider for LocalProvider {
                 ChatMessage::system_text(&system),
                 ChatMessage::user_parts(user_parts),
             ],
-            response_format: Some(ResponseFormat { kind: "json_object" }),
             max_tokens: Some(600),
             stream: false,
         };
@@ -214,7 +214,6 @@ impl CuratorProvider for LocalProvider {
                 ChatMessage::system_text(&system),
                 ChatMessage::user_parts(user_parts),
             ],
-            response_format: Some(ResponseFormat { kind: "json_object" }),
             max_tokens: Some(220 * cluster.frames.len() as u32),
             stream: false,
         };
@@ -360,16 +359,8 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    response_format: Option<ResponseFormat>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
-}
-
-#[derive(Serialize)]
-struct ResponseFormat {
-    #[serde(rename = "type")]
-    kind: &'static str,
 }
 
 /// One chat message. Either plain string content (for short text-only
