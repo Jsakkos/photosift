@@ -2,6 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useSettingsStore } from "../stores/settingsStore";
+import {
+  estimateCuratorCostCents,
+  formatCostCents,
+  getCuratorApiKeyStatus,
+  startCuratorForShoot,
+} from "../lib/curatorApi";
 
 interface ImportProgress {
   shootId: number;
@@ -119,6 +126,41 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
   const [selectSubset, setSelectSubset] = useState(false);
   const lastClickedIdx = useRef<number | null>(null);
 
+  // Curator auto-run on import. The provider is whichever one the user
+  // has currently selected in Settings; the prerequisite differs:
+  // cloud providers need an API key, local needs a model name.
+  const settings = useSettingsStore((s) => s.settings);
+  const [curatorEnabled, setCuratorEnabled] = useState(settings.curatorDefaultRunOnImport);
+  const [curatorReady, setCuratorReady] = useState(false);
+  const curatorProvider = settings.curatorProvider;
+  const curatorProviderLabel =
+    curatorProvider === "anthropic"
+      ? "Anthropic"
+      : curatorProvider === "gemini"
+        ? "Gemini"
+        : "Local";
+  // We store the *intent* in a ref so the import-complete listener
+  // (which runs after this dialog re-renders into its final progress
+  // state) can read the right value without a stale closure.
+  const curatorEnabledRef = useRef(curatorEnabled);
+  useEffect(() => {
+    curatorEnabledRef.current = curatorEnabled;
+  }, [curatorEnabled]);
+  useEffect(() => {
+    if (curatorProvider === "local") {
+      setCuratorReady(settings.curatorModelLocal.trim().length > 0);
+      return;
+    }
+    getCuratorApiKeyStatus(curatorProvider)
+      .then((s) => setCuratorReady(s.configured))
+      .catch(() => setCuratorReady(false));
+  }, [curatorProvider, settings.curatorModelLocal]);
+  // When prerequisites aren't met, force the checkbox off regardless of
+  // the saved default — we can't run the curator without them.
+  useEffect(() => {
+    if (!curatorReady && curatorEnabled) setCuratorEnabled(false);
+  }, [curatorReady, curatorEnabled]);
+
   const runScan = useCallback(async (source: string, withThumbnails: boolean) => {
     setScanning(true);
     setScanEntries([]);
@@ -180,6 +222,15 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
 
     const unlistenComplete = listen<ImportComplete>("import-complete", (event) => {
       setImporting(false);
+      // Auto-start the curator on the new shoot if the user opted in
+      // for this import. Read the ref so we don't capture stale state.
+      if (curatorEnabledRef.current) {
+        startCuratorForShoot(event.payload.shootId).catch((e) => {
+          // Don't block import success on curator start failure —
+          // surface the error but let the import flow proceed.
+          console.error("Failed to start curator:", e);
+        });
+      }
       onComplete(event.payload.shootId);
     });
 
@@ -261,6 +312,33 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
     for (const e of scanEntries) if (selected.has(e.path)) sum += e.fileSizeBytes;
     return sum;
   }, [scanEntries, selected]);
+
+  // Photo count that will actually be imported, used for the curator
+  // cost estimate. When `selectSubset` is on, that's the selected
+  // count; otherwise it's everything the scan found.
+  const importingPhotoCount = useMemo(() => {
+    if (!scanEntries) return 0;
+    return selectSubset ? selected.size : scanEntries.length;
+  }, [scanEntries, selected, selectSubset]);
+
+  const [curatorCostCents, setCuratorCostCents] = useState<number | null>(null);
+  useEffect(() => {
+    if (!curatorEnabled || importingPhotoCount === 0) {
+      setCuratorCostCents(null);
+      return;
+    }
+    let cancelled = false;
+    estimateCuratorCostCents(importingPhotoCount)
+      .then((c) => {
+        if (!cancelled) setCuratorCostCents(c);
+      })
+      .catch(() => {
+        if (!cancelled) setCuratorCostCents(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [curatorEnabled, importingPhotoCount]);
 
   const hasScan = scanEntries !== null && scanEntries.length > 0;
   const dialogWidthClass =
@@ -575,6 +653,67 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
               >
                 {error}
               </p>
+            )}
+
+            {sourcePath && (
+              <label
+                className="flex items-start gap-2 mb-4 cursor-pointer"
+                title={
+                  curatorReady
+                    ? undefined
+                    : curatorProvider === "local"
+                      ? "Set a model name for the local provider in Settings to enable AI suggestions."
+                      : `Configure your ${curatorProviderLabel} API key in Settings to enable AI suggestions.`
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={curatorEnabled}
+                  onChange={(e) => setCuratorEnabled(e.target.checked)}
+                  disabled={!curatorReady || scanning}
+                  className="mt-[2px] cursor-pointer disabled:cursor-not-allowed"
+                />
+                <div>
+                  <div
+                    className="text-[12px]"
+                    style={{
+                      color: curatorReady
+                        ? "var(--color-fg)"
+                        : "var(--color-fg-mute)",
+                    }}
+                  >
+                    Run AI suggestions on import
+                    <span
+                      className="ml-2 font-mono text-[10px]"
+                      style={{ color: "var(--color-fg-dim)" }}
+                    >
+                      (via {curatorProviderLabel})
+                    </span>
+                    {curatorEnabled &&
+                      curatorProvider === "anthropic" &&
+                      curatorCostCents !== null && (
+                        <span
+                          className="ml-2 font-mono text-[10px]"
+                          style={{ color: "var(--color-fg-dim)" }}
+                        >
+                          (~{formatCostCents(curatorCostCents)} estimated for{" "}
+                          {importingPhotoCount}{" "}
+                          {importingPhotoCount === 1 ? "photo" : "photos"})
+                        </span>
+                      )}
+                  </div>
+                  <div
+                    className="text-[10px]"
+                    style={{ color: "var(--color-fg-dim)" }}
+                  >
+                    {curatorReady
+                      ? "AI characterizes the shoot then evaluates each cluster for composition + aesthetics. You can accept its suggestions with `.` in Triage."
+                      : curatorProvider === "local"
+                        ? "Set a model name for the local provider in Settings to enable."
+                        : `Configure a ${curatorProviderLabel} API key in Settings to enable.`}
+                  </div>
+                </div>
+              </label>
             )}
 
             <div

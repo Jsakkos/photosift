@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod culling;
+pub mod curator;
 pub mod export;
 pub mod image;
 pub mod import;

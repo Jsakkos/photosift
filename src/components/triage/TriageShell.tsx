@@ -23,6 +23,11 @@ function TopBar() {
   const toggleAllStrip = useProjectStore((s) => s.toggleAllStrip);
   const toggleFaces = useProjectStore((s) => s.toggleFaces);
   const toggleHeatmap = useProjectStore((s) => s.toggleHeatmap);
+  const triageOnlyAiRejects = useProjectStore((s) => s.triageOnlyAiRejects);
+  const toggleTriageAiRejectsFilter = useProjectStore(
+    (s) => s.toggleTriageAiRejectsFilter,
+  );
+  const hasAnyJudgments = useProjectStore((s) => s.curatorJudgments.size > 0);
 
   const image = current?.image;
 
@@ -69,6 +74,26 @@ function TopBar() {
         <Kbd>H</Kbd>
         <span>heat</span>
       </button>
+      {hasAnyJudgments && (
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={toggleTriageAiRejectsFilter}
+          title={
+            triageOnlyAiRejects
+              ? "Showing only photos the AI suggests rejecting. Click to show all unreviewed."
+              : "Filter to photos the AI suggests rejecting."
+          }
+          className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
+          style={{
+            color: triageOnlyAiRejects
+              ? "var(--color-danger, #ef4444)"
+              : "var(--color-fg-mute)",
+          }}
+        >
+          <span>AI rejects</span>
+        </button>
+      )}
       <span
         className="font-mono text-[10px] tabular-nums pl-3 ml-1 border-l"
         style={{ color: "var(--color-fg-dim)", borderColor: "var(--color-border)" }}

@@ -1,4 +1,5 @@
 use crate::ai::{worker::WorkerHandle, AiProviderStatus, EyeProviderKind, MouthProviderKind};
+use crate::curator::{CuratorStatus, WorkerHandle as CuratorWorkerHandle};
 use crate::db::schema::{self, Database, SharpnessPercentiles};
 use crate::metadata::xmp_queue::XmpWriteQueue;
 use crate::pipeline::cache::ImageCache;
@@ -26,6 +27,21 @@ pub struct AppState {
     pub ai_analyzed: Arc<AtomicUsize>,
     pub ai_failed: Arc<AtomicUsize>,
     pub ai_total: Arc<AtomicUsize>,
+    // Curator (Claude) subsystem. Independent of `ai_worker` so an
+    // Anthropic API outage cannot stall local face detection.
+    pub curator_worker: Option<CuratorWorkerHandle>,
+    pub curator_status: CuratorStatus,
+    pub curator_cancel: Arc<AtomicBool>,
+    pub curator_processed: Arc<AtomicUsize>,
+    pub curator_failed: Arc<AtomicUsize>,
+    pub curator_total: Arc<AtomicUsize>,
+    /// Live cumulative spend in cents, summed across in-flight + completed
+    /// calls in the current shoot run. Reset to 0 at the start of each
+    /// `start_curator_for_shoot` call.
+    pub curator_cost_cents: Arc<AtomicUsize>,
+    /// Currently-running curator shoot id, or `None` if idle. Used by
+    /// the Library card to render a per-shoot "Running..." badge.
+    pub curator_running_shoot_id: Option<i64>,
     /// Percentile cache keyed on (shoot_id, analyzed_max_ts). Recomputed
     /// only when the shoot's MAX(ai_analyzed_at) advances — which happens
     /// exactly when a new analysis result lands — so panel navigation
@@ -70,6 +86,14 @@ impl AppState {
             ai_analyzed: Arc::new(AtomicUsize::new(0)),
             ai_failed: Arc::new(AtomicUsize::new(0)),
             ai_total: Arc::new(AtomicUsize::new(0)),
+            curator_worker: None,
+            curator_status: CuratorStatus::Disabled,
+            curator_cancel: Arc::new(AtomicBool::new(false)),
+            curator_processed: Arc::new(AtomicUsize::new(0)),
+            curator_failed: Arc::new(AtomicUsize::new(0)),
+            curator_total: Arc::new(AtomicUsize::new(0)),
+            curator_cost_cents: Arc::new(AtomicUsize::new(0)),
+            curator_running_shoot_id: None,
             percentile_cache: None,
         }
     }

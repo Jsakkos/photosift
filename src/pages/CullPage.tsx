@@ -37,20 +37,49 @@ export function CullPage() {
   }, [isLoading, currentShoot?.id, currentIndex]);
 
   // Tauri window refocus (Alt-Tab back, minimize→restore) doesn't
-  // automatically re-home DOM focus to our container. Listen for the
-  // focus event and refocus so keystrokes resume without a click.
+  // automatically re-home DOM focus to our container. We listen on
+  // multiple channels because no single one is reliable on Windows:
+  //   - Tauri's onFocusChanged (works for true window focus events)
+  //   - DOM `focus` on window (fires for in-webview focus changes)
+  //   - `visibilitychange` (covers tab-restore from a minimized state
+  //     where the focus event sometimes never fires)
+  // All three converge on shellRef.focus(). Skip the refocus when the
+  // active element is a real input — otherwise re-focusing the shell
+  // would yank focus out of the Settings dialog mid-typing.
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    const refocus = () => {
+      const ae = document.activeElement;
+      if (
+        ae instanceof HTMLInputElement ||
+        ae instanceof HTMLTextAreaElement ||
+        ae instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+      shellRef.current?.focus({ preventScroll: true });
+    };
+
+    let unlistenTauri: (() => void) | null = null;
     getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
-        if (focused) shellRef.current?.focus({ preventScroll: true });
+        if (focused) refocus();
       })
       .then((fn) => {
-        unlisten = fn;
+        unlistenTauri = fn;
       })
       .catch(() => {});
+
+    const onWinFocus = () => refocus();
+    const onVis = () => {
+      if (document.visibilityState === "visible") refocus();
+    };
+    window.addEventListener("focus", onWinFocus);
+    document.addEventListener("visibilitychange", onVis);
+
     return () => {
-      unlisten?.();
+      unlistenTauri?.();
+      window.removeEventListener("focus", onWinFocus);
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, []);
 
@@ -100,10 +129,30 @@ export function CullPage() {
       }
     }).then((fn) => { unlistenComplete = fn; });
 
+    // Curator events: refresh judgments after each cluster lands so
+    // chips, the AI-rejects filter, and the cluster-rank ranking
+    // update live as the worker progresses.
+    let unlistenCuratorCluster: (() => void) | null = null;
+    let unlistenCuratorCompleted: (() => void) | null = null;
+    const refreshCuratorJudgments =
+      useProjectStore.getState().refreshCuratorJudgments;
+    listen<{ shootId: number }>("curator:cluster_done", (event) => {
+      if (event.payload.shootId === shootId) {
+        void refreshCuratorJudgments();
+      }
+    }).then((fn) => { unlistenCuratorCluster = fn; });
+    listen<{ shootId: number }>("curator:completed", (event) => {
+      if (event.payload.shootId === shootId) {
+        void refreshCuratorJudgments();
+      }
+    }).then((fn) => { unlistenCuratorCompleted = fn; });
+
     return () => {
       unlistenReady?.();
       unlistenGroups?.();
       unlistenComplete?.();
+      unlistenCuratorCluster?.();
+      unlistenCuratorCompleted?.();
     };
   }, [id, loadShoot]);
 

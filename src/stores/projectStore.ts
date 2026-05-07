@@ -8,7 +8,9 @@ import type {
   DisplayItem,
   Group,
   SyncReport,
+  CuratorJudgment,
 } from "../types";
+import { getCuratorJudgmentsForShoot } from "../lib/curatorApi";
 import { useSettingsStore } from "./settingsStore";
 import { useAiStore } from "./aiStore";
 import {
@@ -72,6 +74,17 @@ function routeMinStar(): number {
 /// first read (Pass 1 — show everything pick-flagged).
 function currentSelectMinStar(): number {
   return useProjectStore.getState().selectMinStar ?? 0;
+}
+
+/// Lazy reads of curator state for the same reason: keeps the long
+/// chain of `computeDisplayItems(...)` callers from threading these
+/// values through every action. Both default to safe values when the
+/// store hasn't initialized yet.
+function currentCuratorJudgments(): Map<number, CuratorJudgment> {
+  return useProjectStore.getState().curatorJudgments ?? new Map();
+}
+function currentTriageOnlyAiRejects(): boolean {
+  return useProjectStore.getState().triageOnlyAiRejects ?? false;
 }
 
 /// Bundle the sort/pick options that `computeDisplayItems` needs.
@@ -360,6 +373,31 @@ export function aiPickForGroup(
 ): number | null {
   void _useEyes;
   void _useSmile;
+
+  // Curator override: when every member of the group has a Claude
+  // judgment with a `cluster_rank`, prefer that — it's a holistic
+  // composition+aesthetic ranking the local AI can't compute. Falls
+  // back to the technical pick score otherwise (partial coverage =
+  // can't trust relative rank).
+  const curator = currentCuratorJudgments();
+  if (curator.size > 0) {
+    let allJudged = true;
+    let bestRank = Infinity;
+    let bestId: number | null = null;
+    for (const m of group.members) {
+      const j = curator.get(m.photoId);
+      if (!j || j.clusterRank == null) {
+        allJudged = false;
+        break;
+      }
+      if (j.clusterRank < bestRank) {
+        bestRank = j.clusterRank;
+        bestId = m.photoId;
+      }
+    }
+    if (allJudged && bestId != null) return bestId;
+  }
+
   const analyzed = group.members
     .map((m) => images.find((i) => i.id === m.photoId))
     .filter((img): img is ImageEntry => !!img && img.aiAnalyzedAt != null);
@@ -400,15 +438,46 @@ export function computeDisplayItems(
 
   if (currentView === "triage") {
     const seenGroups = new Set<number>();
-    // In triage, a photo passes unless it's already picked/rejected —
-    // unless the user flipped the Show-all toggle in ViewSelector,
-    // which re-includes reviewed photos so they can un-pick/un-reject.
-    const passesTriage = (img: ImageEntry): boolean =>
-      showReviewed || img.flag === "unreviewed";
+    // AI-rejects filter: when on, surface every photo the AI suggested
+    // rejecting, regardless of user flag. The chip's accepted /
+    // overridden badge tells the user which ones they've already
+    // decided on, so they can revisit. Read lazily so the filter cuts
+    // in immediately on toggle without threading the flag through
+    // every caller of computeDisplayItems.
+    const onlyAiRejects = currentTriageOnlyAiRejects();
+    const judgments = onlyAiRejects ? currentCuratorJudgments() : null;
+    const passesTriage = (img: ImageEntry): boolean => {
+      if (onlyAiRejects) {
+        // The AI-rejects view is its own scope — overrides both the
+        // standard "unreviewed only" default and the show-all toggle,
+        // since the user explicitly asked for this slice.
+        const j = judgments!.get(img.id);
+        return !!j && j.suggestedFlag === "reject";
+      }
+      // Default triage: a photo passes unless it's already picked /
+      // rejected — unless the user flipped Show-all in ViewSelector,
+      // which re-includes reviewed photos so they can un-pick / un-reject.
+      return showReviewed || img.flag === "unreviewed";
+    };
 
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
       if (!passesTriage(img)) continue;
+
+      // AI-rejects view bypasses cluster-cover collapsing — the user
+      // is reviewing specific reject candidates, not clusters. Each
+      // matching photo is its own list item, so 12 reject suggestions
+      // = 12 list items (vs the standard view, which would fold them
+      // into ~5 cluster covers + a few standalones).
+      if (onlyAiRejects) {
+        const group = photoGroupMap.get(img.id);
+        items.push({
+          imageIndex: i,
+          image: img,
+          ...(group ? { groupId: group.id } : {}),
+        });
+        continue;
+      }
 
       const group = photoGroupMap.get(img.id);
       if (group) {
@@ -580,6 +649,27 @@ interface ProjectState {
   showFaces: boolean;
   toggleAllStrip: () => void;
   toggleFaces: () => void;
+  /// Curator (Claude) judgments for the current shoot, keyed by photo
+  /// id. Bulk-loaded at `loadShoot`; updated locally on accept/override
+  /// and refreshed when curator events fire from the worker. Empty
+  /// until either a shoot is loaded or judgments are written.
+  curatorJudgments: Map<number, CuratorJudgment>;
+  /// Triage filter: when true, restricts displayItems to photos with
+  /// `suggested_flag = 'reject' AND flag = 'unreviewed'` so the user
+  /// can bulk-confirm Claude's reject suggestions with `.`. Default
+  /// off; the standard "All unreviewed" view is unchanged.
+  triageOnlyAiRejects: boolean;
+  toggleTriageAiRejectsFilter: () => void;
+  /// Replace the local judgment map (e.g. after curator events). Also
+  /// triggers a refreshDisplay so any active filter / rank picks up
+  /// the new data.
+  setCuratorJudgments: (judgments: CuratorJudgment[]) => void;
+  /// Patch one judgment (e.g. user_action update after `.` accept or
+  /// manual P/X override).
+  patchCuratorJudgment: (photoId: number, patch: Partial<CuratorJudgment>) => void;
+  /// Refresh judgments from the DB for the current shoot. Called from
+  /// curator event listeners on `cluster_done`.
+  refreshCuratorJudgments: () => Promise<void>;
   /// Triage-only bulk keep. Picks every member of the currently-focused
   /// photo's burst group, persists via `bulk_set_flag`, and records a
   /// single batch undo entry so one Z undoes the whole group.
@@ -714,6 +804,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // with T. localStorage still wins if they previously toggled it on.
   showAllStrip: readBoolLS("photosift.rail.allStrip", false),
   showFaces: readBoolLS("photosift.rail.faces", true),
+  curatorJudgments: new Map<number, CuratorJudgment>(),
+  triageOnlyAiRejects: false,
 
   currentImage: () => {
     const { displayItems, currentIndex } = get();
@@ -783,6 +875,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         // empty tier whenever they open a fresh shoot, which reads as
         // "Select is broken."
         selectMinStar: 0,
+        // Reset curator state for the new shoot. The bulk fetch below
+        // will populate it; meanwhile, an empty map is the right
+        // default so the chip / filter / rank functions all no-op.
+        curatorJudgments: new Map(),
+        triageOnlyAiRejects: false,
       });
       get().autoDrillIfOnCover();
 
@@ -790,6 +887,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       // badge has the right 1-10 scale ready by the time the user opens a
       // photo. The fetch is cheap and the Rust side caches it.
       useAiStore.getState().fetchPercentiles(shoot.id).catch(() => {});
+
+      // Bulk-load curator judgments so the chip, the AI-rejects filter,
+      // and the cluster-rank-based group ranking all have data the
+      // moment Triage opens. Failures are non-fatal — the feature
+      // simply degrades to "no judgments" until refreshed.
+      getCuratorJudgmentsForShoot(shoot.id)
+        .then((list) => get().setCuratorJudgments(list))
+        .catch(() => {});
     } catch (e) {
       console.error("Failed to load shoot:", e);
       set({ isLoading: false, loadError: String(e) });
@@ -1514,6 +1619,38 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       writeBoolLS("photosift.rail.faces", next);
       return { showFaces: next };
     }),
+
+  toggleTriageAiRejectsFilter: () => {
+    set((s) => ({ triageOnlyAiRejects: !s.triageOnlyAiRejects }));
+    get().refreshDisplay();
+  },
+
+  setCuratorJudgments: (judgments: CuratorJudgment[]) => {
+    const next = new Map<number, CuratorJudgment>();
+    for (const j of judgments) next.set(j.photoId, j);
+    set({ curatorJudgments: next });
+    get().refreshDisplay();
+  },
+
+  patchCuratorJudgment: (photoId: number, patch: Partial<CuratorJudgment>) => {
+    const cur = get().curatorJudgments;
+    const existing = cur.get(photoId);
+    if (!existing) return;
+    const next = new Map(cur);
+    next.set(photoId, { ...existing, ...patch });
+    set({ curatorJudgments: next });
+  },
+
+  refreshCuratorJudgments: async () => {
+    const shoot = get().currentShoot;
+    if (!shoot) return;
+    try {
+      const list = await getCuratorJudgmentsForShoot(shoot.id);
+      get().setCuratorJudgments(list);
+    } catch (e) {
+      console.debug("refreshCuratorJudgments failed:", e);
+    }
+  },
 
   keepAllInCurrentGroup: async () => {
     const { displayItems, currentIndex, images, groups, currentView } = get();

@@ -62,14 +62,30 @@ export function TriageGroupStrip() {
 
   const onClick = useCallback(
     (imageId: number) => {
+      setViewMode("sequential");
+      // First, see if the clicked member is already in the current
+      // displayItems (drilled-in case): just navigate.
       const idx = displayItems.findIndex((d) => d.image.id === imageId);
       if (idx >= 0) {
-        setActiveInnerGroup(null);
         setCurrentIndex(idx);
-        setViewMode("sequential");
+        return;
+      }
+      // Otherwise we're collapsed and the user clicked a non-cover
+      // member. Drill into this group, then snap focus to the clicked
+      // member. The previous code called setActiveInnerGroup(null)
+      // unconditionally and then setCurrentIndex(idx) using an `idx`
+      // computed against the pre-collapse displayItems — which after
+      // the collapse pointed at a totally unrelated photo. This path
+      // expands instead and re-resolves the index against the
+      // post-expand list.
+      if (group) {
+        setActiveInnerGroup(group.id);
+        const fresh = useProjectStore.getState().displayItems;
+        const newIdx = fresh.findIndex((d) => d.image.id === imageId);
+        if (newIdx >= 0) setCurrentIndex(newIdx);
       }
     },
-    [displayItems, setActiveInnerGroup, setCurrentIndex, setViewMode],
+    [displayItems, group, setActiveInnerGroup, setCurrentIndex, setViewMode],
   );
 
   // Scroll the active thumb into view as arrow-nav moves the focus off
