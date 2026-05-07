@@ -202,6 +202,33 @@ pub struct Settings {
     /// `None` = not configured; the export command returns a typed error
     /// so the UI can prompt the user.
     pub immich_ingest_path: Option<String>,
+    /// Curator (Claude) — whether the import-dialog "Run AI suggestions"
+    /// checkbox is checked by default. Disabled in the UI when no API
+    /// key is configured.
+    pub curator_default_run_on_import: bool,
+    /// Legacy single-model setting from before the multi-provider
+    /// refactor. Kept for backwards compatibility on existing DBs; new
+    /// code should use the per-provider `curator_model_*` fields instead.
+    pub curator_model: String,
+    /// Hard ceiling on per-shoot LLM spend (cents). Worker stops issuing
+    /// new calls once this is exceeded (in-flight ones complete). 0 = no
+    /// cap (not recommended). Local provider always reports 0 cost so
+    /// the cap never trips for local inference.
+    pub curator_max_cost_per_shoot_cents: i32,
+    /// Selected curator provider: "anthropic" | "gemini" | "local".
+    /// Used at worker spawn to pick the concrete `CuratorProvider`
+    /// implementation.
+    pub curator_provider: String,
+    /// Per-provider model identifiers. Storing one per provider lets the
+    /// UI remember the user's last model when they flip the provider
+    /// dropdown.
+    pub curator_model_anthropic: String,
+    pub curator_model_gemini: String,
+    pub curator_model_local: String,
+    /// Base URL for the local OpenAI-compatible server (Ollama, LM
+    /// Studio, vLLM, llama.cpp). Defaults to Ollama's port. Must end
+    /// with `/v1` — provider code appends `/chat/completions` etc.
+    pub curator_local_base_url: String,
 }
 
 impl Default for Settings {
@@ -217,6 +244,14 @@ impl Default for Settings {
             hide_soft_threshold: 30,
             eye_open_confidence: 0.7,
             immich_ingest_path: None,
+            curator_default_run_on_import: true,
+            curator_model: crate::curator::DEFAULT_MODEL.to_string(),
+            curator_max_cost_per_shoot_cents: 500,
+            curator_provider: "anthropic".to_string(),
+            curator_model_anthropic: crate::curator::default_model_for("anthropic").to_string(),
+            curator_model_gemini: crate::curator::default_model_for("gemini").to_string(),
+            curator_model_local: crate::curator::default_model_for("local").to_string(),
+            curator_local_base_url: "http://localhost:11434/v1".to_string(),
         }
     }
 }
@@ -240,6 +275,38 @@ pub struct SharpnessPercentiles {
     pub p90: f64,
     pub analyzed_count: i64,
     pub analyzed_max_ts: Option<String>,
+}
+
+/// One row from `curator_judgments`. Mirrors the struct in
+/// `curator/types.rs` but lives here so DB callers don't need to depend
+/// on the curator module.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CuratorJudgmentRow {
+    pub photo_id: i64,
+    pub shoot_id: i64,
+    pub composition: i32,
+    pub aesthetic: i32,
+    pub cluster_rank: Option<i32>,
+    pub is_keeper: bool,
+    pub suggested_flag: String,
+    pub reason: String,
+    pub user_action: Option<String>,
+    pub judged_at: String,
+    /// Provider that produced this judgment: `"anthropic"`, `"gemini"`,
+    /// or `"local"`. Frontend renders a small badge on `CuratorChip`.
+    pub provider: String,
+    pub model: String,
+    pub prompt_version: i32,
+}
+
+/// Aggregate counts for the agreement-rate badge.
+#[derive(Debug, Clone, serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CuratorAgreementStats {
+    pub accepted: i64,
+    pub overridden: i64,
+    pub total_judgments: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -437,6 +504,57 @@ impl Database {
             "INTEGER NOT NULL DEFAULT 0",
         )?;
         self.create_file_moves_table()?;
+        // Curator (Claude) subsystem additions.
+        self.create_curator_judgments_table()?;
+        self.ensure_column("shoots", "curator_summary", "TEXT")?;
+        self.ensure_column("shoots", "curator_cost_cents", "INTEGER")?;
+        self.ensure_column("shoots", "curator_completed_at", "TEXT")?;
+        self.ensure_column(
+            "settings",
+            "curator_default_run_on_import",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        self.ensure_column(
+            "settings",
+            "curator_model",
+            "TEXT NOT NULL DEFAULT 'claude-sonnet-4-6'",
+        )?;
+        self.ensure_column(
+            "settings",
+            "curator_max_cost_per_shoot_cents",
+            "INTEGER NOT NULL DEFAULT 500",
+        )?;
+        // Multi-provider Curator additions.
+        self.ensure_column(
+            "curator_judgments",
+            "provider",
+            "TEXT NOT NULL DEFAULT 'anthropic'",
+        )?;
+        self.ensure_column(
+            "settings",
+            "curator_provider",
+            "TEXT NOT NULL DEFAULT 'anthropic'",
+        )?;
+        self.ensure_column(
+            "settings",
+            "curator_model_anthropic",
+            "TEXT NOT NULL DEFAULT 'claude-sonnet-4-6'",
+        )?;
+        self.ensure_column(
+            "settings",
+            "curator_model_gemini",
+            "TEXT NOT NULL DEFAULT 'gemini-2.5-flash'",
+        )?;
+        self.ensure_column(
+            "settings",
+            "curator_model_local",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        self.ensure_column(
+            "settings",
+            "curator_local_base_url",
+            "TEXT NOT NULL DEFAULT 'http://localhost:11434/v1'",
+        )?;
         // Destination enum consolidation (2026-04): the Route pass merged
         // `dxo` into `edit` (one "ready to edit" bucket) and renamed
         // `publish_direct` to `export`. Gate on `PRAGMA user_version` so we
@@ -458,6 +576,20 @@ impl Database {
             // PRAGMA doesn't accept bound parameters, so inline the literal.
             self.conn.execute_batch("PRAGMA user_version = 1")?;
         }
+        if version < 2 {
+            // Multi-provider migration: backfill the per-provider model
+            // column from the legacy `curator_model` so users keep the
+            // same Anthropic model after the upgrade.
+            self.conn.execute(
+                "UPDATE settings
+                    SET curator_model_anthropic = curator_model
+                    WHERE id = 1
+                      AND curator_model IS NOT NULL
+                      AND curator_model <> ''",
+                [],
+            )?;
+            self.conn.execute_batch("PRAGMA user_version = 2")?;
+        }
         Ok(())
     }
 
@@ -475,6 +607,33 @@ impl Database {
                 moved_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_file_moves_photo ON file_moves(photo_id);",
+        )?;
+        Ok(())
+    }
+
+    /// Per-photo Claude judgments. One row per analyzed photo.
+    /// `cluster_rank` is NULL for singleton (un-grouped) photos. The
+    /// `user_action` column tracks deliberate accept/override events
+    /// for the agreement-rate stat — incidental P/X agreement leaves
+    /// it NULL by design (see plan §UI surfaces).
+    fn create_curator_judgments_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS curator_judgments (
+                photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+                shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE,
+                composition INTEGER NOT NULL CHECK(composition BETWEEN 0 AND 10),
+                aesthetic   INTEGER NOT NULL CHECK(aesthetic   BETWEEN 0 AND 10),
+                cluster_rank INTEGER,
+                is_keeper INTEGER NOT NULL,
+                suggested_flag TEXT NOT NULL CHECK(suggested_flag IN ('pick','reject','keep')),
+                reason TEXT NOT NULL,
+                user_action TEXT CHECK(user_action IN ('accepted','overridden') OR user_action IS NULL),
+                judged_at TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_version INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_curator_judgments_shoot ON curator_judgments(shoot_id);
+            CREATE INDEX IF NOT EXISTS idx_curator_judgments_keeper ON curator_judgments(shoot_id, is_keeper);",
         )?;
         Ok(())
     }
@@ -1163,6 +1322,233 @@ impl Database {
         Ok(())
     }
 
+    // ---- Curator (Claude) ----
+
+    /// Insert or replace one curator judgment row. Used by the worker's
+    /// per-cluster batch write path. `cluster_rank` is `None` for
+    /// singletons.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_curator_judgment(
+        &self,
+        photo_id: i64,
+        shoot_id: i64,
+        composition: i32,
+        aesthetic: i32,
+        cluster_rank: Option<i32>,
+        is_keeper: bool,
+        suggested_flag: &str,
+        reason: &str,
+        provider: &str,
+        model: &str,
+        prompt_version: i32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO curator_judgments
+                (photo_id, shoot_id, composition, aesthetic, cluster_rank,
+                 is_keeper, suggested_flag, reason, judged_at,
+                 provider, model, prompt_version)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), ?9, ?10, ?11)
+             ON CONFLICT(photo_id) DO UPDATE SET
+                shoot_id = excluded.shoot_id,
+                composition = excluded.composition,
+                aesthetic = excluded.aesthetic,
+                cluster_rank = excluded.cluster_rank,
+                is_keeper = excluded.is_keeper,
+                suggested_flag = excluded.suggested_flag,
+                reason = excluded.reason,
+                judged_at = excluded.judged_at,
+                provider = excluded.provider,
+                model = excluded.model,
+                prompt_version = excluded.prompt_version,
+                user_action = NULL",
+            params![
+                photo_id,
+                shoot_id,
+                composition,
+                aesthetic,
+                cluster_rank,
+                is_keeper as i32,
+                suggested_flag,
+                reason,
+                provider,
+                model,
+                prompt_version,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Read one judgment, used by the Triage UI to render the chip.
+    pub fn curator_judgment_for_photo(
+        &self,
+        photo_id: i64,
+    ) -> Result<Option<CuratorJudgmentRow>> {
+        self.conn
+            .query_row(
+                "SELECT photo_id, shoot_id, composition, aesthetic, cluster_rank,
+                        is_keeper, suggested_flag, reason, user_action, judged_at,
+                        provider, model, prompt_version
+                 FROM curator_judgments WHERE photo_id = ?1",
+                params![photo_id],
+                row_to_curator_judgment,
+            )
+            .optional()
+    }
+
+    /// Mark the user's action on a Claude suggestion. `action` is
+    /// `"accepted"` (explicit `.` press) or `"overridden"` (manual P/X
+    /// whose result differs from `suggested_flag`). Caller is expected
+    /// to filter out the incidental-agreement case (manual P/X that
+    /// happens to match).
+    pub fn set_curator_user_action(
+        &self,
+        photo_id: i64,
+        action: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE curator_judgments SET user_action = ?1 WHERE photo_id = ?2",
+            params![action, photo_id],
+        )?;
+        Ok(())
+    }
+
+    /// Aggregate stats for the Library card "47/52 accepted" badge.
+    pub fn curator_agreement_stats(
+        &self,
+        shoot_id: i64,
+    ) -> Result<CuratorAgreementStats> {
+        self.conn
+            .query_row(
+                "SELECT
+                    SUM(CASE WHEN user_action = 'accepted' THEN 1 ELSE 0 END) AS accepted,
+                    SUM(CASE WHEN user_action = 'overridden' THEN 1 ELSE 0 END) AS overridden,
+                    COUNT(*) AS total
+                 FROM curator_judgments WHERE shoot_id = ?1",
+                params![shoot_id],
+                |row| {
+                    Ok(CuratorAgreementStats {
+                        accepted: row.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                        overridden: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                        total_judgments: row.get::<_, i64>(2)?,
+                    })
+                },
+            )
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(CuratorAgreementStats::default()),
+                _ => Err(e),
+            })
+    }
+
+    /// Drop all judgments + Stage 1 summary for a shoot. Used by the
+    /// "rerun curator" Library CTA after a prompt-version bump.
+    pub fn clear_curator_for_shoot(&self, shoot_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM curator_judgments WHERE shoot_id = ?1",
+            params![shoot_id],
+        )?;
+        self.conn.execute(
+            "UPDATE shoots
+                SET curator_summary = NULL,
+                    curator_cost_cents = NULL,
+                    curator_completed_at = NULL
+             WHERE id = ?1",
+            params![shoot_id],
+        )?;
+        Ok(())
+    }
+
+    /// Persist the Stage 1 result. The argument is the JSON string the
+    /// caller already serialized — keeps the DB layer agnostic to the
+    /// curator-types module.
+    pub fn set_curator_summary(
+        &self,
+        shoot_id: i64,
+        summary_json: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE shoots SET curator_summary = ?1 WHERE id = ?2",
+            params![summary_json, shoot_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn curator_summary_json(&self, shoot_id: i64) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT curator_summary FROM shoots WHERE id = ?1",
+                params![shoot_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|opt| opt.flatten())
+    }
+
+    pub fn add_curator_cost_cents(
+        &self,
+        shoot_id: i64,
+        delta_cents: u32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE shoots SET curator_cost_cents = COALESCE(curator_cost_cents, 0) + ?1
+             WHERE id = ?2",
+            params![delta_cents as i64, shoot_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn curator_cost_cents(&self, shoot_id: i64) -> Result<i64> {
+        self.conn
+            .query_row(
+                "SELECT COALESCE(curator_cost_cents, 0) FROM shoots WHERE id = ?1",
+                params![shoot_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(0),
+                _ => Err(e),
+            })
+    }
+
+    pub fn mark_curator_completed(&self, shoot_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE shoots SET curator_completed_at = datetime('now') WHERE id = ?1",
+            params![shoot_id],
+        )?;
+        Ok(())
+    }
+
+    /// All curator judgments for a shoot. Bulk-loaded by the frontend
+    /// at `loadShoot` so Triage filtering and Select cluster-rank
+    /// lookups stay synchronous reads on a local map.
+    pub fn curator_judgments_for_shoot(
+        &self,
+        shoot_id: i64,
+    ) -> Result<Vec<CuratorJudgmentRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT photo_id, shoot_id, composition, aesthetic, cluster_rank,
+                    is_keeper, suggested_flag, reason, user_action, judged_at,
+                    provider, model, prompt_version
+             FROM curator_judgments WHERE shoot_id = ?1
+             ORDER BY photo_id",
+        )?;
+        let rows = stmt.query_map(params![shoot_id], row_to_curator_judgment)?;
+        rows.collect()
+    }
+
+    /// Photo IDs in this shoot that lack a `curator_judgments` row.
+    /// Used by the resume path: any cluster whose members include a
+    /// pending photo gets re-issued whole.
+    pub fn photos_needing_curator(&self, shoot_id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.id FROM photos p
+             LEFT JOIN curator_judgments j ON j.photo_id = p.id
+             WHERE p.shoot_id = ?1 AND j.photo_id IS NULL
+             ORDER BY p.id",
+        )?;
+        let rows = stmt.query_map(params![shoot_id], |r| r.get::<_, i64>(0))?;
+        rows.collect()
+    }
+
     /// Compute 10/30/50/70/90 percentile cutoffs for `sharpness_score` across
     /// all analyzed photos in a shoot. Returns zeros when no photos have been
     /// analyzed; callers should check `analyzed_count` before trusting the
@@ -1327,7 +1713,11 @@ impl Database {
                 "SELECT near_dup_threshold, related_threshold, group_time_window_s,
                         select_requires_pick, route_min_star, library_root,
                         enable_ai_on_import, hide_soft_threshold, eye_open_confidence,
-                        immich_ingest_path
+                        immich_ingest_path,
+                        curator_default_run_on_import, curator_model,
+                        curator_max_cost_per_shoot_cents,
+                        curator_provider, curator_model_anthropic, curator_model_gemini,
+                        curator_model_local, curator_local_base_url
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
@@ -1342,6 +1732,14 @@ impl Database {
                         hide_soft_threshold: row.get(7)?,
                         eye_open_confidence: row.get(8)?,
                         immich_ingest_path: row.get(9)?,
+                        curator_default_run_on_import: row.get::<_, i32>(10)? != 0,
+                        curator_model: row.get(11)?,
+                        curator_max_cost_per_shoot_cents: row.get(12)?,
+                        curator_provider: row.get(13)?,
+                        curator_model_anthropic: row.get(14)?,
+                        curator_model_gemini: row.get(15)?,
+                        curator_model_local: row.get(16)?,
+                        curator_local_base_url: row.get(17)?,
                     })
                 },
             )
@@ -1353,8 +1751,13 @@ impl Database {
             "INSERT INTO settings (id, near_dup_threshold, related_threshold, group_time_window_s,
                                    select_requires_pick, route_min_star, library_root,
                                    enable_ai_on_import, hide_soft_threshold, eye_open_confidence,
-                                   immich_ingest_path)
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                                   immich_ingest_path,
+                                   curator_default_run_on_import, curator_model,
+                                   curator_max_cost_per_shoot_cents,
+                                   curator_provider, curator_model_anthropic, curator_model_gemini,
+                                   curator_model_local, curator_local_base_url)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                     ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
@@ -1365,7 +1768,15 @@ impl Database {
                 enable_ai_on_import = excluded.enable_ai_on_import,
                 hide_soft_threshold = excluded.hide_soft_threshold,
                 eye_open_confidence = excluded.eye_open_confidence,
-                immich_ingest_path = excluded.immich_ingest_path",
+                immich_ingest_path = excluded.immich_ingest_path,
+                curator_default_run_on_import = excluded.curator_default_run_on_import,
+                curator_model = excluded.curator_model,
+                curator_max_cost_per_shoot_cents = excluded.curator_max_cost_per_shoot_cents,
+                curator_provider = excluded.curator_provider,
+                curator_model_anthropic = excluded.curator_model_anthropic,
+                curator_model_gemini = excluded.curator_model_gemini,
+                curator_model_local = excluded.curator_model_local,
+                curator_local_base_url = excluded.curator_local_base_url",
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
@@ -1377,6 +1788,14 @@ impl Database {
                 s.hide_soft_threshold,
                 s.eye_open_confidence,
                 s.immich_ingest_path,
+                s.curator_default_run_on_import as i32,
+                s.curator_model,
+                s.curator_max_cost_per_shoot_cents,
+                s.curator_provider,
+                s.curator_model_anthropic,
+                s.curator_model_gemini,
+                s.curator_model_local,
+                s.curator_local_base_url,
             ],
         )?;
         Ok(())
@@ -1404,6 +1823,25 @@ impl Database {
             |row| row.get(0),
         ).optional()
     }
+}
+
+fn row_to_curator_judgment(row: &rusqlite::Row) -> Result<CuratorJudgmentRow> {
+    let is_keeper_int: i64 = row.get(5)?;
+    Ok(CuratorJudgmentRow {
+        photo_id: row.get(0)?,
+        shoot_id: row.get(1)?,
+        composition: row.get(2)?,
+        aesthetic: row.get(3)?,
+        cluster_rank: row.get(4)?,
+        is_keeper: is_keeper_int != 0,
+        suggested_flag: row.get(6)?,
+        reason: row.get(7)?,
+        user_action: row.get(8)?,
+        judged_at: row.get(9)?,
+        provider: row.get(10)?,
+        model: row.get(11)?,
+        prompt_version: row.get(12)?,
+    })
 }
 
 fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {

@@ -173,3 +173,97 @@ export interface SharpnessPercentiles {
   analyzedCount: number;
   analyzedMaxTs: string | null;
 }
+
+// ---- AI Curator (Claude) ----
+
+export type CuratorSuggestedFlag = "pick" | "reject" | "keep";
+export type CuratorUserAction = "accepted" | "overridden";
+export type CuratorStatus = "idle" | "running" | "failed" | "disabled";
+export type CuratorProvider = "anthropic" | "gemini" | "local";
+
+/// One Claude judgment for one photo. Mirrors `curator_judgments` row
+/// shape on the Rust side. `clusterRank` is null for singletons
+/// (un-grouped photos analyzed in batches).
+export interface CuratorJudgment {
+  photoId: number;
+  shootId: number;
+  composition: number;        // 0-10
+  aesthetic: number;          // 0-10
+  clusterRank: number | null; // 1-based, null for singletons
+  isKeeper: boolean;
+  suggestedFlag: CuratorSuggestedFlag;
+  reason: string;
+  userAction: CuratorUserAction | null;
+  judgedAt: string;
+  /// Which provider produced this judgment: `"anthropic"`, `"gemini"`,
+  /// or `"local"`. Surfaced as a small badge in `CuratorChip`.
+  provider: string;
+  model: string;
+  promptVersion: number;
+}
+
+/// Stage 1 shoot characterization, stored in `shoots.curator_summary`.
+export interface CuratorShootSummary {
+  shoot_type: string;
+  subjects: string[];
+  story: string;
+  dominant_style: string;
+  watch_for: string[];
+}
+
+export interface CuratorRunStatus {
+  status: CuratorStatus;
+  runningShootId: number | null;
+  processed: number;
+  failed: number;
+  total: number;
+  costCents: number;
+}
+
+export interface CuratorAgreementStats {
+  accepted: number;
+  overridden: number;
+  totalJudgments: number;
+}
+
+export interface AnthropicApiKeyStatus {
+  configured: boolean;
+  /// Last 4 chars of the key for display (e.g. `cdef`). Empty string
+  /// when no key is configured.
+  suffix: string;
+}
+
+/// Generic per-provider API key status. Returned by
+/// `get_curator_api_key_status(provider)`. The Anthropic shape is kept
+/// as `AnthropicApiKeyStatus` for backwards compatibility with existing
+/// callers; new code should use this.
+export interface ApiKeyStatus {
+  configured: boolean;
+  suffix: string;
+}
+
+/// Tauri events emitted from the curator worker. Frontend listens via
+/// `@tauri-apps/api/event`. Names match the Rust `app.emit(...)` calls
+/// in `curator/worker.rs`.
+export interface CuratorProgressEvent {
+  shootId: number;
+  processed: number;
+  total: number;
+  costCents: number;
+  stage?: string;
+}
+export interface CuratorClusterDoneEvent {
+  shootId: number;
+  groupId: number | null;
+  processed: number;
+  total: number;
+  costCents: number;
+}
+export interface CuratorFailedEvent {
+  shootId: number;
+  groupId?: number | null;
+  reason: string;
+}
+export interface CuratorCompletedEvent {
+  shootId: number;
+}

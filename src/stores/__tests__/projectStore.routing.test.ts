@@ -21,6 +21,14 @@ beforeEach(() => {
       hideSoftThreshold: 30,
       eyeOpenConfidence: 0.7,
       immichIngestPath: null,
+      curatorDefaultRunOnImport: true,
+      curatorModel: "claude-sonnet-4-6",
+      curatorMaxCostPerShootCents: 500,
+      curatorProvider: "anthropic",
+      curatorModelAnthropic: "claude-sonnet-4-6",
+      curatorModelGemini: "gemini-2.5-flash",
+      curatorModelLocal: "",
+      curatorLocalBaseUrl: "http://localhost:11434/v1",
     },
   });
 });

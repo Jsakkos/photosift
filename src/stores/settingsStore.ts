@@ -18,6 +18,28 @@ export interface Settings {
   /// Publish Direct export. Null when not configured; the export
   /// command returns a typed error so the UI can prompt first.
   immichIngestPath: string | null;
+  /// AI Curator. When true, the import dialog's curator checkbox
+  /// starts checked. API keys live in the OS keychain — see
+  /// `set_curator_api_key(provider, ...)`.
+  curatorDefaultRunOnImport: boolean;
+  /// Legacy single-model field from before the multi-provider refactor.
+  /// New code should read `curatorModelAnthropic` etc. instead.
+  curatorModel: string;
+  /// Hard ceiling on per-shoot curator spend, in cents. Worker stops
+  /// dispatching new calls once exceeded. 0 = no cap (not recommended).
+  /// Local provider always reports 0 cost so the cap is inert there.
+  curatorMaxCostPerShootCents: number;
+  /// Selected provider: "anthropic" | "gemini" | "local".
+  curatorProvider: "anthropic" | "gemini" | "local";
+  /// Per-provider model identifiers. The UI flips one of these into
+  /// effect based on `curatorProvider` so users keep their last model
+  /// choice when switching providers.
+  curatorModelAnthropic: string;
+  curatorModelGemini: string;
+  curatorModelLocal: string;
+  /// OpenAI-compatible base URL for the local provider, including the
+  /// `/v1` suffix. Defaults to Ollama's port.
+  curatorLocalBaseUrl: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -31,6 +53,14 @@ const DEFAULT_SETTINGS: Settings = {
   hideSoftThreshold: 30,
   eyeOpenConfidence: 0.7,
   immichIngestPath: null,
+  curatorDefaultRunOnImport: true,
+  curatorModel: "claude-sonnet-4-6",
+  curatorMaxCostPerShootCents: 500,
+  curatorProvider: "anthropic",
+  curatorModelAnthropic: "claude-sonnet-4-6",
+  curatorModelGemini: "gemini-2.5-flash",
+  curatorModelLocal: "",
+  curatorLocalBaseUrl: "http://localhost:11434/v1",
 };
 
 interface SettingsState {

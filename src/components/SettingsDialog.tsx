@@ -4,7 +4,17 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
 import { useAiStore } from "../stores/aiStore";
-import type { AiProviderStatus } from "../types";
+import type { AiProviderStatus, ApiKeyStatus, CuratorProvider } from "../types";
+import {
+  clearCuratorApiKey,
+  clearCuratorForShoot,
+  estimateCuratorCostCents,
+  formatCostCents,
+  getCuratorApiKeyStatus,
+  setCuratorApiKey,
+  startCuratorForShoot,
+  testCuratorConnection,
+} from "../lib/curatorApi";
 
 function providerLabel(p: AiProviderStatus): { text: string; color: string } {
   switch (p) {
@@ -37,6 +47,58 @@ export function SettingsDialog() {
   const [reanalyzing, setReanalyzing] = useState(false);
   const [reanalyzeMsg, setReanalyzeMsg] = useState<string | null>(null);
   const aiProvider = useAiStore((s) => s.provider);
+  // Curator section. Per-provider state so flipping the dropdown
+  // remembers the user's last model + lets each cloud provider keep its
+  // own keychain status independent.
+  const [curatorRunOnImport, setCuratorRunOnImport] = useState(
+    settings.curatorDefaultRunOnImport,
+  );
+  const [curatorProvider, setCuratorProvider] = useState<CuratorProvider>(
+    settings.curatorProvider,
+  );
+  const [modelAnthropic, setModelAnthropic] = useState(settings.curatorModelAnthropic);
+  const [modelGemini, setModelGemini] = useState(settings.curatorModelGemini);
+  const [modelLocal, setModelLocal] = useState(settings.curatorModelLocal);
+  const [localBaseUrl, setLocalBaseUrl] = useState(settings.curatorLocalBaseUrl);
+  const [curatorMaxCostDollars, setCuratorMaxCostDollars] = useState(
+    (settings.curatorMaxCostPerShootCents / 100).toFixed(2),
+  );
+  const [keyStatusAnthropic, setKeyStatusAnthropic] =
+    useState<ApiKeyStatus | null>(null);
+  const [keyStatusGemini, setKeyStatusGemini] = useState<ApiKeyStatus | null>(null);
+  const [newKey, setNewKey] = useState("");
+  const [keyMsg, setKeyMsg] = useState<string | null>(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [curatorRunning, setCuratorRunning] = useState(false);
+  const [curatorMsg, setCuratorMsg] = useState<string | null>(null);
+  const [curatorEstimate, setCuratorEstimate] = useState<number | null>(null);
+
+  /// Keychain status for the currently-selected provider. Local has no
+  /// key so it always shows as "configured" (no auth needed).
+  const activeKeyStatus: ApiKeyStatus | null =
+    curatorProvider === "anthropic"
+      ? keyStatusAnthropic
+      : curatorProvider === "gemini"
+        ? keyStatusGemini
+        : { configured: true, suffix: "" };
+
+  useEffect(() => {
+    if (!isOpen || !currentShoot) {
+      setCuratorEstimate(null);
+      return;
+    }
+    let cancelled = false;
+    estimateCuratorCostCents(currentShoot.photoCount)
+      .then((c) => {
+        if (!cancelled) setCuratorEstimate(c);
+      })
+      .catch(() => {
+        if (!cancelled) setCuratorEstimate(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, currentShoot]);
 
   useEffect(() => {
     if (isOpen) {
@@ -49,11 +111,43 @@ export function SettingsDialog() {
       setImmichPath(settings.immichIngestPath);
       setEnableAi(settings.enableAiOnImport);
       setEyeConfidence(settings.eyeOpenConfidence);
+      setCuratorRunOnImport(settings.curatorDefaultRunOnImport);
+      setCuratorProvider(settings.curatorProvider);
+      setModelAnthropic(settings.curatorModelAnthropic);
+      setModelGemini(settings.curatorModelGemini);
+      setModelLocal(settings.curatorModelLocal);
+      setLocalBaseUrl(settings.curatorLocalBaseUrl);
+      setCuratorMaxCostDollars((settings.curatorMaxCostPerShootCents / 100).toFixed(2));
       setLibraryRootError(null);
       setReclusterMsg(null);
       setReanalyzeMsg(null);
+      setNewKey("");
+      setKeyMsg(null);
+      setCuratorMsg(null);
+      // Refresh key status for the cloud providers whenever the dialog
+      // opens — the keychain is outside our reactive state, so nothing
+      // else triggers this read. Local has no key so we skip it.
+      getCuratorApiKeyStatus("anthropic")
+        .then(setKeyStatusAnthropic)
+        .catch((e) => {
+          console.error("Failed to read Anthropic key status:", e);
+          setKeyStatusAnthropic({ configured: false, suffix: "" });
+        });
+      getCuratorApiKeyStatus("gemini")
+        .then(setKeyStatusGemini)
+        .catch((e) => {
+          console.error("Failed to read Gemini key status:", e);
+          setKeyStatusGemini({ configured: false, suffix: "" });
+        });
     }
   }, [isOpen, settings]);
+
+  // Clear any prior key-action message when the user flips providers so
+  // a stale "Connection failed" doesn't bleed across providers.
+  useEffect(() => {
+    setKeyMsg(null);
+    setNewKey("");
+  }, [curatorProvider]);
 
   const handleBrowseLibraryRoot = useCallback(async () => {
     const selected = await open({ directory: true });
@@ -86,6 +180,10 @@ export function SettingsDialog() {
     routeStar <= 5;
 
   const handleSave = async () => {
+    const parsedDollars = parseFloat(curatorMaxCostDollars);
+    const maxCents = Number.isFinite(parsedDollars)
+      ? Math.max(0, Math.round(parsedDollars * 100))
+      : settings.curatorMaxCostPerShootCents;
     try {
       await updateSettings({
         nearDupThreshold: nearDup,
@@ -97,6 +195,17 @@ export function SettingsDialog() {
         immichIngestPath: immichPath,
         enableAiOnImport: enableAi,
         eyeOpenConfidence: eyeConfidence,
+        curatorDefaultRunOnImport: curatorRunOnImport,
+        // Keep the legacy single-model field in sync with whichever
+        // model the active provider uses, so any code path still
+        // reading `curator_model` sees a sensible value.
+        curatorModel: activeModel(),
+        curatorMaxCostPerShootCents: maxCents,
+        curatorProvider,
+        curatorModelAnthropic: modelAnthropic,
+        curatorModelGemini: modelGemini,
+        curatorModelLocal: modelLocal,
+        curatorLocalBaseUrl: localBaseUrl,
       });
     } catch (e) {
       setLibraryRootError(String(e));
@@ -125,6 +234,122 @@ export function SettingsDialog() {
       setReclusterMsg(`Error: ${e}`);
     } finally {
       setReclustering(false);
+    }
+  };
+
+  const activeModel = (): string => {
+    switch (curatorProvider) {
+      case "anthropic":
+        return modelAnthropic;
+      case "gemini":
+        return modelGemini;
+      case "local":
+        return modelLocal;
+    }
+  };
+
+  const setActiveKeyStatus = (status: ApiKeyStatus | null) => {
+    if (curatorProvider === "anthropic") setKeyStatusAnthropic(status);
+    else if (curatorProvider === "gemini") setKeyStatusGemini(status);
+  };
+
+  const handleSaveKey = async () => {
+    if (!newKey.trim()) return;
+    if (curatorProvider === "local") return; // no key to save for local
+    setKeyBusy(true);
+    setKeyMsg(null);
+    try {
+      await setCuratorApiKey(curatorProvider, newKey.trim());
+      const status = await getCuratorApiKeyStatus(curatorProvider);
+      setActiveKeyStatus(status);
+      setNewKey("");
+      setKeyMsg("Key saved.");
+    } catch (e) {
+      setKeyMsg(`Save failed: ${e}`);
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  const handleClearKey = async () => {
+    if (curatorProvider === "local") return;
+    if (!window.confirm(`Remove the stored ${providerName(curatorProvider)} API key?`))
+      return;
+    setKeyBusy(true);
+    setKeyMsg(null);
+    try {
+      await clearCuratorApiKey(curatorProvider);
+      setActiveKeyStatus({ configured: false, suffix: "" });
+      setKeyMsg("Key cleared.");
+    } catch (e) {
+      setKeyMsg(`Clear failed: ${e}`);
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  /// Persist the current provider + model + base URL before testing,
+  /// so the Rust side reads the same values the user is seeing in the
+  /// dialog. Without this, "Test" would test whatever was saved before
+  /// the user started editing.
+  const handleTestConnection = async () => {
+    setKeyBusy(true);
+    setKeyMsg("Testing…");
+    try {
+      await updateSettings({
+        curatorProvider,
+        curatorModelAnthropic: modelAnthropic,
+        curatorModelGemini: modelGemini,
+        curatorModelLocal: modelLocal,
+        curatorLocalBaseUrl: localBaseUrl,
+      });
+      await testCuratorConnection();
+      setKeyMsg("Connection OK.");
+    } catch (e) {
+      setKeyMsg(`Connection failed: ${e}`);
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  function providerName(p: CuratorProvider): string {
+    return p === "anthropic" ? "Anthropic" : p === "gemini" ? "Gemini" : "Local";
+  }
+
+  const handleRunCurator = async () => {
+    if (!currentShoot) return;
+    setCuratorRunning(true);
+    setCuratorMsg(null);
+    try {
+      await startCuratorForShoot(currentShoot.id);
+      setCuratorMsg(
+        "Started. Watch the Triage chip / 'AI rejects' filter populate as clusters complete.",
+      );
+    } catch (e) {
+      setCuratorMsg(`Start failed: ${e}`);
+    } finally {
+      setCuratorRunning(false);
+    }
+  };
+
+  const handleRerunCurator = async () => {
+    if (!currentShoot) return;
+    if (
+      !window.confirm(
+        "Re-run AI suggestions on this shoot? Existing AI judgments will be discarded.",
+      )
+    )
+      return;
+    setCuratorRunning(true);
+    setCuratorMsg(null);
+    try {
+      await clearCuratorForShoot(currentShoot.id);
+      await startCuratorForShoot(currentShoot.id);
+      setCuratorMsg("Cleared and re-running.");
+    } catch (e) {
+      setCuratorMsg(`Re-run failed: ${e}`);
+    } finally {
+      setCuratorRunning(false);
     }
   };
 
@@ -386,6 +611,299 @@ export function SettingsDialog() {
               </div>
               {reanalyzeMsg && (
                 <p className="text-xs text-[var(--accent)] mt-2">{reanalyzeMsg}</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="mb-4 pt-4 border-t border-white/5">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
+            AI Curator
+          </h3>
+          <p className="text-xs text-[var(--text-secondary)] mb-3">
+            Compositional and aesthetic judgment via a vision LLM. Runs after import
+            and writes per-photo suggestions you accept with{" "}
+            <kbd className="px-1 bg-[var(--bg-tertiary)] rounded">.</kbd> in Triage.
+            Cloud keys are stored in the OS keychain — never written to the database.
+          </p>
+
+          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+            Provider
+          </label>
+          <div className="flex gap-1 mb-3 p-1 rounded-lg bg-[var(--bg-primary)] border border-white/10">
+            {(["anthropic", "gemini", "local"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setCuratorProvider(p)}
+                className={`flex-1 px-3 py-1.5 rounded text-sm transition-colors ${
+                  curatorProvider === p
+                    ? "bg-[var(--accent)] text-white"
+                    : "text-[var(--text-secondary)] hover:bg-white/5"
+                }`}
+              >
+                {providerName(p)}
+              </button>
+            ))}
+          </div>
+
+          {curatorProvider === "anthropic" && (
+            <>
+              <label className="block text-sm text-[var(--text-secondary)] mb-1">
+                Anthropic API key
+              </label>
+              <div className="flex gap-2 mb-1">
+                {keyStatusAnthropic?.configured ? (
+                  <input
+                    type="text"
+                    value={`••••••••${keyStatusAnthropic.suffix}`}
+                    readOnly
+                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-secondary)] border border-white/10 text-sm font-mono"
+                  />
+                ) : (
+                  <input
+                    type="password"
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value)}
+                    placeholder="sk-ant-..."
+                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm font-mono"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                )}
+                {keyStatusAnthropic?.configured ? (
+                  <>
+                    <button
+                      onClick={handleTestConnection}
+                      disabled={keyBusy}
+                      className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                    >
+                      Test
+                    </button>
+                    <button
+                      onClick={handleClearKey}
+                      disabled={keyBusy}
+                      className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                    >
+                      Replace
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleSaveKey}
+                    disabled={keyBusy || !newKey.trim()}
+                    className="px-3 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm transition-colors disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                )}
+              </div>
+
+              <label className="block text-sm text-[var(--text-secondary)] mb-1 mt-3">
+                Model
+              </label>
+              <select
+                value={modelAnthropic}
+                onChange={(e) => setModelAnthropic(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm mb-1"
+              >
+                <option value="claude-sonnet-4-6">claude-sonnet-4-6 (recommended)</option>
+                <option value="claude-opus-4-7">claude-opus-4-7 (more thorough, ~5× cost)</option>
+                <option value="claude-haiku-4-5">claude-haiku-4-5 (cheaper, less nuance)</option>
+              </select>
+            </>
+          )}
+
+          {curatorProvider === "gemini" && (
+            <>
+              <label className="block text-sm text-[var(--text-secondary)] mb-1">
+                Gemini API key
+              </label>
+              <div className="flex gap-2 mb-1">
+                {keyStatusGemini?.configured ? (
+                  <input
+                    type="text"
+                    value={`••••••••${keyStatusGemini.suffix}`}
+                    readOnly
+                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-secondary)] border border-white/10 text-sm font-mono"
+                  />
+                ) : (
+                  <input
+                    type="password"
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value)}
+                    placeholder="AIza..."
+                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm font-mono"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                )}
+                {keyStatusGemini?.configured ? (
+                  <>
+                    <button
+                      onClick={handleTestConnection}
+                      disabled={keyBusy}
+                      className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                    >
+                      Test
+                    </button>
+                    <button
+                      onClick={handleClearKey}
+                      disabled={keyBusy}
+                      className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                    >
+                      Replace
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleSaveKey}
+                    disabled={keyBusy || !newKey.trim()}
+                    className="px-3 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm transition-colors disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                )}
+              </div>
+
+              <label className="block text-sm text-[var(--text-secondary)] mb-1 mt-3">
+                Model
+              </label>
+              <select
+                value={modelGemini}
+                onChange={(e) => setModelGemini(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm mb-1"
+              >
+                <option value="gemini-2.5-flash">gemini-2.5-flash (recommended)</option>
+                <option value="gemini-2.5-pro">gemini-2.5-pro (more thorough, ~5× cost)</option>
+                <option value="gemini-2.0-flash">gemini-2.0-flash (cheapest)</option>
+              </select>
+            </>
+          )}
+
+          {curatorProvider === "local" && (
+            <>
+              <label className="block text-sm text-[var(--text-secondary)] mb-1">
+                Base URL
+              </label>
+              <div className="flex gap-2 mb-3">
+                <input
+                  type="text"
+                  value={localBaseUrl}
+                  onChange={(e) => setLocalBaseUrl(e.target.value)}
+                  placeholder="http://localhost:11434/v1"
+                  spellCheck={false}
+                  className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm font-mono"
+                />
+                <button
+                  onClick={handleTestConnection}
+                  disabled={keyBusy || !modelLocal.trim() || !localBaseUrl.trim()}
+                  className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                >
+                  Test
+                </button>
+              </div>
+              <p className="text-xs text-[var(--text-secondary)] -mt-2 mb-3">
+                Works with Ollama, LM Studio, vLLM, llama.cpp server, or anything that
+                speaks the OpenAI Chat Completions API.
+              </p>
+
+              <label className="block text-sm text-[var(--text-secondary)] mb-1">
+                Model
+              </label>
+              <input
+                type="text"
+                value={modelLocal}
+                onChange={(e) => setModelLocal(e.target.value)}
+                placeholder="qwen2-vl:7b · llava:13b · llama3.2-vision:11b"
+                spellCheck={false}
+                className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm font-mono mb-1"
+              />
+            </>
+          )}
+
+          {keyMsg && <p className="text-xs text-[var(--accent)] mb-3 mt-2">{keyMsg}</p>}
+
+          <label className="flex items-center gap-2 text-sm text-[var(--text-primary)] cursor-pointer mt-3 mb-1">
+            <input
+              type="checkbox"
+              checked={curatorRunOnImport}
+              onChange={(e) => setCuratorRunOnImport(e.target.checked)}
+              className="w-4 h-4"
+              disabled={!activeKeyStatus?.configured}
+            />
+            Run AI suggestions on import (default for new shoots)
+          </label>
+          <p className="text-xs text-[var(--text-secondary)] -mt-1 ml-6 mb-3">
+            Per-shoot toggle in the import dialog can override this default.
+            {curatorProvider === "local"
+              ? " Disabled until a model name is set."
+              : " Disabled until an API key is configured."}
+          </p>
+
+          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+            {curatorProvider === "local" ? "Max cost per shoot ($, ignored for local)" : "Max cost per shoot ($)"}
+          </label>
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={curatorMaxCostDollars}
+            onChange={(e) => setCuratorMaxCostDollars(e.target.value)}
+            disabled={curatorProvider === "local"}
+            className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm disabled:opacity-50"
+          />
+          <p className="text-xs text-[var(--text-secondary)] mt-1">
+            {curatorProvider === "local"
+              ? "Local inference is free; cap is inert. Token counts are tracked instead."
+              : "Worker stops dispatching new calls once this is exceeded; in-flight calls finish. Default $5.00."}
+          </p>
+
+          {currentShoot && (
+            <div className="mt-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm text-[var(--text-primary)] truncate">
+                    Run AI suggestions on{" "}
+                    <span className="font-mono">{currentShoot.slug}</span>
+                  </div>
+                  <div className="text-xs text-[var(--text-secondary)] mt-0.5">
+                    {currentShoot.photoCount} photos
+                    {curatorProvider === "anthropic" && curatorEstimate !== null &&
+                      ` · ~${formatCostCents(curatorEstimate)} estimated`}
+                    {curatorProvider === "gemini" && " · usage billed by Google"}
+                    {curatorProvider === "local" && " · free (local)"}
+                  </div>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    onClick={handleRunCurator}
+                    disabled={curatorRunning || !activeKeyStatus?.configured || (curatorProvider === "local" && !modelLocal.trim())}
+                    className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 text-[var(--text-primary)] text-xs transition-colors disabled:opacity-50"
+                  >
+                    {curatorRunning ? "Starting…" : "Run"}
+                  </button>
+                  <button
+                    onClick={handleRerunCurator}
+                    disabled={curatorRunning || !activeKeyStatus?.configured || (curatorProvider === "local" && !modelLocal.trim())}
+                    className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs transition-colors disabled:opacity-50"
+                    title="Discard existing judgments and re-run"
+                  >
+                    Re-run
+                  </button>
+                </div>
+              </div>
+              {curatorMsg && (
+                <p className="text-xs text-[var(--accent)] mt-2">{curatorMsg}</p>
+              )}
+              {curatorProvider !== "local" && !activeKeyStatus?.configured && (
+                <p className="text-xs text-[var(--text-secondary)] mt-2">
+                  Save an API key above to enable.
+                </p>
+              )}
+              {curatorProvider === "local" && !modelLocal.trim() && (
+                <p className="text-xs text-[var(--text-secondary)] mt-2">
+                  Set a model name above to enable.
+                </p>
               )}
             </div>
           )}

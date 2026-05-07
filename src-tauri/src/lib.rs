@@ -1,5 +1,6 @@
 mod ai;
 mod commands;
+mod curator;
 mod db;
 mod ingest;
 mod layout;
@@ -300,6 +301,26 @@ pub fn run() {
             commands::layout::bump_select_max_floor,
             commands::layout::get_shoot_bucket_path,
             commands::layout::open_shoot_folder,
+            commands::curator::set_anthropic_api_key,
+            commands::curator::clear_anthropic_api_key,
+            commands::curator::get_anthropic_api_key_status,
+            commands::curator::test_anthropic_connection,
+            commands::curator::set_curator_api_key,
+            commands::curator::clear_curator_api_key,
+            commands::curator::get_curator_api_key_status,
+            commands::curator::test_curator_connection,
+            commands::curator::start_curator_for_shoot,
+            commands::curator::cancel_curator,
+            commands::curator::resume_curator_for_shoot,
+            commands::curator::clear_curator_for_shoot,
+            commands::curator::get_curator_status,
+            commands::curator::get_curator_judgment_for_photo,
+            commands::curator::get_curator_judgments_for_shoot,
+            commands::curator::get_curator_summary,
+            commands::curator::get_curator_agreement_stats,
+            commands::curator::estimate_curator_cost_cents,
+            commands::curator::accept_curator_suggestion,
+            commands::curator::record_curator_override,
         ]);
 
     let builder = protocol::register_protocol(builder);

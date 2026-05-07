@@ -1,6 +1,36 @@
 import { useEffect } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import {
+  acceptCuratorSuggestion,
+  getCuratorJudgmentForPhoto,
+  recordCuratorOverride,
+} from "../lib/curatorApi";
+
+/// After a manual P/X, check whether the resulting flag conflicts with
+/// the curator's suggestion and record an override if so. Fire-and-
+/// forget: failures are non-fatal (the override stat just goes
+/// unrecorded) and we never block the keyboard handler on the network.
+/// Reads from the local store map first to avoid an IPC; falls back to
+/// the per-photo IPC for photos loaded after the bulk fetch.
+async function maybeRecordOverride(photoId: number, newFlag: string) {
+  try {
+    let j = useProjectStore.getState().curatorJudgments.get(photoId);
+    if (!j) {
+      const fetched = await getCuratorJudgmentForPhoto(photoId);
+      if (!fetched) return;
+      j = fetched;
+    }
+    if (j.suggestedFlag === newFlag) return; // incidental agreement
+    await recordCuratorOverride(photoId);
+    useProjectStore
+      .getState()
+      .patchCuratorJudgment(photoId, { userAction: "overridden" });
+  } catch (e) {
+    // Telemetry best-effort; ignore.
+    console.debug("recordCuratorOverride failed:", e);
+  }
+}
 
 export function useKeyboardNav() {
   const {
@@ -197,7 +227,11 @@ export function useKeyboardNav() {
           // picked, so binding P to setFlag would be a no-op at best and
           // (via the Select-P group cascade) a silent bulk reject at
           // worst. Stars are the Select verb.
-          if (currentView === "triage") setFlag("pick");
+          if (currentView === "triage") {
+            const pid = displayItems[currentIndex]?.image.id;
+            void setFlag("pick");
+            if (pid != null) void maybeRecordOverride(pid, "pick");
+          }
           break;
         case "P":
           if (currentView === "triage") {
@@ -205,13 +239,50 @@ export function useKeyboardNav() {
               e.preventDefault();
               useProjectStore.getState().keepAllInCurrentGroup();
             } else {
-              setFlag("pick");
+              const pid = displayItems[currentIndex]?.image.id;
+              void setFlag("pick");
+              if (pid != null) void maybeRecordOverride(pid, "pick");
             }
           }
           break;
         case "x":
         case "X":
-          if (currentView !== "route") setFlag("reject");
+          if (currentView !== "route") {
+            const pid = displayItems[currentIndex]?.image.id;
+            void setFlag("reject");
+            if (pid != null) void maybeRecordOverride(pid, "reject");
+          }
+          break;
+        case ".":
+          // Curator (Claude) accept hotkey. Triage-only. The Rust
+          // command marks user_action='accepted' and returns the
+          // suggested_flag string; the frontend then writes the flag
+          // through the existing setFlag flow so undo, advance, and
+          // local state stay uniform with manual P/X.
+          if (currentView === "triage") {
+            e.preventDefault();
+            const item = displayItems[currentIndex];
+            const pid = item?.image.id;
+            if (pid == null) break;
+            void (async () => {
+              try {
+                const suggested = await acceptCuratorSuggestion(pid);
+                useProjectStore
+                  .getState()
+                  .patchCuratorJudgment(pid, { userAction: "accepted" });
+                if (suggested === "pick" || suggested === "reject") {
+                  await setFlag(suggested);
+                } else {
+                  // 'keep' = "no opinion." Just advance.
+                  advanceToNextUnreviewed();
+                }
+              } catch (err) {
+                useProjectStore
+                  .getState()
+                  .setToast(`AI accept failed: ${err}`, "error");
+              }
+            })();
+          }
           break;
         case "[":
           if (currentView === "select") {
