@@ -76,4 +76,13 @@ pub trait CuratorProvider: Send + Sync {
     /// accessor is handy for diagnostics and future progress events.
     #[allow(dead_code)]
     fn model(&self) -> &str;
+
+    /// Maximum number of in-flight Stage 2 calls. Cloud providers are
+    /// HTTP-bound and tolerate parallelism happily (their GPU is
+    /// elsewhere); local providers share one GPU with us, so 4-way
+    /// concurrency makes the host system thrash. Default 4 matches the
+    /// previous hard-coded constant; `LocalProvider` overrides to 1.
+    fn concurrency_limit(&self) -> usize {
+        4
+    }
 }

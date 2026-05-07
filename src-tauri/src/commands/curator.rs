@@ -130,6 +130,21 @@ pub fn start_curator_for_shoot(
     app: AppHandle,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
+    // Drop any idle worker so its provider is rebuilt from current
+    // settings. The worker caches the LocalProvider's model + base URL
+    // at spawn time; without this, settings changes don't take effect
+    // until app restart. We only drop when no run is active so we don't
+    // interrupt in-flight Stage 2 work.
+    {
+        let mut s = state.lock().map_err(|e| e.to_string())?;
+        if matches!(
+            s.curator_status,
+            CuratorStatus::Idle | CuratorStatus::Failed | CuratorStatus::Disabled
+        ) {
+            s.curator_worker = None;
+        }
+    }
+
     ensure_worker_spawned(&app, &state)?;
 
     let mut s = state.lock().map_err(|e| e.to_string())?;

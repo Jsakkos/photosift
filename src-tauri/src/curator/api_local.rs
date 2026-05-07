@@ -161,16 +161,26 @@ impl CuratorProvider for LocalProvider {
                 ChatMessage::system_text(&system),
                 ChatMessage::user_parts(user_parts),
             ],
-            max_tokens: Some(600),
+            // Reasoning-style local models (Gemma 4, GPT-OSS, R1) emit a
+            // long thinking-trace before the JSON. Give plenty of room
+            // so the answer doesn't get clipped at finish_reason=length.
+            max_tokens: Some(2500),
             stream: false,
         };
 
         let resp = send_with_retries(&self.http, &self.chat_url(), &self.auth_headers()?, &req)
             .await?;
         let content = first_message_content(&resp)?;
-        let cleaned = strip_json_fences(&content);
-        let summary: ShootSummary =
-            serde_json::from_str(&cleaned).context("decode local Stage 1 JSON")?;
+        let stripped = strip_json_fences(&content);
+        let candidate = extract_target_json(&stripped, "shoot_type")
+            .map(|s| maybe_unwrap_tool_call(s, "record_shoot_summary"))
+            .unwrap_or_default();
+        let summary: ShootSummary = serde_json::from_str(&candidate).with_context(|| {
+            format!(
+                "decode local Stage 1 JSON; first 500 chars of model output: {:?}",
+                &content[..content.len().min(500)]
+            )
+        })?;
         Ok(SummaryResult {
             summary,
             usage: usage_from_resp(&resp),
@@ -214,19 +224,31 @@ impl CuratorProvider for LocalProvider {
                 ChatMessage::system_text(&system),
                 ChatMessage::user_parts(user_parts),
             ],
-            max_tokens: Some(220 * cluster.frames.len() as u32),
+            // Headroom for reasoning preamble + N judgment objects. We
+            // observed truncation mid-object on 4-6 frame clusters at
+            // 500/frame; bump to 800/frame + 2000 base. Even a 6-frame
+            // cluster only consumes ~6800 tokens, well under 32k context.
+            max_tokens: Some(800 * cluster.frames.len() as u32 + 2000),
             stream: false,
         };
 
         let resp = send_with_retries(&self.http, &self.chat_url(), &self.auth_headers()?, &req)
             .await?;
         let content = first_message_content(&resp)?;
-        let cleaned = strip_json_fences(&content);
+        let stripped = strip_json_fences(&content);
+        let candidate = extract_target_json(&stripped, "judgments")
+            .map(|s| maybe_unwrap_tool_call(s, "record_judgments"))
+            .unwrap_or_default();
         #[derive(Deserialize)]
         struct Wrap {
             judgments: Vec<CuratorJudgment>,
         }
-        let wrap: Wrap = serde_json::from_str(&cleaned).context("decode local Stage 2 JSON")?;
+        let wrap: Wrap = serde_json::from_str(&candidate).with_context(|| {
+            format!(
+                "decode local Stage 2 JSON; first 500 chars of model output: {:?}",
+                &content[..content.len().min(500)]
+            )
+        })?;
         Ok(ClusterJudgmentBatch {
             judgments: wrap.judgments,
             usage: usage_from_resp(&resp),
@@ -241,6 +263,12 @@ impl CuratorProvider for LocalProvider {
 
     fn model(&self) -> &str {
         &self.model
+    }
+
+    fn concurrency_limit(&self) -> usize {
+        // Local inference shares one GPU; parallel calls thrash VRAM
+        // and Windows commit on a 24 GB card running a 26B vision model.
+        1
     }
 }
 
@@ -287,6 +315,130 @@ fn strip_json_fences(s: &str) -> String {
     let stripped = stripped.trim_start_matches('\n');
     let stripped = stripped.strip_suffix("```").unwrap_or(stripped);
     stripped.trim().to_string()
+}
+
+/// Find the first balanced top-level `{...}` substring inside `s`.
+/// Reasoning-mode models (Gemma 4, GPT-OSS, DeepSeek-R1) emit a long
+/// thinking-trace preamble before the actual JSON answer; we need to
+/// fish the JSON out of that. String-aware so braces inside string
+/// literals don't fool the depth counter.
+fn extract_json_object(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let start = bytes.iter().position(|&b| b == b'{')?;
+
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[start..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Some models, when given a tool schema named e.g. `record_shoot_summary`,
+/// emit `{"record_shoot_summary": {...fields...}}` instead of bare
+/// `{...fields...}`. Detect that one-level wrapping and unwrap.
+fn maybe_unwrap_tool_call(json_str: &str, tool_name: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        return json_str.to_string();
+    };
+    let Some(obj) = v.as_object() else {
+        return json_str.to_string();
+    };
+    if obj.len() == 1 {
+        if let Some(inner) = obj.get(tool_name) {
+            if inner.is_object() {
+                return inner.to_string();
+            }
+        }
+    }
+    json_str.to_string()
+}
+
+/// Walk every balanced `{...}` block in `s` and return the *last* one
+/// whose top-level keys include `required_key`. Falls back to the first
+/// balanced block if no match. This is a stronger version of
+/// `extract_json_object` for reasoning models that emit multiple JSON
+/// fragments (echoed schemas, partial drafts) before the final answer —
+/// "last one with the right key" reliably picks the answer over the
+/// schema dump.
+fn extract_target_json<'a>(s: &'a str, required_key: &str) -> Option<&'a str> {
+    let bytes = s.as_bytes();
+    let mut best: Option<&str> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+        let mut depth = 0i32;
+        let mut in_string = false;
+        let mut escape = false;
+        let mut end = None;
+        for j in i..bytes.len() {
+            let b = bytes[j];
+            if in_string {
+                if escape {
+                    escape = false;
+                } else if b == b'\\' {
+                    escape = true;
+                } else if b == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match b {
+                b'"' => in_string = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(j);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        match end {
+            Some(e) => {
+                let block = &s[i..=e];
+                if has_top_level_key(block, required_key) {
+                    best = Some(block);
+                }
+                i = e + 1;
+            }
+            None => break,
+        }
+    }
+    best.or_else(|| extract_json_object(s))
+}
+
+fn has_top_level_key(s: &str, key: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(s)
+        .ok()
+        .and_then(|v| v.as_object().map(|o| o.contains_key(key)))
+        .unwrap_or(false)
 }
 
 fn usage_from_resp(resp: &ChatResponse) -> Usage {
@@ -521,5 +673,39 @@ mod tests {
     fn empty_model_rejected() {
         let r = LocalProvider::new("http://localhost:11434/v1".into(), "".into(), None);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn extract_json_skips_reasoning_preamble() {
+        // Gemma 4-style channel preamble + final JSON.
+        let s = "<|channel>thought\nThe user wants me to analyze...\n<channel|>```json\n{\"shoot_type\":\"x\",\"subjects\":[\"a\"],\"story\":\"y\",\"dominant_style\":\"z\",\"watch_for\":[\"w\"]}\n```";
+        let stripped = strip_json_fences(s);
+        let json = extract_json_object(&stripped).unwrap();
+        let parsed: ShootSummary = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.shoot_type, "x");
+    }
+
+    #[test]
+    fn extract_json_handles_strings_with_braces() {
+        // Brace inside a string literal mustn't fool the depth counter.
+        let s = r#"prefix {"reason": "looks like {something}", "ok": true} trailing"#;
+        let json = extract_json_object(s).unwrap();
+        assert_eq!(json, r#"{"reason": "looks like {something}", "ok": true}"#);
+    }
+
+    #[test]
+    fn unwrap_tool_call_when_wrapped() {
+        let wrapped = r#"{"record_shoot_summary": {"shoot_type":"x","subjects":[],"story":"","dominant_style":"","watch_for":[]}}"#;
+        let unwrapped = maybe_unwrap_tool_call(wrapped, "record_shoot_summary");
+        let parsed: ShootSummary = serde_json::from_str(&unwrapped).unwrap();
+        assert_eq!(parsed.shoot_type, "x");
+    }
+
+    #[test]
+    fn unwrap_tool_call_passthrough_when_not_wrapped() {
+        let bare = r#"{"shoot_type":"x","subjects":[],"story":"","dominant_style":"","watch_for":[]}"#;
+        let same = maybe_unwrap_tool_call(bare, "record_shoot_summary");
+        let parsed: ShootSummary = serde_json::from_str(&same).unwrap();
+        assert_eq!(parsed.shoot_type, "x");
     }
 }

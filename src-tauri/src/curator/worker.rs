@@ -37,10 +37,8 @@ pub enum CuratorJob {
     Stage2Singletons { shoot_id: i64, photo_ids: Vec<i64> },
 }
 
-/// Cap on concurrent in-flight Stage 2 HTTP requests. 4 is a sweet spot
-/// between throughput and prompt-cache warmth (cache hits stay warm with
-/// 4-8 concurrent calls) and stays well within Anthropic's tier-1 RPM.
-const STAGE2_CONCURRENCY: usize = 4;
+// Stage 2 concurrency is per-provider — cloud=4, local=1. See
+// `CuratorProvider::concurrency_limit()` and consumers in `run_loop`.
 
 /// Max ungrouped photos per `Stage2Singletons` job.
 const SINGLETONS_PER_JOB: usize = 6;
@@ -125,7 +123,8 @@ async fn run_loop(
     // The provider is held behind an Arc so each spawned Stage 2 task
     // gets a cheap clone of the same instance (reqwest::Client inside
     // each impl is itself Arc'd).
-    let semaphore = Arc::new(Semaphore::new(STAGE2_CONCURRENCY));
+    let concurrency = provider.concurrency_limit().max(1);
+    let semaphore = Arc::new(Semaphore::new(concurrency));
 
     while let Some(job) = rx.recv().await {
         if cancel.load(Ordering::SeqCst) {
@@ -199,15 +198,15 @@ async fn run_loop(
     // moment to settle before tearing down.
     let _ = tokio::time::timeout(
         Duration::from_secs(60),
-        wait_until_idle(&semaphore),
+        wait_until_idle(&semaphore, concurrency),
     )
     .await;
 }
 
 /// Wait until all permits are returned to the semaphore (i.e. no in-flight
 /// Stage 2 tasks remain).
-async fn wait_until_idle(sem: &Arc<Semaphore>) {
-    while sem.available_permits() < STAGE2_CONCURRENCY {
+async fn wait_until_idle(sem: &Arc<Semaphore>, concurrency: usize) {
+    while sem.available_permits() < concurrency {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
