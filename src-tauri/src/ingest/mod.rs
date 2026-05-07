@@ -313,6 +313,10 @@ fn process_one_file(
 ) -> ProcessedFile {
     let t_start = Instant::now();
 
+    // 0. File size — cheap stat used both as the heuristic-dedup signal
+    //    and persisted on the row for future SD-card scans.
+    let file_size_bytes = std::fs::metadata(src_path).ok().map(|m| m.len());
+
     // 1. SHA-256
     let t_sha = Instant::now();
     let content_hash = match hashing::sha256_stream(src_path) {
@@ -447,6 +451,7 @@ fn process_one_file(
         shutter_speed: exif_data.as_ref().and_then(|e| e.shutter_speed.clone()),
         iso: exif_data.as_ref().and_then(|e| e.iso),
         orientation: orientation_tag,
+        file_size_bytes,
         initial_flag,
         initial_star_rating,
     };

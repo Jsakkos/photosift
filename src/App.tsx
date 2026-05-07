@@ -7,6 +7,7 @@ import { CullPage } from "./pages/CullPage";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Toast } from "./components/Toast";
+import { DriveDetectedToast } from "./components/DriveDetectedToast";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useAiStore } from "./stores/aiStore";
 import { useProjectStore } from "./stores/projectStore";
@@ -73,6 +74,7 @@ function App() {
       </Routes>
       <SettingsDialog />
       <Toast />
+      <DriveDetectedToast />
     </>
   );
 }

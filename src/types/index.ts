@@ -161,6 +161,36 @@ export interface SyncReport {
   errors: string[];
 }
 
+/// A removable storage volume detected via `list_removable_drives`.
+/// Used by the Import dialog's drive picker.
+export interface DriveInfo {
+  mountPoint: string;
+  label: string | null;
+  driveLetter: string | null;
+  isRemovable: boolean;
+  totalBytes: number;
+  availableBytes: number;
+}
+
+/// One entry in the SD-card date browser scan. Cheap to produce — no
+/// thumbnail decoding. `alreadyImported` is true when the heuristic dedup
+/// matched an existing photo (camera + filename + size).
+export interface ScanDateEntry {
+  path: string;
+  filename: string;
+  capturedAt: string | null;
+  camera: string | null;
+  fileSizeBytes: number;
+  thumbDataUrl: string | null;
+  alreadyImported: boolean;
+}
+
+/// Lazy thumbnail extraction result, one per `scan-thumb-ready` event.
+export interface ScanThumbReady {
+  path: string;
+  thumbDataUrl: string | null;
+}
+
 /// Sharpness percentile cutoffs for the current shoot. Mapped into the
 /// 1-10 display badge in AiPanel so raw Laplacian scores remain
 /// meaningful across shoots with different detail density.

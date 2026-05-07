@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { useShootListStore } from "../stores/shootListStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useImportIntentStore } from "../stores/importIntentStore";
 import { ImportDialog } from "../components/ImportDialog";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { LogoB } from "../components/primitives";
@@ -185,6 +186,15 @@ export function ShootListPage() {
   const [showImport, setShowImport] = useState(false);
   const [importingProgress, setImportingProgress] = useState<ImportingProgress>(new Map());
   const [query, setQuery] = useState("");
+  const requestedDrive = useImportIntentStore((s) => s.requestedDrive);
+  const clearImportRequest = useImportIntentStore((s) => s.clearRequest);
+
+  // The drive-detected toast pushes a drive into the intent store; honor
+  // it by opening the dialog. The dialog reads `requestedDrive` once for
+  // its initial selection, then we clear so subsequent re-opens stay neutral.
+  useEffect(() => {
+    if (requestedDrive) setShowImport(true);
+  }, [requestedDrive]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -394,9 +404,14 @@ export function ShootListPage() {
 
       {showImport && (
         <ImportDialog
-          onClose={() => setShowImport(false)}
+          initialDrive={requestedDrive}
+          onClose={() => {
+            setShowImport(false);
+            clearImportRequest();
+          }}
           onComplete={(shootId) => {
             setShowImport(false);
+            clearImportRequest();
             navigate(`/shoots/${shootId}`);
           }}
         />
