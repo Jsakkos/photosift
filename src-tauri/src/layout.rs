@@ -266,6 +266,7 @@ mod tests {
                 shutter_speed: None,
                 iso: None,
                 orientation: None,
+                file_size_bytes: None,
                 initial_flag: None,
                 initial_star_rating: None,
             });

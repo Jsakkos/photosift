@@ -2,6 +2,7 @@ mod ai;
 mod commands;
 mod curator;
 mod db;
+mod drives;
 mod ingest;
 mod layout;
 mod metadata;
@@ -273,6 +274,8 @@ pub fn run() {
             commands::import::start_import,
             commands::import::cancel_import,
             commands::scan::scan_folder,
+            commands::scan::extract_thumbnails_for_paths,
+            commands::drives::list_removable_drives,
             commands::image::get_image_list,
             commands::image::get_image_metadata,
             commands::rating::set_rating,

@@ -1,11 +1,14 @@
+use crate::db::schema::Database;
 use crate::ingest::{preview, walker};
 use crate::metadata::{exif, orientation};
 use base64::Engine;
 use image::GenericImageView;
 use jpeg_encoder::{ColorType, Encoder as JpegEncoder};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 /// One entry in the pre-import scan response. Cheap enough to produce
@@ -20,11 +23,17 @@ pub struct ScanEntry {
     pub path: String,
     pub filename: String,
     pub captured_at: Option<String>,
+    pub camera: Option<String>,
     pub file_size_bytes: u64,
     /// A 200-px longest-edge thumbnail as a data URL (`data:image/jpeg;base64,...`).
     /// `None` when the embedded JPEG couldn't be decoded — the UI should
     /// fall back to a filename-only tile in that case.
     pub thumb_data_url: Option<String>,
+    /// True when (camera, filename, file_size) matches an already-imported
+    /// photo per the heuristic dedup index. Only populated when the caller
+    /// passed `dedup_known: true`. SHA-256 dedup at actual import time is
+    /// the source of truth.
+    pub already_imported: bool,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -33,6 +42,13 @@ pub struct ScanProgress {
     pub index: usize,
     pub total: usize,
     pub entry: ScanEntry,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanThumbReady {
+    pub path: String,
+    pub thumb_data_url: Option<String>,
 }
 
 /// A 200-photo NEF folder will otherwise fan out to `num_cpus` workers, each
@@ -51,8 +67,13 @@ pub async fn scan_folder(
     // ImportDialog only needs thumbs when the user flips "Select subset"
     // so they can visually pick which frames to drop.
     with_thumbnails: Option<bool>,
+    // When true, populate `already_imported` per entry by checking the
+    // heuristic dedup index (camera, filename, file_size). Used by the
+    // SD-card date browser so leftover history can be hidden by default.
+    dedup_known: Option<bool>,
 ) -> Result<usize, String> {
     let with_thumbnails = with_thumbnails.unwrap_or(false);
+    let dedup_known = dedup_known.unwrap_or(false);
     // Must run inside spawn_blocking so the synchronous rayon work doesn't
     // hold the IPC worker: emit() queues events to the webview, but they
     // only drain while the command task yields. A blocking sync command
@@ -60,7 +81,7 @@ pub async fn scan_folder(
     // `scan-progress` event in one burst after it returned — the UI would
     // see a 30-second frozen panel and then 398 thumbnails at once.
     tauri::async_runtime::spawn_blocking(move || {
-        scan_folder_blocking(app, source, with_thumbnails)
+        scan_folder_blocking(app, source, with_thumbnails, dedup_known)
     })
     .await
     .map_err(|e| format!("scan task panicked: {}", e))?
@@ -70,6 +91,7 @@ fn scan_folder_blocking(
     app: AppHandle,
     source: String,
     with_thumbnails: bool,
+    dedup_known: bool,
 ) -> Result<usize, String> {
     let src_path = PathBuf::from(&source);
     if !src_path.exists() {
@@ -77,6 +99,18 @@ fn scan_folder_blocking(
     }
     let files = walker::walk_source(&src_path);
     let total = files.len();
+
+    let known: Arc<HashSet<(String, String, u64)>> = if dedup_known {
+        let set = Database::open_global()
+            .and_then(|db| db.known_originals())
+            .unwrap_or_else(|e| {
+                log::warn!("scan: known_originals failed, dedup disabled: {}", e);
+                HashSet::new()
+            });
+        Arc::new(set)
+    } else {
+        Arc::new(HashSet::new())
+    };
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(SCAN_PARALLELISM)
@@ -87,7 +121,7 @@ fn scan_folder_blocking(
     let counter = AtomicUsize::new(0);
     pool.install(|| {
         files.par_iter().for_each(|p| {
-            let entry = scan_one_file(p, with_thumbnails);
+            let entry = scan_one_file(p, with_thumbnails, &known);
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let _ = app.emit(
                 "scan-progress",
@@ -100,10 +134,16 @@ fn scan_folder_blocking(
         });
     });
 
+    let _ = app.emit("scan-complete", total);
+
     Ok(total)
 }
 
-fn scan_one_file(path: &Path, with_thumbnails: bool) -> ScanEntry {
+fn scan_one_file(
+    path: &Path,
+    with_thumbnails: bool,
+    known: &HashSet<(String, String, u64)>,
+) -> ScanEntry {
     let filename = path
         .file_name()
         .unwrap_or_default()
@@ -113,7 +153,17 @@ fn scan_one_file(path: &Path, with_thumbnails: bool) -> ScanEntry {
 
     let exif_data = exif::extract_exif(path).ok();
     let captured_at = exif_data.as_ref().and_then(|e| e.capture_time.clone());
+    let camera = exif_data.as_ref().and_then(|e| e.camera_model.clone());
     let orientation_tag = exif_data.as_ref().and_then(|e| e.orientation);
+
+    let already_imported = match camera.as_ref() {
+        Some(cam) if !known.is_empty() => known.contains(&(
+            cam.to_lowercase(),
+            filename.to_lowercase(),
+            file_size_bytes,
+        )),
+        _ => false,
+    };
 
     let thumb_data_url = if with_thumbnails {
         let t = build_scan_thumb(path, orientation_tag);
@@ -132,9 +182,50 @@ fn scan_one_file(path: &Path, with_thumbnails: bool) -> ScanEntry {
         path: path.to_string_lossy().into_owned(),
         filename,
         captured_at,
+        camera,
         file_size_bytes,
         thumb_data_url,
+        already_imported,
     }
+}
+
+/// Lazy thumbnail extraction for a caller-specified subset of paths.
+/// Used by the SD-card date browser to defer preview decoding until the
+/// user expands a day. Emits `scan-thumb-ready` per file.
+#[tauri::command]
+pub async fn extract_thumbnails_for_paths(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<usize, String> {
+    let total = paths.len();
+    tauri::async_runtime::spawn_blocking(move || {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(SCAN_PARALLELISM)
+            .thread_name(|i| format!("photosift-thumb-{}", i))
+            .build()
+            .map_err(|e| format!("failed to build thumb pool: {}", e))?;
+
+        pool.install(|| {
+            paths.par_iter().for_each(|p| {
+                let path = PathBuf::from(p);
+                let orientation_tag = exif::extract_exif(&path)
+                    .ok()
+                    .and_then(|e| e.orientation);
+                let thumb = build_scan_thumb(&path, orientation_tag);
+                let _ = app.emit(
+                    "scan-thumb-ready",
+                    ScanThumbReady {
+                        path: p.clone(),
+                        thumb_data_url: thumb,
+                    },
+                );
+            });
+        });
+
+        Ok::<usize, String>(total)
+    })
+    .await
+    .map_err(|e| format!("thumb task panicked: {}", e))?
 }
 
 fn build_scan_thumb(path: &Path, orientation_tag: Option<i32>) -> Option<String> {

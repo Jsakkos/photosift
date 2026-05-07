@@ -1,5 +1,6 @@
 use chrono::NaiveDateTime;
 use rusqlite::{params, Connection, OptionalExtension, Result, Row};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Parses the `exif_date` column (EXIF DateTime format `YYYY-MM-DD
@@ -345,6 +346,9 @@ pub struct PhotoInsert {
     pub shutter_speed: Option<String>,
     pub iso: Option<i32>,
     pub orientation: Option<i32>,
+    /// Source file size in bytes. Persisted so future SD-card scans can
+    /// fast-dedup against (camera, filename, file_size) without re-hashing.
+    pub file_size_bytes: Option<u64>,
     /// Initial flag from EXIF/XMP sidecar at import time.
     /// Defaults to "unreviewed" when not provided.
     pub initial_flag: Option<String>,
@@ -494,6 +498,7 @@ impl Database {
         // `photos.select_visited_at` gates the "all picks visited" check
         // that's half of the Select→Route sync trigger.
         self.ensure_column("photos", "select_visited_at", "TEXT")?;
+        self.ensure_column("photos", "file_size_bytes", "INTEGER")?;
         // `shoots.select_max_floor_reached` is the other half — records
         // the highest pass-floor (selectMinStar) the user has ever bumped
         // to for this shoot, so "did they actually run a narrowing pass?"
@@ -799,6 +804,30 @@ impl Database {
             .optional()
     }
 
+    /// Heuristic dedup index: every imported photo's
+    /// (camera_lowercase, filename_lowercase, file_size_bytes) tuple.
+    /// Used by the SD-card scan to mark an entry as already-imported
+    /// without re-hashing the file. Rows missing camera or file size are
+    /// excluded since they can't form a complete heuristic match — the
+    /// SHA-256 dedup at actual import time still catches those.
+    pub fn known_originals(&self) -> Result<HashSet<(String, String, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT camera, filename, file_size_bytes FROM photos
+             WHERE camera IS NOT NULL AND file_size_bytes IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let camera: String = row.get(0)?;
+            let filename: String = row.get(1)?;
+            let size: i64 = row.get(2)?;
+            Ok((camera.to_lowercase(), filename.to_lowercase(), size as u64))
+        })?;
+        let mut set = HashSet::new();
+        for r in rows {
+            set.insert(r?);
+        }
+        Ok(set)
+    }
+
     /// Insert a batch of photos for a shoot in a single transaction.
     /// Returns the inserted photo ids in the same order as the input.
     pub fn insert_photos_batch(
@@ -814,8 +843,8 @@ impl Database {
                     shoot_id, filename, raw_path, preview_path, thumb_path,
                     content_hash, phash, exif_date, camera, lens,
                     focal_length, aperture, shutter_speed, iso, orientation,
-                    flag, star_rating
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                    flag, star_rating, file_size_bytes
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             )?;
             for p in photos {
                 let flag = p.initial_flag.clone().unwrap_or_else(|| "unreviewed".into());
@@ -838,6 +867,7 @@ impl Database {
                     p.orientation,
                     flag,
                     rating,
+                    p.file_size_bytes.map(|n| n as i64),
                 ])?;
                 ids.push(tx.last_insert_rowid());
             }
@@ -1920,6 +1950,7 @@ pub(crate) mod tests {
             shutter_speed: Some("1/250".into()),
             iso: Some(400),
             orientation: None,
+            file_size_bytes: Some(1024),
             initial_flag: None,
             initial_star_rating: None,
         }
@@ -2023,6 +2054,31 @@ pub(crate) mod tests {
         assert_eq!(rows[0].flag, "unreviewed");
         assert_eq!(rows[0].destination, "unrouted");
         assert_eq!(rows[0].star_rating, 0);
+    }
+
+    #[test]
+    fn test_known_originals_heuristic() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
+
+        // Two rows with full heuristic info; one with a NULL camera that
+        // should be excluded from the index.
+        let mut a = sample_insert(1, "DSC_0001.NEF");
+        a.file_size_bytes = Some(20_000_000);
+        let mut b = sample_insert(2, "DSC_0002.NEF");
+        b.file_size_bytes = Some(21_000_000);
+        let mut c = sample_insert(3, "DSC_0003.NEF");
+        c.camera = None;
+        c.file_size_bytes = Some(22_000_000);
+        db.insert_photos_batch(shoot_id, &[a, b, c]).unwrap();
+
+        let known = db.known_originals().unwrap();
+        assert_eq!(known.len(), 2);
+        assert!(known.contains(&("nikon d750".into(), "dsc_0001.nef".into(), 20_000_000)));
+        assert!(known.contains(&("nikon d750".into(), "dsc_0002.nef".into(), 21_000_000)));
+        // Camera-less row is invisible to the heuristic — hash dedup at
+        // import time still catches it.
+        assert!(!known.contains(&("".into(), "dsc_0003.nef".into(), 22_000_000)));
     }
 
     #[test]

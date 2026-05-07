@@ -31,6 +31,7 @@ thiserror = "2"
 http = "1"
 dirs = "5"
 walkdir = "2"
+sysinfo = { version = "0.32", default-features = false, features = ["disk"] }
 uuid = { version = "1", features = ["v4"] }
 ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
 zune-jpeg = "0.4"

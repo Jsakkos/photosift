@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -9,6 +8,11 @@ import {
   getCuratorApiKeyStatus,
   startCuratorForShoot,
 } from "../lib/curatorApi";
+import type { DriveInfo } from "../types";
+import { useDriveDetection } from "../hooks/useDriveDetection";
+import { DriveSourceBar } from "./import/DriveSourceBar";
+import { DateBrowser } from "./import/DateBrowser";
+import { FolderSubsetGrid } from "./import/FolderSubsetGrid";
 
 interface ImportProgress {
   shootId: number;
@@ -24,35 +28,16 @@ interface ImportComplete {
   dedupSkipped: number;
 }
 
-interface ScanEntry {
-  path: string;
-  filename: string;
-  capturedAt: string | null;
-  fileSizeBytes: number;
-  thumbDataUrl: string | null;
-}
-
-interface ScanProgress {
-  index: number;
-  total: number;
-  entry: ScanEntry;
-}
-
-function compareEntries(a: ScanEntry, b: ScanEntry): number {
-  if (a.capturedAt && b.capturedAt) {
-    if (a.capturedAt !== b.capturedAt) return a.capturedAt < b.capturedAt ? -1 : 1;
-  } else if (a.capturedAt) {
-    return -1;
-  } else if (b.capturedAt) {
-    return 1;
-  }
-  return a.filename.localeCompare(b.filename);
-}
-
 interface ImportDialogProps {
   onClose: () => void;
   onComplete: (shootId: number) => void;
+  initialDrive?: DriveInfo | null;
 }
+
+type Source =
+  | { kind: "drive"; drive: DriveInfo }
+  | { kind: "folder"; path: string }
+  | null;
 
 type ImportMode = "copy" | "in_place";
 
@@ -61,6 +46,10 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function slugifyFolderName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
 const PIPELINE_STAGES: { label: string; phases: string[] }[] = [
@@ -111,20 +100,28 @@ function PipelineRow({
   );
 }
 
-export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
-  const [sourcePath, setSourcePath] = useState("");
+export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialogProps) {
+  const { drives } = useDriveDetection();
+  const [source, setSource] = useState<Source>(null);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [totalBytes, setTotalBytes] = useState(0);
   const [slug, setSlug] = useState("");
+  const [slugDirty, setSlugDirty] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>("copy");
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const initialDriveAppliedRef = useRef(false);
 
-  const [scanning, setScanning] = useState(false);
-  const [scanEntries, setScanEntries] = useState<ScanEntry[] | null>(null);
-  const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [selectSubset, setSelectSubset] = useState(false);
-  const lastClickedIdx = useRef<number | null>(null);
+  // Honor an external request (e.g. from the drive-detected toast) to
+  // pre-select a specific drive once on mount. After that, the user is
+  // free to switch sources without us re-overriding.
+  useEffect(() => {
+    if (initialDriveAppliedRef.current) return;
+    if (!initialDrive) return;
+    initialDriveAppliedRef.current = true;
+    setSource({ kind: "drive", drive: initialDrive });
+  }, [initialDrive]);
 
   // Curator auto-run on import. The provider is whichever one the user
   // has currently selected in Settings; the prerequisite differs:
@@ -161,58 +158,50 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
     if (!curatorReady && curatorEnabled) setCuratorEnabled(false);
   }, [curatorReady, curatorEnabled]);
 
-  const runScan = useCallback(async (source: string, withThumbnails: boolean) => {
-    setScanning(true);
-    setScanEntries([]);
-    setScanProgress(null);
-    setError(null);
-    setSelected(new Set());
+  // Forced copy mode for cards; folder source preserves the toggle.
+  useEffect(() => {
+    if (source?.kind === "drive") setImportMode("copy");
+  }, [source]);
 
-    const unlisten = await listen<ScanProgress>("scan-progress", (event) => {
-      const { entry } = event.payload;
-      setScanEntries((prev) => {
-        const next = prev ? [...prev, entry] : [entry];
-        next.sort(compareEntries);
-        return next;
-      });
-      setSelected((prev) => {
-        const next = new Set(prev);
-        next.add(entry.path);
-        return next;
-      });
-      setScanProgress({ done: event.payload.index + 1, total: event.payload.total });
-    });
-
-    try {
-      await invoke<number>("scan_folder", { source, withThumbnails });
-    } catch (e) {
-      setError(`Scan failed: ${e}`);
-      setScanEntries([]);
-    } finally {
-      unlisten();
-      setScanning(false);
-    }
+  const handleSelectDrive = useCallback((drive: DriveInfo) => {
+    setSource({ kind: "drive", drive });
+    setSelectedPaths([]);
+    setTotalBytes(0);
+    setSlugDirty(false);
   }, []);
 
-  const handlePickFolder = useCallback(async () => {
-    const picked = await open({ directory: true });
-    if (typeof picked !== "string") return;
-    setSourcePath(picked);
-    if (!slug) {
-      const name = picked.split(/[/\\]/).pop() || "";
-      setSlug(name.replace(/[^a-zA-Z0-9_-]/g, "-"));
+  const handleSelectFolder = useCallback((path: string) => {
+    setSource({ kind: "folder", path });
+    setSelectedPaths([]);
+    setTotalBytes(0);
+    if (!slugDirty) {
+      const name = path.split(/[/\\]/).pop() || "";
+      setSlug(slugifyFolderName(name));
     }
-    runScan(picked, selectSubset);
-  }, [slug, runScan, selectSubset]);
+  }, [slugDirty]);
 
-  const toggleSelectSubset = useCallback(() => {
-    const next = !selectSubset;
-    setSelectSubset(next);
-    if (sourcePath && !scanning) {
-      runScan(sourcePath, next);
-    }
-  }, [selectSubset, sourcePath, scanning, runScan]);
+  // DateBrowser provides a suggested slug derived from drive label +
+  // newest-day; honor it unless the user has typed their own.
+  const handleDateSelectionChange = useCallback(
+    (paths: string[], bytes: number, suggestedSlug: string) => {
+      setSelectedPaths(paths);
+      setTotalBytes(bytes);
+      if (!slugDirty) setSlug(suggestedSlug);
+    },
+    [slugDirty],
+  );
 
+  const handleFolderSelectionChange = useCallback(
+    (paths: string[], bytes: number) => {
+      setSelectedPaths(paths);
+      setTotalBytes(bytes);
+    },
+    [],
+  );
+
+  // Subscribe to import-progress / -complete / -error while the import
+  // backend thread is running. Detached from source-selection so the
+  // listeners don't churn each time the user clicks around.
   useEffect(() => {
     if (!importing) return;
 
@@ -247,17 +236,20 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
   }, [importing, onComplete]);
 
   const handleStart = useCallback(async () => {
-    if (!sourcePath || !slug.trim()) return;
-    const selectedPaths = Array.from(selected);
+    if (!source) return;
+    if (!slug.trim()) {
+      setError("Give this import a name.");
+      return;
+    }
     if (selectedPaths.length === 0) {
       setError("Select at least one photo to import.");
       return;
     }
-
     setError(null);
     setImporting(true);
-
     try {
+      const sourcePath =
+        source.kind === "drive" ? source.drive.mountPoint : source.path;
       await invoke("start_import", {
         sourcePath,
         slug: slug.trim(),
@@ -268,58 +260,12 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
       setError(String(e));
       setImporting(false);
     }
-  }, [sourcePath, slug, importMode, selected]);
-
-  const toggleOne = useCallback(
-    (idx: number, ev: React.MouseEvent | null) => {
-      if (!scanEntries) return;
-      const entry = scanEntries[idx];
-      if (!entry) return;
-      setSelected((prev) => {
-        const next = new Set(prev);
-        if (ev?.shiftKey && lastClickedIdx.current != null) {
-          const from = Math.min(lastClickedIdx.current, idx);
-          const to = Math.max(lastClickedIdx.current, idx);
-          const willBeOn = !next.has(entry.path);
-          for (let i = from; i <= to; i++) {
-            const p = scanEntries[i].path;
-            if (willBeOn) next.add(p);
-            else next.delete(p);
-          }
-        } else {
-          if (next.has(entry.path)) next.delete(entry.path);
-          else next.add(entry.path);
-        }
-        return next;
-      });
-      lastClickedIdx.current = idx;
-    },
-    [scanEntries],
-  );
-
-  const selectAll = useCallback(() => {
-    if (!scanEntries) return;
-    setSelected(new Set(scanEntries.map((e) => e.path)));
-  }, [scanEntries]);
-
-  const selectNone = useCallback(() => {
-    setSelected(new Set());
-  }, []);
-
-  const totalBytes = useMemo(() => {
-    if (!scanEntries) return 0;
-    let sum = 0;
-    for (const e of scanEntries) if (selected.has(e.path)) sum += e.fileSizeBytes;
-    return sum;
-  }, [scanEntries, selected]);
+  }, [source, slug, importMode, selectedPaths]);
 
   // Photo count that will actually be imported, used for the curator
-  // cost estimate. When `selectSubset` is on, that's the selected
-  // count; otherwise it's everything the scan found.
-  const importingPhotoCount = useMemo(() => {
-    if (!scanEntries) return 0;
-    return selectSubset ? selected.size : scanEntries.length;
-  }, [scanEntries, selected, selectSubset]);
+  // cost estimate. The new SD-card / folder browsers feed `selectedPaths`
+  // directly, so the count is just its length.
+  const importingPhotoCount = selectedPaths.length;
 
   const [curatorCostCents, setCuratorCostCents] = useState<number | null>(null);
   useEffect(() => {
@@ -340,9 +286,7 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
     };
   }, [curatorEnabled, importingPhotoCount]);
 
-  const hasScan = scanEntries !== null && scanEntries.length > 0;
-  const dialogWidthClass =
-    (hasScan || scanning) && selectSubset ? "w-[960px]" : "w-[420px]";
+  const dialogWidthClass = source ? "w-[960px]" : "w-[600px]";
 
   const phaseRunning = (label: (typeof PIPELINE_STAGES)[number]["label"]): boolean => {
     if (!progress) return false;
@@ -350,6 +294,11 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
     if (!stage) return false;
     return stage.phases.includes(progress.phase);
   };
+
+  const importLabel = useMemo(() => {
+    if (selectedPaths.length === 0) return "Import";
+    return `Import ${selectedPaths.length} ${selectedPaths.length === 1 ? "photo" : "photos"}`;
+  }, [selectedPaths.length]);
 
   return (
     <div className="fixed inset-0 bg-black/55 flex items-center justify-center z-50">
@@ -365,297 +314,109 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
           className="text-[14px] font-semibold mb-4"
           style={{ color: "var(--color-fg)" }}
         >
-          Import Photos
+          Import
         </div>
 
         {!importing ? (
           <div className="flex-1 overflow-y-auto">
             <div className="mb-4">
-              <div
-                className="text-[11px] mb-[6px]"
-                style={{ color: "var(--color-fg-dim)" }}
-              >
-                Import mode
-              </div>
-              <label className="flex items-start gap-2 cursor-pointer py-2">
-                <input
-                  type="radio"
-                  name="import-mode"
-                  value="copy"
-                  checked={importMode === "copy"}
-                  onChange={() => setImportMode("copy")}
-                  className="mt-[2px]"
-                />
-                <div>
-                  <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
-                    Copy to library
-                  </div>
-                  <div
-                    className="text-[10px]"
-                    style={{ color: "var(--color-fg-dim)" }}
-                  >
-                    Files are copied into a canonical folder under the library root.
-                  </div>
-                </div>
-              </label>
-              <label className="flex items-start gap-2 cursor-pointer py-2">
-                <input
-                  type="radio"
-                  name="import-mode"
-                  value="in_place"
-                  checked={importMode === "in_place"}
-                  onChange={() => setImportMode("in_place")}
-                  className="mt-[2px]"
-                />
-                <div>
-                  <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
-                    Import in-place
-                  </div>
-                  <div
-                    className="text-[10px]"
-                    style={{ color: "var(--color-fg-dim)" }}
-                  >
-                    Register files where they are. XMP sidecars land next to the originals on export.
-                  </div>
-                </div>
-              </label>
-            </div>
-
-            <div className="mb-4">
-              <div
-                className="text-[11px] mb-1"
-                style={{ color: "var(--color-fg-dim)" }}
-              >
-                Source folder
-              </div>
-              <div className="flex gap-[6px]">
-                <input
-                  type="text"
-                  value={sourcePath}
-                  readOnly
-                  placeholder="Select folder…"
-                  className="flex-1 px-[10px] py-[6px] rounded-md text-[11px] font-mono"
-                  style={{
-                    background: "var(--color-bg3)",
-                    border: "1px solid var(--color-border)",
-                    color: "var(--color-fg)",
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={handlePickFolder}
-                  className="px-[12px] py-[5px] rounded-md text-[12px] cursor-pointer"
-                  style={{
-                    background: "transparent",
-                    border: "1px solid var(--color-border)",
-                    color: "var(--color-fg)",
-                  }}
-                >
-                  Browse
-                </button>
-              </div>
-            </div>
-
-            <div className="mb-4">
-              <div
-                className="text-[11px] mb-1"
-                style={{ color: "var(--color-fg-dim)" }}
-              >
-                Description
-              </div>
-              <input
-                type="text"
-                value={slug}
-                onChange={(e) => setSlug(e.target.value)}
-                placeholder="e.g. Greece-Trip"
-                className="w-full px-[10px] py-[6px] rounded-md text-[12px]"
-                style={{
-                  background: "var(--color-bg3)",
-                  border: "1px solid var(--color-border)",
-                  color: "var(--color-fg)",
-                }}
+              <DriveSourceBar
+                drives={drives}
+                selectedMountPoint={
+                  source?.kind === "drive" ? source.drive.mountPoint : null
+                }
+                selectedFolderPath={
+                  source?.kind === "folder" ? source.path : null
+                }
+                onSelectDrive={handleSelectDrive}
+                onSelectFolder={handleSelectFolder}
               />
             </div>
 
-            {sourcePath && (
-              <label className="flex items-start gap-2 mb-4 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={selectSubset}
-                  onChange={toggleSelectSubset}
-                  disabled={scanning}
-                  className="mt-[2px] cursor-pointer"
-                />
-                <div>
-                  <div
-                    className="text-[12px]"
-                    style={{ color: "var(--color-fg)" }}
-                  >
-                    Select subset
-                  </div>
-                  <div
-                    className="text-[10px]"
-                    style={{ color: "var(--color-fg-dim)" }}
-                  >
-                    Load thumbnails so you can deselect unwanted photos. Off by default — embedded previews take a while on RAW folders.
-                  </div>
-                </div>
-              </label>
+            {source?.kind === "drive" && (
+              <DateBrowser
+                drive={source.drive}
+                onSelectionChange={handleDateSelectionChange}
+              />
             )}
 
-            {scanning && (
+            {source?.kind === "folder" && (
+              <FolderSubsetGrid
+                folderPath={source.path}
+                onSelectionChange={handleFolderSelectionChange}
+              />
+            )}
+
+            {!source && (
               <div
-                className="mb-4 p-[10px] rounded-md text-[11px] font-mono"
-                style={{
-                  background: "var(--color-bg3)",
-                  border: "1px solid var(--color-border)",
-                  color: "var(--color-fg-dim)",
-                }}
-              >
-                {scanProgress
-                  ? selectSubset
-                    ? `Loading thumbnails… ${scanProgress.done} of ${scanProgress.total}`
-                    : `Scanning folder… ${scanProgress.done} of ${scanProgress.total}`
-                  : "Scanning folder…"}
-              </div>
-            )}
-
-            {hasScan && !selectSubset && (
-              <div
-                className="mb-4 p-[10px] rounded-md"
-                style={{ background: "var(--color-bg3)" }}
-              >
-                <div
-                  className="text-[12px]"
-                  style={{ color: "var(--color-fg)" }}
-                >
-                  {scanEntries!.length}{" "}
-                  {scanEntries!.length === 1 ? "photo" : "photos"} ready to import
-                </div>
-                <div
-                  className="text-[11px] mt-[2px] font-mono"
-                  style={{ color: "var(--color-fg-dim)" }}
-                >
-                  {formatBytes(totalBytes)} · everything under the source folder will be imported
-                </div>
-              </div>
-            )}
-
-            {hasScan && selectSubset && (
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div
-                    className="text-[12px]"
-                    style={{ color: "var(--color-fg-dim)" }}
-                  >
-                    {selected.size} of {scanEntries!.length} selected
-                    <span className="ml-2 opacity-60">
-                      ({formatBytes(totalBytes)})
-                    </span>
-                  </div>
-                  <div className="flex gap-1">
-                    <button
-                      type="button"
-                      onClick={selectAll}
-                      className="px-[8px] py-[3px] rounded-xs text-[11px] cursor-pointer"
-                      style={{
-                        background: "var(--color-bg3)",
-                        color: "var(--color-fg)",
-                        border: "1px solid var(--color-border)",
-                      }}
-                    >
-                      All
-                    </button>
-                    <button
-                      type="button"
-                      onClick={selectNone}
-                      className="px-[8px] py-[3px] rounded-xs text-[11px] cursor-pointer"
-                      style={{
-                        background: "var(--color-bg3)",
-                        color: "var(--color-fg)",
-                        border: "1px solid var(--color-border)",
-                      }}
-                    >
-                      None
-                    </button>
-                  </div>
-                </div>
-                <p
-                  className="text-[10px] mb-2"
-                  style={{ color: "var(--color-fg-mute)" }}
-                >
-                  Click to toggle. Shift-click to toggle a range.
-                </p>
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 max-h-[50vh] overflow-y-auto pr-1">
-                  {scanEntries!.map((entry, idx) => {
-                    const isSelected = selected.has(entry.path);
-                    return (
-                      <div
-                        key={entry.path}
-                        onClick={(e) => toggleOne(idx, e)}
-                        className={`relative aspect-[3/2] rounded-xs overflow-hidden cursor-pointer border-2 transition-all ${
-                          isSelected ? "" : "opacity-40 hover:opacity-70"
-                        }`}
-                        style={{
-                          borderColor: isSelected
-                            ? "var(--color-accent-blue)"
-                            : "transparent",
-                        }}
-                        title={`${entry.filename} · ${formatBytes(entry.fileSizeBytes)}${entry.capturedAt ? ` · ${entry.capturedAt}` : ""}`}
-                      >
-                        {entry.thumbDataUrl ? (
-                          <img
-                            src={entry.thumbDataUrl}
-                            alt={entry.filename}
-                            loading="lazy"
-                            draggable={false}
-                            className="w-full h-full object-cover bg-black/50"
-                          />
-                        ) : (
-                          <div
-                            className="w-full h-full flex items-center justify-center text-[10px] px-1 text-center"
-                            style={{
-                              background: "var(--color-bg3)",
-                              color: "var(--color-fg-dim)",
-                            }}
-                          >
-                            {entry.filename}
-                          </div>
-                        )}
-                        {isSelected && (
-                          <div
-                            className="absolute top-1 right-1 w-4 h-4 rounded-full text-white text-[10px] flex items-center justify-center font-bold"
-                            style={{ background: "var(--color-accent-blue)" }}
-                          >
-                            {"✓"}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {scanEntries !== null && scanEntries.length === 0 && !scanning && (
-              <p
-                className="text-[12px] mb-4"
+                className="text-[12px] py-6 px-3"
                 style={{ color: "var(--color-fg-dim)" }}
               >
-                No supported image files found in that folder.
-              </p>
+                Pick a source above to begin. PhotoSift detects SD cards and
+                external drives automatically — they'll appear here within a few
+                seconds of plugging in.
+              </div>
+            )}
+
+            {source?.kind === "folder" && (
+              <div className="mb-4 mt-4">
+                <div
+                  className="text-[11px] mb-[6px]"
+                  style={{ color: "var(--color-fg-dim)" }}
+                >
+                  Import mode
+                </div>
+                <label className="flex items-start gap-2 cursor-pointer py-1">
+                  <input
+                    type="radio"
+                    name="import-mode"
+                    value="copy"
+                    checked={importMode === "copy"}
+                    onChange={() => setImportMode("copy")}
+                    className="mt-[2px]"
+                  />
+                  <div>
+                    <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+                      Copy to library
+                    </div>
+                    <div className="text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
+                      Files are copied into a canonical folder under the library
+                      root.
+                    </div>
+                  </div>
+                </label>
+                <label className="flex items-start gap-2 cursor-pointer py-1">
+                  <input
+                    type="radio"
+                    name="import-mode"
+                    value="in_place"
+                    checked={importMode === "in_place"}
+                    onChange={() => setImportMode("in_place")}
+                    className="mt-[2px]"
+                  />
+                  <div>
+                    <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+                      Import in-place
+                    </div>
+                    <div className="text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
+                      Register files where they are. XMP sidecars land next to
+                      the originals on export.
+                    </div>
+                  </div>
+                </label>
+              </div>
             )}
 
             {error && (
               <p
-                className="text-[12px] mb-4"
+                className="text-[12px] mt-3 mb-2"
                 style={{ color: "var(--color-danger)" }}
               >
                 {error}
               </p>
             )}
 
-            {sourcePath && (
+            {source && (
               <label
                 className="flex items-start gap-2 mb-4 cursor-pointer"
                 title={
@@ -670,7 +431,7 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
                   type="checkbox"
                   checked={curatorEnabled}
                   onChange={(e) => setCuratorEnabled(e.target.checked)}
-                  disabled={!curatorReady || scanning}
+                  disabled={!curatorReady}
                   className="mt-[2px] cursor-pointer disabled:cursor-not-allowed"
                 />
                 <div>
@@ -717,9 +478,40 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
             )}
 
             <div
-              className="flex justify-end gap-2 pt-3 mt-2 border-t"
+              className="flex items-center gap-3 pt-3 mt-3 border-t"
               style={{ borderColor: "var(--color-border)" }}
             >
+              <div
+                className="text-[11px] flex-shrink-0"
+                style={{ color: "var(--color-fg-dim)" }}
+              >
+                Name
+              </div>
+              <input
+                type="text"
+                value={slug}
+                onChange={(e) => {
+                  setSlug(e.target.value);
+                  setSlugDirty(true);
+                }}
+                placeholder="e.g. 2026-03-05_nikon-d750"
+                className="flex-1 px-[10px] py-[6px] rounded-md text-[12px] font-mono"
+                style={{
+                  background: "var(--color-bg3)",
+                  border: "1px solid var(--color-border)",
+                  color: "var(--color-fg)",
+                }}
+              />
+              <div
+                className="text-[11px] font-mono whitespace-nowrap"
+                style={{ color: "var(--color-fg-dim)" }}
+              >
+                {selectedPaths.length > 0 && (
+                  <>
+                    {selectedPaths.length} · {formatBytes(totalBytes)}
+                  </>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={onClose}
@@ -735,12 +527,7 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
               <button
                 type="button"
                 onClick={handleStart}
-                disabled={
-                  !sourcePath ||
-                  !slug.trim() ||
-                  scanning ||
-                  (hasScan && selectSubset && selected.size === 0)
-                }
+                disabled={!source || !slug.trim() || selectedPaths.length === 0}
                 className="px-[14px] py-[6px] rounded-md text-[12px] font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{
                   background: "var(--color-accent-blue)",
@@ -748,11 +535,7 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
                   border: "none",
                 }}
               >
-                {hasScan
-                  ? selectSubset
-                    ? `Import ${selected.size} ${selected.size === 1 ? "photo" : "photos"}`
-                    : `Import all ${scanEntries!.length}`
-                  : "Start import"}
+                {importLabel}
               </button>
             </div>
           </div>
@@ -796,7 +579,7 @@ export function ImportDialog({ onClose, onComplete }: ImportDialogProps) {
                   try {
                     await invoke("cancel_import");
                   } catch {
-                    /* ignore */
+                    // already-finished imports surface as errors here; ignore.
                   }
                 }}
                 className="text-[11px] cursor-pointer bg-transparent border-0"
