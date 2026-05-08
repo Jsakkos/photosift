@@ -47,7 +47,7 @@ function aspectFor(entry: ScanDateEntry): string {
   const portraitOrientations = new Set([5, 6, 7, 8]);
   // Without explicit orientation we default to 3/2 landscape (D750 native).
   // The UI tolerates the 50/50 mix gracefully — strips wrap.
-  const isPortrait = portraitOrientations.has((entry as any).orientation ?? 0);
+  const isPortrait = portraitOrientations.has(entry.orientation ?? 0);
   return isPortrait ? "2 / 3" : "3 / 2";
 }
 

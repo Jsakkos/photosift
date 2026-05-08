@@ -174,7 +174,9 @@ export interface DriveInfo {
 
 /// One entry in the SD-card date browser scan. Cheap to produce — no
 /// thumbnail decoding. `alreadyImported` is true when the heuristic dedup
-/// matched an existing photo (camera + filename + size).
+/// matched an existing photo (camera + filename + size). `orientation` is
+/// the EXIF tag (1–8) when present, used to render portrait tiles with
+/// the correct aspect ratio.
 export interface ScanDateEntry {
   path: string;
   filename: string;
@@ -183,6 +185,7 @@ export interface ScanDateEntry {
   fileSizeBytes: number;
   thumbDataUrl: string | null;
   alreadyImported: boolean;
+  orientation?: number | null;
 }
 
 /// Lazy thumbnail extraction result, one per `scan-thumb-ready` event.

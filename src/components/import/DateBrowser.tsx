@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   extractThumbnailsForPaths,
@@ -38,6 +38,23 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
   const [dedupOnly, setDedupOnly] = useState(true);
   const [loadedThumbs, setLoadedThumbs] = useState<Map<string, string>>(new Map());
   const [thumbsLoadingDays, setThumbsLoadingDays] = useState<Set<string>>(new Set());
+  // Paths the backend reported `thumbDataUrl: null` for. Without this set,
+  // every grouped-state change re-issues an extract for failed paths and
+  // we get stuck in a tight retry loop hammering the SD card. Cleared
+  // for a day's paths when the user manually re-expands the day, so the
+  // close-and-reopen workaround still works as a manual retry.
+  const [failedThumbs, setFailedThumbs] = useState<Set<string>>(new Set());
+
+  // Tracks whether we've already auto-expanded the newest day for this
+  // scan. The auto-expand fires as soon as the newest day key is known
+  // (well before scanComplete) so thumbnails for today's shoot start
+  // streaming within seconds of mounting the dialog. After it fires once
+  // the user owns the UI — never auto-expand again.
+  const autoExpandedRef = useRef(false);
+  // Once the user manually toggles selection (clicks a tile, All, or None),
+  // we stop maintaining the auto pre-selection. Without this, late-arriving
+  // entries on the newest day would re-add anything the user just removed.
+  const userTouchedSelectionRef = useRef(false);
 
   // Subscribe to backend events and kick off the scan when drive changes.
   useEffect(() => {
@@ -50,6 +67,9 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
     setSelected(new Set());
     setLoadedThumbs(new Map());
     setThumbsLoadingDays(new Set());
+    setFailedThumbs(new Set());
+    autoExpandedRef.current = false;
+    userTouchedSelectionRef.current = false;
 
     const unlistenProgress = listen<ScanProgressPayload>("scan-progress", (event) => {
       if (cancelled) return;
@@ -66,7 +86,15 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
     const unlistenThumb = listen<ScanThumbReady>("scan-thumb-ready", (event) => {
       if (cancelled) return;
       const { path, thumbDataUrl } = event.payload;
-      if (!thumbDataUrl) return;
+      if (!thumbDataUrl) {
+        setFailedThumbs((prev) => {
+          if (prev.has(path)) return prev;
+          const next = new Set(prev);
+          next.add(path);
+          return next;
+        });
+        return;
+      }
       setLoadedThumbs((prev) => {
         const next = new Map(prev);
         next.set(path, thumbDataUrl);
@@ -89,28 +117,45 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
   const grouped = useMemo(() => groupByDay(entries), [entries]);
   const newestDayKey = useMemo(() => findNewestDayKey(grouped), [grouped]);
 
-  // On scan-complete, auto-expand the newest day and pre-select all of
-  // its non-deduped photos. Only run once per scan.
+  // Auto-expand the newest day as soon as we know what it is (typically
+  // within the first scan-progress event, since the walker now feeds files
+  // newest-first). Fires once per scan; the user owns the UI thereafter.
   useEffect(() => {
-    if (!scanComplete) return;
+    if (autoExpandedRef.current) return;
     if (!newestDayKey) return;
+    const day = grouped.find((g) => g.key === newestDayKey);
+    if (!day || day.entries.length === 0) return;
+    autoExpandedRef.current = true;
     setExpandedDays((prev) => {
       if (prev.has(newestDayKey)) return prev;
       const next = new Set(prev);
       next.add(newestDayKey);
       return next;
     });
+  }, [newestDayKey, grouped]);
+
+  // Pre-select all non-deduped entries in the newest day. This re-runs as
+  // more entries stream in (so a current shoot with 50 frames ends up fully
+  // selected even though the first effect ran with only 1–2 entries known)
+  // and stops the moment the user touches selection.
+  useEffect(() => {
+    if (userTouchedSelectionRef.current) return;
+    if (!newestDayKey) return;
+    const day = grouped.find((g) => g.key === newestDayKey);
+    if (!day) return;
+    const desired = new Set<string>();
+    for (const e of day.entries) {
+      if (!e.alreadyImported) desired.add(e.path);
+    }
     setSelected((prev) => {
-      if (prev.size > 0) return prev;
-      const next = new Set<string>();
-      const day = grouped.find((g) => g.key === newestDayKey);
-      if (!day) return prev;
-      for (const e of day.entries) {
-        if (!e.alreadyImported) next.add(e.path);
+      if (prev.size === desired.size) {
+        let same = true;
+        for (const p of desired) if (!prev.has(p)) { same = false; break; }
+        if (same) return prev;
       }
-      return next;
+      return desired;
     });
-  }, [scanComplete, newestDayKey, grouped]);
+  }, [newestDayKey, grouped]);
 
   const totalSeen = entries.length;
   const totalNew = useMemo(
@@ -137,9 +182,16 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
 
   const requestThumbsForDay = useCallback(
     (key: string, dayEntries: ScanDateEntry[]) => {
+      // Skip when a fetch for this day is already in-flight. The
+      // auto-fetch effect re-runs as new entries stream in, and without
+      // this gate we'd spawn overlapping rayon pools all decoding from
+      // the same slow SD card.
+      if (thumbsLoadingDays.has(key)) return;
+      // Exclude both successfully-loaded and known-failed paths.
+      // Failed paths only get retried on manual day re-expand.
       const missing = dayEntries
         .map((e) => e.path)
-        .filter((p) => !loadedThumbs.has(p));
+        .filter((p) => !loadedThumbs.has(p) && !failedThumbs.has(p));
       if (missing.length === 0) return;
       setThumbsLoadingDays((prev) => {
         const next = new Set(prev);
@@ -154,7 +206,7 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
         });
       });
     },
-    [loadedThumbs],
+    [loadedThumbs, thumbsLoadingDays, failedThumbs],
   );
 
   const toggleExpand = useCallback(
@@ -165,6 +217,17 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
           next.delete(key);
         } else {
           next.add(key);
+          // Manual expand is also the user's "retry" gesture — clear
+          // failed entries for this day so requestThumbsForDay will
+          // re-attempt them.
+          setFailedThumbs((prevFailed) => {
+            let mutated = false;
+            const nextFailed = new Set(prevFailed);
+            for (const e of visibleEntries) {
+              if (nextFailed.delete(e.path)) mutated = true;
+            }
+            return mutated ? nextFailed : prevFailed;
+          });
           requestThumbsForDay(key, visibleEntries);
         }
         return next;
@@ -173,20 +236,24 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
     [requestThumbsForDay],
   );
 
-  // When scan-complete auto-expands the newest day, fetch its thumbs too.
+  // Once the newest day is auto-expanded, fetch thumbnails for its visible
+  // entries — and keep doing so as more entries arrive so freshly-discovered
+  // frames populate alongside the rest. `requestThumbsForDay` already
+  // dedups against `loadedThumbs`, so re-running with a superset is cheap.
   useEffect(() => {
-    if (!scanComplete || !newestDayKey) return;
+    if (!autoExpandedRef.current || !newestDayKey) return;
     const day = grouped.find((g) => g.key === newestDayKey);
     if (!day) return;
     const visible = dedupOnly
       ? day.entries.filter((e) => !e.alreadyImported)
       : day.entries;
+    if (visible.length === 0) return;
     requestThumbsForDay(newestDayKey, visible);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanComplete, newestDayKey]);
+  }, [newestDayKey, grouped, dedupOnly, requestThumbsForDay]);
 
   const togglePath = useCallback(
     (_clickedPath: string, _ev: React.MouseEvent | null, range: string[]) => {
+      userTouchedSelectionRef.current = true;
       setSelected((prev) => {
         const next = new Set(prev);
         const wantOn = !range.every((p) => next.has(p));
@@ -295,6 +362,7 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
               selected={selected}
               onTogglePath={togglePath}
               onSelectAllInDay={() => {
+                userTouchedSelectionRef.current = true;
                 setSelected((prev) => {
                   const next = new Set(prev);
                   for (const e of visible) next.add(e.path);
@@ -302,6 +370,7 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
                 });
               }}
               onSelectNoneInDay={() => {
+                userTouchedSelectionRef.current = true;
                 setSelected((prev) => {
                   const next = new Set(prev);
                   for (const e of visible) next.delete(e.path);

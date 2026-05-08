@@ -109,6 +109,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
   const [slugDirty, setSlugDirty] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>("copy");
   const [importing, setImporting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const initialDriveAppliedRef = useRef(false);
@@ -211,6 +212,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
 
     const unlistenComplete = listen<ImportComplete>("import-complete", (event) => {
       setImporting(false);
+      setCancelling(false);
       // Auto-start the curator on the new shoot if the user opted in
       // for this import. Read the ref so we don't capture stale state.
       if (curatorEnabledRef.current) {
@@ -225,6 +227,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
 
     const unlistenError = listen<string>("import-error", (event) => {
       setImporting(false);
+      setCancelling(false);
       setError(event.payload);
     });
 
@@ -543,9 +546,15 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
           <div>
             <div
               className="text-[12px] mb-1"
-              style={{ color: "var(--color-fg)" }}
+              style={{
+                color: cancelling
+                  ? "var(--color-danger)"
+                  : "var(--color-fg)",
+              }}
             >
-              Processing files…
+              {cancelling
+                ? "Cancelling… waiting for in-flight files to finish."
+                : "Processing files…"}
             </div>
             <div
               className="h-1 mt-[10px] rounded-sm overflow-hidden"
@@ -575,17 +584,19 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
               </span>
               <button
                 type="button"
+                disabled={cancelling}
                 onClick={async () => {
+                  setCancelling(true);
                   try {
                     await invoke("cancel_import");
                   } catch {
                     // already-finished imports surface as errors here; ignore.
                   }
                 }}
-                className="text-[11px] cursor-pointer bg-transparent border-0"
+                className="text-[11px] cursor-pointer bg-transparent border-0 disabled:opacity-50 disabled:cursor-default"
                 style={{ color: "var(--color-danger)" }}
               >
-                Cancel import
+                {cancelling ? "Cancelling…" : "Cancel import"}
               </button>
             </div>
             <div

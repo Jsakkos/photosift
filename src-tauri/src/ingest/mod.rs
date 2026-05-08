@@ -138,6 +138,7 @@ pub fn run_import(
                 &thumbs_dir,
                 &db,
                 import_mode,
+                &cancel,
             );
 
             let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
@@ -310,30 +311,17 @@ fn process_one_file(
     thumbs_dir: &Path,
     db: &Mutex<Database>,
     import_mode: ImportMode,
+    cancel: &Arc<AtomicBool>,
 ) -> ProcessedFile {
     let t_start = Instant::now();
+
+    if cancel.load(Ordering::Relaxed) {
+        return ProcessedFile::Skipped;
+    }
 
     // 0. File size — cheap stat used both as the heuristic-dedup signal
     //    and persisted on the row for future SD-card scans.
     let file_size_bytes = std::fs::metadata(src_path).ok().map(|m| m.len());
-
-    // 1. SHA-256
-    let t_sha = Instant::now();
-    let content_hash = match hashing::sha256_stream(src_path) {
-        Ok(h) => h,
-        Err(e) => {
-            log::error!("SHA-256 failed for {:?}: {}", src_path, e);
-            return ProcessedFile::Skipped;
-        }
-    };
-    let sha_ms = t_sha.elapsed().as_secs_f64() * 1000.0;
-
-    // 2. Dedup check
-    if let Ok(guard) = db.lock() {
-        if let Ok(Some(_)) = guard.photo_exists_by_hash(&content_hash) {
-            return ProcessedFile::Skipped;
-        }
-    }
 
     let filename = src_path
         .file_name()
@@ -341,12 +329,12 @@ fn process_one_file(
         .to_string_lossy()
         .to_string();
 
-    // 3. EXIF
+    // 1. EXIF (cheap — reads only the file headers, not the pixel data).
     let t_exif = Instant::now();
     let exif_data = exif::extract_exif(src_path).ok();
     let exif_ms = t_exif.elapsed().as_secs_f64() * 1000.0;
 
-    // 3b. Look for an existing XMP sidecar next to the source file. If present,
+    // 1b. Look for an existing XMP sidecar next to the source file. If present,
     // prefer its rating/label over EXIF (XMP is the more recently-written
     // metadata when the user has culled in another tool like DxO or C1).
     let sidecar_rating = xmp::read_rating(src_path);
@@ -355,28 +343,59 @@ fn process_one_file(
         .or_else(|| exif_data.as_ref().and_then(|e| e.rating));
     let initial_flag = sidecar_flag;
 
-    // 4. In copy mode, copy file into the canonical location. In in-place
-    //    mode, raw_path is simply the source path (the file is left where it is).
-    let t_copy = Instant::now();
-    let raw_path = match import_mode {
+    if cancel.load(Ordering::Relaxed) {
+        return ProcessedFile::Skipped;
+    }
+
+    // 2. Copy + SHA-256 in a single pass — reads the source file (often
+    // on a slow SD card) exactly once. In-place mode skips the copy and
+    // hashes the source directly.
+    let t_copy_hash = Instant::now();
+    let (raw_path, content_hash, copy_made) = match import_mode {
         ImportMode::Copy => {
             let dest = copy::plan_dest(shoot_dir, &filename);
-            match copy::copy_file(src_path, &dest) {
-                Ok(p) => p,
+            match copy::copy_with_hash(src_path, &dest) {
+                Ok((p, h)) => (p, h, true),
                 Err(e) => {
-                    log::error!("Copy failed for {:?}: {}", src_path, e);
+                    log::error!("Copy+hash failed for {:?}: {}", src_path, e);
                     return ProcessedFile::Skipped;
                 }
             }
         }
-        ImportMode::InPlace => src_path.to_path_buf(),
+        ImportMode::InPlace => match hashing::sha256_stream(src_path) {
+            Ok(h) => (src_path.to_path_buf(), h, false),
+            Err(e) => {
+                log::error!("SHA-256 failed for {:?}: {}", src_path, e);
+                return ProcessedFile::Skipped;
+            }
+        },
     };
-    let copy_ms = t_copy.elapsed().as_secs_f64() * 1000.0;
+    let copy_hash_ms = t_copy_hash.elapsed().as_secs_f64() * 1000.0;
 
-    // 5-8. Extract primary JPEG bytes (kept for the disk preview) and
+    // 3. Dedup check on the just-computed hash. If a duplicate slipped past
+    // the heuristic dedup at scan time, undo the copy we just made.
+    if let Ok(guard) = db.lock() {
+        if let Ok(Some(_)) = guard.photo_exists_by_hash(&content_hash) {
+            if copy_made {
+                let _ = std::fs::remove_file(&raw_path);
+            }
+            return ProcessedFile::Skipped;
+        }
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        if copy_made {
+            let _ = std::fs::remove_file(&raw_path);
+        }
+        return ProcessedFile::Skipped;
+    }
+
+    // 4. Extract primary JPEG bytes (kept for the disk preview) and
     // also try to decode any embedded JPEG candidate (NEFs usually have
     // a smaller standard-baseline preview that decodes even when the
     // full-resolution JPEG uses arithmetic coding or 12-bit precision).
+    // Reads from `raw_path` — when copy_made, that's the local SSD copy,
+    // not the SD card.
     let t_preview = Instant::now();
     let (preview_bytes, decoded) = match preview::extract_and_decode(&raw_path) {
         Ok(v) => v,
@@ -386,6 +405,13 @@ fn process_one_file(
         }
     };
     let preview_ms = t_preview.elapsed().as_secs_f64() * 1000.0;
+
+    if cancel.load(Ordering::Relaxed) {
+        if copy_made {
+            let _ = std::fs::remove_file(&raw_path);
+        }
+        return ProcessedFile::Skipped;
+    }
 
     // 5b. If EXIF says the camera was rotated, upright both the decoded
     // image and the on-disk preview bytes now. Downstream consumers
@@ -422,12 +448,11 @@ fn process_one_file(
 
     let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
     log::info!(
-        "ingest::process_one_file {} total={:.1}ms (sha={:.1} exif={:.1} copy={:.1} preview={:.1} rotate={:.1} thumb+phash={:.1})",
+        "ingest::process_one_file {} total={:.1}ms (exif={:.1} copy+hash={:.1} preview={:.1} rotate={:.1} thumb+phash={:.1})",
         filename,
         total_ms,
-        sha_ms,
         exif_ms,
-        copy_ms,
+        copy_hash_ms,
         preview_ms,
         rotate_ms,
         thumb_phash_ms,

@@ -34,6 +34,10 @@ pub struct ScanEntry {
     /// passed `dedup_known: true`. SHA-256 dedup at actual import time is
     /// the source of truth.
     pub already_imported: bool,
+    /// EXIF orientation tag (1–8) when present. The date-browser uses this
+    /// to render portrait NEFs with the correct 2:3 aspect ratio instead
+    /// of falling back to landscape 3:2.
+    pub orientation: Option<i32>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -166,14 +170,7 @@ fn scan_one_file(
     };
 
     let thumb_data_url = if with_thumbnails {
-        let t = build_scan_thumb(path, orientation_tag);
-        if t.is_none() {
-            log::warn!(
-                "scan: no preview thumbnail for {} — embedded JPEG decode failed",
-                path.display()
-            );
-        }
-        t
+        build_scan_thumb(path, orientation_tag)
     } else {
         None
     };
@@ -186,6 +183,7 @@ fn scan_one_file(
         file_size_bytes,
         thumb_data_url,
         already_imported,
+        orientation: orientation_tag,
     }
 }
 
@@ -229,18 +227,71 @@ pub async fn extract_thumbnails_for_paths(
 }
 
 fn build_scan_thumb(path: &Path, orientation_tag: Option<i32>) -> Option<String> {
-    let (_bytes, decoded) = preview::extract_and_decode(path).ok()?;
-    let img = decoded?;
-    let upright = orientation::apply(img, orientation_tag);
+    // Fast path: read the IFD1 thumbnail (10–20 KB at the start of the
+    // file) instead of pulling in the entire 30–50 MB NEF. This is what
+    // Capture One / Lightroom / Windows Explorer all do for date-browser
+    // tiles. Falls back to the largest-JPEG scan only when IFD1 is
+    // absent or its bytes don't decode.
+    let decoded = if let Ok(bytes) = exif::extract_ifd1_thumbnail(path) {
+        match preview::decode_jpeg_to_image(&bytes) {
+            Ok(img) => Some(img),
+            Err(e) => {
+                log::debug!(
+                    "scan_thumb: {} — IFD1 thumbnail bytes failed to decode ({}); falling back",
+                    path.display(),
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let decoded = match decoded {
+        Some(img) => img,
+        None => {
+            // Fallback: the original path that walks every embedded JPEG
+            // largest-first. Two failure modes — extraction error vs.
+            // every candidate failing to decode — get distinct logs.
+            match preview::extract_and_decode(path) {
+                Ok((_bytes, Some(img))) => img,
+                Ok((_bytes, None)) => {
+                    log::warn!(
+                        "scan_thumb: {} — embedded JPEG candidates all failed to decode",
+                        path.display()
+                    );
+                    return None;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "scan_thumb: {} — failed to extract embedded JPEG: {}",
+                        path.display(),
+                        e
+                    );
+                    return None;
+                }
+            }
+        }
+    };
+
+    let upright = orientation::apply(decoded, orientation_tag);
     let small = upright.thumbnail(200, 200);
     let (w, h) = small.dimensions();
     let rgb = small.to_rgb8();
 
     let mut buf: Vec<u8> = Vec::new();
     let encoder = JpegEncoder::new(&mut buf, 72);
-    encoder
-        .encode(rgb.as_raw(), w as u16, h as u16, ColorType::Rgb)
-        .ok()?;
+    if let Err(e) = encoder.encode(rgb.as_raw(), w as u16, h as u16, ColorType::Rgb) {
+        log::warn!(
+            "scan_thumb: {} — JPEG re-encode failed at {}x{}: {}",
+            path.display(),
+            w,
+            h,
+            e
+        );
+        return None;
+    }
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
     Some(format!("data:image/jpeg;base64,{}", encoded))
