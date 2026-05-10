@@ -12,6 +12,7 @@ import { SelectShell } from "../components/select/SelectShell";
 import { RouteShell } from "../components/route/RouteShell";
 import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 import { FirstRunModal } from "../components/FirstRunModal";
+import { logFocus } from "../lib/debugFocus";
 
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
@@ -38,49 +39,78 @@ export function CullPage() {
   }, [isLoading, currentShoot?.id, currentIndex]);
 
   // Tauri window refocus (Alt-Tab back, minimize→restore) doesn't
-  // automatically re-home DOM focus to our container. We listen on
-  // multiple channels because no single one is reliable on Windows:
-  //   - Tauri's onFocusChanged (works for true window focus events)
-  //   - DOM `focus` on window (fires for in-webview focus changes)
-  //   - `visibilitychange` (covers tab-restore from a minimized state
-  //     where the focus event sometimes never fires)
-  // All three converge on shellRef.focus(). Skip the refocus when the
-  // active element is a real input — otherwise re-focusing the shell
-  // would yank focus out of the Settings dialog mid-typing.
+  // automatically re-home DOM focus to our container. We listen on four
+  // channels because no single one is reliable on Windows:
+  //   - Tauri's onFocusChanged (true window focus events)
+  //   - DOM `focus` on window (in-webview focus changes)
+  //   - `visibilitychange` (tab-restore from a minimized state)
+  //   - `pointerdown` capture-phase on document (safety net for the
+  //     case where the three above all miss — clicking anywhere in the
+  //     window restores hotkeys instead of requiring a click into the
+  //     cull view itself)
+  // All four converge on `refocus`, which:
+  //   1) Defers via rAF so the webview has time to settle before we
+  //      call .focus() — without this the alt-tab path would call
+  //      el.focus() while the webview's keyboard input target is still
+  //      the OS-level "lost" state, so the focus call lands but
+  //      keystrokes still don't get delivered.
+  //   2) Calls getCurrentWindow().setFocus() alongside the DOM focus —
+  //      el.focus() alone isn't enough to restore OS-level webview
+  //      keyboard input on Windows.
+  //   3) Skips the refocus when the active element is a real input —
+  //      otherwise re-focusing the shell would yank focus out of the
+  //      Settings dialog mid-typing.
   useEffect(() => {
-    const refocus = () => {
-      const ae = document.activeElement;
-      if (
-        ae instanceof HTMLInputElement ||
-        ae instanceof HTMLTextAreaElement ||
-        ae instanceof HTMLSelectElement
-      ) {
-        return;
-      }
-      shellRef.current?.focus({ preventScroll: true });
+    let rafId: number | null = null;
+
+    const refocus = (channel: string) => {
+      logFocus(`${channel} fired`);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        const ae = document.activeElement;
+        if (
+          ae instanceof HTMLInputElement ||
+          ae instanceof HTMLTextAreaElement ||
+          ae instanceof HTMLSelectElement
+        ) {
+          logFocus(`${channel} skipped — input element focused`);
+          return;
+        }
+        getCurrentWindow().setFocus().catch(() => {});
+        shellRef.current?.focus({ preventScroll: true });
+        logFocus(`${channel} after refocus`);
+      });
     };
 
     let unlistenTauri: (() => void) | null = null;
     getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
-        if (focused) refocus();
+        if (focused) refocus("tauri:onFocusChanged");
       })
       .then((fn) => {
         unlistenTauri = fn;
       })
       .catch(() => {});
 
-    const onWinFocus = () => refocus();
+    const onWinFocus = () => refocus("window:focus");
     const onVis = () => {
-      if (document.visibilityState === "visible") refocus();
+      if (document.visibilityState === "visible") {
+        refocus("document:visibilitychange");
+      }
     };
+    const onPointerDown = () => refocus("document:pointerdown");
+
     window.addEventListener("focus", onWinFocus);
     document.addEventListener("visibilitychange", onVis);
+    document.addEventListener("pointerdown", onPointerDown, true);
 
     return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
       unlistenTauri?.();
       window.removeEventListener("focus", onWinFocus);
       document.removeEventListener("visibilitychange", onVis);
+      document.removeEventListener("pointerdown", onPointerDown, true);
     };
   }, []);
 
