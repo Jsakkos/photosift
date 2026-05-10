@@ -186,6 +186,18 @@ export function DayRow({
                       {entry.filename}
                     </div>
                   )}
+                  {entry.siblingJpegPath && (
+                    <span
+                      className="absolute bottom-0.5 right-0.5 rounded-xs px-1 py-0.5 text-[9px] font-mono font-medium leading-none"
+                      style={{
+                        background: "rgba(0, 0, 0, 0.7)",
+                        color: "rgba(255, 255, 255, 0.95)",
+                      }}
+                      title="Camera-JPEG sibling will travel with the RAW"
+                    >
+                      +JPG
+                    </span>
+                  )}
                 </div>
               );
             })}

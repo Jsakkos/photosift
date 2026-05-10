@@ -1,6 +1,7 @@
 pub mod clustering;
 pub mod copy;
 pub mod hashing;
+pub mod pairing;
 pub mod phash;
 pub mod preview;
 pub mod progress;
@@ -9,6 +10,7 @@ pub mod walker;
 
 use crate::db::schema::{Database, PhotoInsert};
 use crate::metadata::{exif, orientation, xmp};
+use pairing::ImportItem;
 use progress::{ImportComplete, ImportPhase, ImportPhotoReady, ImportProgress};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -69,22 +71,28 @@ pub fn run_import(
     let db = Mutex::new(db);
     // Phase 1: Walk source
     emit_progress(&app, 0, ImportPhase::Walking, 0, 0, "");
-    let mut files = walker::walk_source(&source);
+    let files = walker::walk_source(&source);
+    // Group RAW + sibling-JPEG pairs so a RAW+JPEG folder produces one
+    // photo row per frame (the JPEG rides on the RAW's row).
+    let mut items = pairing::pair(files);
     // Pre-import selection filter: when the user cherry-picked from the
     // scan dialog we intersect on absolute paths. Preserves walker order
-    // so counters and progress events still make sense.
+    // so counters and progress events still make sense. Selection paths
+    // come from the scan dialog, which sees the flat file list — so a
+    // selected RAW path matches its ImportItem; a selected JPEG that's
+    // paired to a RAW will not match (the pair is keyed on the RAW).
     if let Some(selected) = selected_paths {
         use std::collections::HashSet;
         let wanted: HashSet<PathBuf> = selected.into_iter().collect();
-        files.retain(|p| wanted.contains(p));
+        items.retain(|item| wanted.contains(item.primary_path()));
     }
-    if files.is_empty() {
+    if items.is_empty() {
         return Err("No supported image files found in source directory".into());
     }
-    let total = files.len();
+    let total = items.len();
 
     // Phase 2: Probe first file for EXIF date to derive YYYY-MM
-    let yyyy_mm = derive_yyyy_mm(&files[0]);
+    let yyyy_mm = derive_yyyy_mm(items[0].primary_path());
 
     // Phase 3: Create shoot row and directories.
     // Copy mode derives a canonical folder under the user's library root;
@@ -124,15 +132,15 @@ pub fn run_import(
     let counter = AtomicUsize::new(0);
     let app_ref = &app;
 
-    let results: Vec<ProcessedFile> = files
+    let results: Vec<ProcessedFile> = items
         .par_iter()
-        .map(|src_path| {
+        .map(|item| {
             if cancel.load(Ordering::Relaxed) {
                 return ProcessedFile::Skipped;
             }
 
             let result = process_one_file(
-                src_path,
+                item,
                 &shoot_dir,
                 &previews_dir,
                 &thumbs_dir,
@@ -142,7 +150,8 @@ pub fn run_import(
             );
 
             let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
-            let fname = src_path
+            let fname = item
+                .primary_path()
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
@@ -305,7 +314,7 @@ pub fn run_import(
 }
 
 fn process_one_file(
-    src_path: &Path,
+    item: &ImportItem,
     shoot_dir: &Path,
     previews_dir: &Path,
     thumbs_dir: &Path,
@@ -319,6 +328,15 @@ fn process_one_file(
         return ProcessedFile::Skipped;
     }
 
+    // The "primary" path is the RAW for paired/lone-RAW items and the
+    // JPEG for standalone JPEGs. Sibling JPEG (RAW+JPEG mode only) is
+    // tracked separately and follows the RAW through layout moves.
+    let src_path: &Path = item.primary_path();
+    let src_sibling_jpeg: Option<&Path> = match item {
+        ImportItem::RawWithSibling { jpeg, .. } => Some(jpeg.as_path()),
+        _ => None,
+    };
+
     // 0. File size — cheap stat used both as the heuristic-dedup signal
     //    and persisted on the row for future SD-card scans.
     let file_size_bytes = std::fs::metadata(src_path).ok().map(|m| m.len());
@@ -330,8 +348,13 @@ fn process_one_file(
         .to_string();
 
     // 1. EXIF (cheap — reads only the file headers, not the pixel data).
+    // For paired RAW+JPEG items prefer the JPEG: it carries clean
+    // standard EXIF that kamadak-exif handles without the RAF detour,
+    // and the camera writes the same DateTimeOriginal to both files
+    // anyway. Lone RAFs go through extract_exif's RAF-aware branch.
     let t_exif = Instant::now();
-    let exif_data = exif::extract_exif(src_path).ok();
+    let exif_source: &Path = src_sibling_jpeg.unwrap_or(src_path);
+    let exif_data = exif::extract_exif(exif_source).ok();
     let exif_ms = t_exif.elapsed().as_secs_f64() * 1000.0;
 
     // 1b. Look for an existing XMP sidecar next to the source file. If present,
@@ -390,17 +413,54 @@ fn process_one_file(
         return ProcessedFile::Skipped;
     }
 
-    // 4. Extract primary JPEG bytes (kept for the disk preview) and
-    // also try to decode any embedded JPEG candidate (NEFs usually have
-    // a smaller standard-baseline preview that decodes even when the
-    // full-resolution JPEG uses arithmetic coding or 12-bit precision).
-    // Reads from `raw_path` — when copy_made, that's the local SSD copy,
-    // not the SD card.
+    // 3b. Sibling JPEG handling (RAW+JPEG mode). In Copy mode the JPEG
+    // is placed next to the RAW with a matching stem so layout moves
+    // and downstream tools (Capture One, DxO) see the pair grouped.
+    // In-place mode just records the source path. Failure here is
+    // non-fatal — we lose the sibling but still keep the RAW row.
+    let local_jpeg_path: Option<PathBuf> = match (src_sibling_jpeg, import_mode) {
+        (Some(src_jpeg), ImportMode::Copy) => {
+            let jpeg_ext = src_jpeg
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("jpg");
+            let jpeg_dest = raw_path.with_extension(jpeg_ext);
+            match std::fs::copy(src_jpeg, &jpeg_dest) {
+                Ok(_) => Some(jpeg_dest),
+                Err(e) => {
+                    log::warn!(
+                        "Sibling JPEG copy failed for {:?}: {} (importing RAW only)",
+                        src_jpeg,
+                        e
+                    );
+                    None
+                }
+            }
+        }
+        (Some(src_jpeg), ImportMode::InPlace) => Some(src_jpeg.to_path_buf()),
+        (None, _) => None,
+    };
+
+    // 4. Extract preview bytes + decode for thumb/pHash. When a sibling
+    // JPEG is available it's the preferred source: camera JPEGs are
+    // higher quality, color-processed, and skip the embedded-preview
+    // dance entirely. Fall back to the RAW's embedded JPEG otherwise.
     let t_preview = Instant::now();
-    let (preview_bytes, decoded) = match preview::extract_and_decode(&raw_path) {
+    let preview_source: &Path = local_jpeg_path.as_deref().unwrap_or(&raw_path);
+    let (preview_bytes, decoded) = match preview::extract_and_decode(preview_source) {
         Ok(v) => v,
         Err(e) => {
-            log::error!("JPEG extraction failed for {:?}: {}", raw_path, e);
+            log::error!(
+                "JPEG extraction failed for {:?}: {}",
+                preview_source,
+                e
+            );
+            if copy_made {
+                let _ = std::fs::remove_file(&raw_path);
+                if let Some(ref jp) = local_jpeg_path {
+                    let _ = std::fs::remove_file(jp);
+                }
+            }
             return ProcessedFile::Skipped;
         }
     };
@@ -409,6 +469,9 @@ fn process_one_file(
     if cancel.load(Ordering::Relaxed) {
         if copy_made {
             let _ = std::fs::remove_file(&raw_path);
+            if let Some(ref jp) = local_jpeg_path {
+                let _ = std::fs::remove_file(jp);
+            }
         }
         return ProcessedFile::Skipped;
     }
@@ -479,6 +542,9 @@ fn process_one_file(
         file_size_bytes,
         initial_flag,
         initial_star_rating,
+        sidecar_jpeg_path: local_jpeg_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
     };
 
     ProcessedFile::Ingested(IngestedFile {
@@ -529,4 +595,229 @@ fn emit_progress(
             current_filename: filename.to_string(),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout;
+    use crate::metadata::exif::tests::{make_jpeg_with_exif, make_synthetic_raf};
+    use tempfile::TempDir;
+
+    /// End-to-end: walker + pair + process_one_file + insert_photos_batch
+    /// + sync_shoot_layout. This is the closest we can get to invoking
+    /// `run_import` itself without a Tauri AppHandle — every other piece
+    /// of the import pipeline runs against real on-disk files.
+    ///
+    /// Verifies the four contracts the user cares about:
+    ///   (a) RAW+JPG pair → ONE photo row with sidecar_jpeg_path set
+    ///   (b) lone JPG → its own row, no sidecar
+    ///   (c) flagging the paired photo as reject moves BOTH the RAW
+    ///       and the JPG into RAW/rejects/, with sidecar_jpeg_path on
+    ///       the row updated to track the move
+    ///   (d) sync is idempotent — re-running it after the move is a
+    ///       no-op
+    #[test]
+    fn end_to_end_paired_raf_import_then_layout_move() {
+        // --- (1) Source folder with one paired RAF+JPG and one lone JPG.
+        let source = TempDir::new().unwrap();
+        let src_raf = source.path().join("DSCF0001.RAF");
+        let src_jpg = source.path().join("DSCF0001.JPG");
+        let src_lone = source.path().join("standalone.jpg");
+        // Synthetic RAF body: magic + a JPEG-with-no-EXIF padded above
+        // the 10KB embedded-JPEG threshold so the preview pipeline can
+        // pull bytes out without erroring.
+        let mut raf_body = Vec::from(b"FUJIFILMCCD-RAW \0".as_slice());
+        raf_body.extend_from_slice(&[0xFFu8, 0xD8]); // SOI
+        raf_body.extend_from_slice(&[0xFFu8, 0xFE]); // COM
+        let pad = 12_000usize;
+        raf_body.extend_from_slice(&((pad + 2) as u16).to_be_bytes());
+        raf_body.resize(raf_body.len() + pad, 0u8);
+        raf_body.extend_from_slice(&[0xFFu8, 0xD9]); // EOI
+        std::fs::write(&src_raf, &raf_body).unwrap();
+        std::fs::write(
+            &src_jpg,
+            make_jpeg_with_exif("2024:08:02 09:15:00", "FUJIFILM X-T5"),
+        )
+        .unwrap();
+        std::fs::write(
+            &src_lone,
+            make_jpeg_with_exif("2024:01:15 14:30:00", "NIKON D750"),
+        )
+        .unwrap();
+
+        // --- (2) Walk the source dir and apply the pairing rules.
+        let files = walker::walk_source(source.path());
+        let items = pairing::pair(files);
+        assert_eq!(items.len(), 2, "RAF+JPG collapses, lone JPG stays = 2");
+
+        // --- (3) Set up DB + a shoot whose dest_path is a real folder
+        // process_one_file can copy into.
+        let db_dir = TempDir::new().unwrap();
+        let db_path = db_dir.path().join("e2e.sqlite");
+        let mut db = Database::open(&db_path).unwrap();
+        // process_one_file calls copy::plan_dest, which appends "RAW/"
+        // to the shoot_dir argument. Pass the shoot ROOT, not the RAW
+        // subdir, or we get {shoot}/RAW/RAW/ nesting.
+        let shoot_root = db_dir.path().join("shoot");
+        std::fs::create_dir_all(&shoot_root).unwrap();
+        let raw_dir = shoot_root.join("RAW"); // for assertions only
+        let previews_dir = db_dir.path().join("previews");
+        let thumbs_dir = db_dir.path().join("thumbs");
+        std::fs::create_dir_all(&previews_dir).unwrap();
+        std::fs::create_dir_all(&thumbs_dir).unwrap();
+        let shoot_id = db
+            .insert_shoot(
+                "e2e",
+                "2024-08-01",
+                source.path().to_str().unwrap(),
+                shoot_root.to_str().unwrap(),
+                "copy",
+            )
+            .unwrap();
+
+        // --- (4) Run process_one_file on each ImportItem. Mirrors what
+        // run_import's parallel block does, minus the rayon + AppHandle.
+        let db_mutex = Mutex::new(db);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut inserts = Vec::new();
+        for item in &items {
+            match process_one_file(
+                item,
+                &shoot_root,
+                &previews_dir,
+                &thumbs_dir,
+                &db_mutex,
+                ImportMode::Copy,
+                &cancel,
+            ) {
+                ProcessedFile::Ingested(f) => inserts.push(f.insert),
+                ProcessedFile::Skipped => panic!("process_one_file skipped {:?}", item),
+            }
+        }
+        let mut db = db_mutex.into_inner().unwrap();
+
+        // --- (5) The PhotoInsert built for the paired item must carry
+        // sidecar_jpeg_path; the lone item's must be None. (Contract a/b)
+        let paired_insert = inserts
+            .iter()
+            .find(|i| i.filename.eq_ignore_ascii_case("DSCF0001.RAF"))
+            .expect("paired insert");
+        let lone_insert = inserts
+            .iter()
+            .find(|i| i.filename.eq_ignore_ascii_case("standalone.jpg"))
+            .expect("lone insert");
+        assert!(
+            paired_insert.sidecar_jpeg_path.is_some(),
+            "paired RAF row must carry sidecar_jpeg_path"
+        );
+        assert_eq!(
+            lone_insert.sidecar_jpeg_path, None,
+            "lone JPG row must NOT carry sidecar_jpeg_path"
+        );
+        // EXIF for the paired RAF was read from the JPG sibling, so
+        // capture_time and camera should be populated even though the
+        // RAF body has no EXIF.
+        assert!(paired_insert.exif_date.is_some());
+        assert!(
+            paired_insert
+                .camera
+                .as_deref()
+                .map(|c| c.contains("X-T5"))
+                .unwrap_or(false),
+            "paired RAF camera must come through the JPG: {:?}",
+            paired_insert.camera,
+        );
+
+        // --- (6) Persist the inserts. The post-insert DB shape is what
+        // the cull views, AI worker, and layout sync all read.
+        let ids = db.insert_photos_batch(shoot_id, &inserts).unwrap();
+        assert_eq!(ids.len(), 2);
+
+        // Files actually copied to the shoot directory by Copy mode.
+        assert!(
+            raw_dir.join("DSCF0001.RAF").exists(),
+            "Copy mode should have placed the RAF in {{shoot}}/RAW/"
+        );
+        assert!(
+            raw_dir.join("DSCF0001.JPG").exists(),
+            "Copy mode should have placed the sibling JPG next to the RAW"
+        );
+        assert!(raw_dir.join("standalone.jpg").exists());
+
+        // AI worker contract: one work item per frame, never per file.
+        let needing = db.photos_needing_ai(shoot_id).unwrap();
+        assert_eq!(needing.len(), 2, "AI must enqueue once per frame, not per file");
+
+        // --- (7) Reject the paired frame and run layout sync.
+        // (Contract c)
+        let paired_id = ids
+            .iter()
+            .copied()
+            .find(|id| {
+                db.get_photo_by_id(*id)
+                    .map(|p| p.filename.eq_ignore_ascii_case("DSCF0001.RAF"))
+                    .unwrap_or(false)
+            })
+            .unwrap();
+        db.set_flag(paired_id, "reject").unwrap();
+
+        let report = layout::sync_shoot_layout(&db, shoot_id).unwrap();
+        assert!(
+            report.errors.is_empty(),
+            "layout sync should have zero errors, got {:?}",
+            report.errors
+        );
+        assert!(report.missing.is_empty(), "no files should be missing");
+
+        // Both the RAF and the JPG must now sit in RAW/rejects/. The
+        // unrelated lone JPG must be untouched.
+        let rejects = raw_dir.join("rejects");
+        assert!(
+            rejects.join("DSCF0001.RAF").exists(),
+            "RAF should have moved to RAW/rejects/"
+        );
+        assert!(
+            rejects.join("DSCF0001.JPG").exists(),
+            "sibling JPG should follow the RAF into RAW/rejects/"
+        );
+        assert!(
+            !raw_dir.join("DSCF0001.RAF").exists(),
+            "RAF must no longer be at the top level"
+        );
+        assert!(
+            !raw_dir.join("DSCF0001.JPG").exists(),
+            "JPG must no longer be at the top level"
+        );
+        assert!(
+            raw_dir.join("standalone.jpg").exists(),
+            "lone JPG must not have moved"
+        );
+
+        // DB is updated to reflect the new locations.
+        let after = db.get_photo_by_id(paired_id).unwrap();
+        assert!(
+            after.raw_path.contains("rejects"),
+            "raw_path should now point at rejects/, got {}",
+            after.raw_path
+        );
+        assert!(
+            after
+                .sidecar_jpeg_path
+                .as_deref()
+                .map(|p| p.contains("rejects"))
+                .unwrap_or(false),
+            "sidecar_jpeg_path should track the move, got {:?}",
+            after.sidecar_jpeg_path
+        );
+
+        // --- (8) Re-running sync is a no-op. (Contract d)
+        let report2 = layout::sync_shoot_layout(&db, shoot_id).unwrap();
+        assert!(
+            report2.moved.is_empty(),
+            "second sync should not move anything, got {:?}",
+            report2.moved
+        );
+        assert!(report2.errors.is_empty());
+    }
 }

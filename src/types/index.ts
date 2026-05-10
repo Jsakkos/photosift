@@ -186,6 +186,11 @@ export interface ScanDateEntry {
   thumbDataUrl: string | null;
   alreadyImported: boolean;
   orientation?: number | null;
+  /// When the camera was in RAW+JPEG mode and this tile represents a
+  /// paired RAW+JPG, this is the JPG's absolute path. The tile shows
+  /// a small "+JPG" badge to make the pair visible to the user; the
+  /// JPG itself follows the RAW through layout moves at import time.
+  siblingJpegPath?: string | null;
 }
 
 /// Lazy thumbnail extraction result, one per `scan-thumb-ready` event.
