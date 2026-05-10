@@ -133,6 +133,7 @@ pub fn run_import(
 
             let result = process_one_file(
                 src_path,
+                shoot_id,
                 &shoot_dir,
                 &previews_dir,
                 &thumbs_dir,
@@ -306,6 +307,7 @@ pub fn run_import(
 
 fn process_one_file(
     src_path: &Path,
+    shoot_id: i64,
     shoot_dir: &Path,
     previews_dir: &Path,
     thumbs_dir: &Path,
@@ -372,10 +374,15 @@ fn process_one_file(
     };
     let copy_hash_ms = t_copy_hash.elapsed().as_secs_f64() * 1000.0;
 
-    // 3. Dedup check on the just-computed hash. If a duplicate slipped past
-    // the heuristic dedup at scan time, undo the copy we just made.
+    // 3. Per-shoot dedup check on the just-computed hash. The schema's
+    // UNIQUE(content_hash, shoot_id) constraint blocks duplicates within
+    // a shoot at INSERT time, but checking up here lets us undo the copy
+    // we just made and report the skip cleanly. Cross-shoot duplicates
+    // (#4) are intentionally allowed — same RAW into a second shoot
+    // succeeds. The user's explicit selection in the scan dialog is
+    // authoritative.
     if let Ok(guard) = db.lock() {
-        if let Ok(Some(_)) = guard.photo_exists_by_hash(&content_hash) {
+        if let Ok(Some(_)) = guard.photo_exists_in_shoot_by_hash(shoot_id, &content_hash) {
             if copy_made {
                 let _ = std::fs::remove_file(&raw_path);
             }

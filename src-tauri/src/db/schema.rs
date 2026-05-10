@@ -413,7 +413,14 @@ impl Database {
                 star_rating INTEGER NOT NULL DEFAULT 0,
                 sharpness_score REAL,
                 quality_score REAL,
-                UNIQUE(content_hash)
+                -- Uniqueness is per-shoot, not global. Same content_hash
+                -- can legitimately appear in multiple shoots when the
+                -- user splits a shoot across SD cards or re-uses one
+                -- frame in two project folders. Each row still has its
+                -- own raw_path on disk; layout sync, delete, and AI
+                -- worker all key on photo_id, never on content_hash.
+                -- Existing DBs migrate via user_version=3 (see below).
+                UNIQUE(content_hash, shoot_id)
             );
             CREATE INDEX IF NOT EXISTS idx_photos_shoot ON photos(shoot_id);
             CREATE INDEX IF NOT EXISTS idx_photos_flag ON photos(shoot_id, flag);
@@ -594,6 +601,86 @@ impl Database {
                 [],
             )?;
             self.conn.execute_batch("PRAGMA user_version = 2")?;
+        }
+        if version < 3 {
+            // Cross-shoot re-import (#4): relax UNIQUE(content_hash) to
+            // UNIQUE(content_hash, shoot_id) so the same NEF can be
+            // imported into multiple shoots when the user explicitly
+            // selects it. Within a single shoot, same-hash dedup still
+            // applies (insert fails with the new composite UNIQUE).
+            //
+            // SQLite can't drop implicit UNIQUE indexes from a CREATE
+            // TABLE constraint, so the migration is a full table rebuild
+            // — gated on detecting the old constraint, so new installs
+            // (which already get the new schema from CREATE TABLE) and
+            // DBs that previously ran this migration both no-op.
+            let old_constraint_present: i64 = self
+                .conn
+                .query_row(
+                    "SELECT EXISTS (
+                        SELECT 1 FROM sqlite_master
+                         WHERE type = 'table' AND name = 'photos'
+                           AND sql LIKE '%UNIQUE(content_hash)%'
+                    )",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if old_constraint_present == 1 {
+                // Hardcoded column list at v3. The version-gated block
+                // runs AFTER ensure_columns, so the old table already
+                // has every column listed below. Future schema additions
+                // never re-enter this block (user_version > 3 by then).
+                self.conn.execute_batch(
+                    r#"
+                    BEGIN;
+                    CREATE TABLE photos_v3 (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE,
+                        filename TEXT NOT NULL,
+                        raw_path TEXT NOT NULL,
+                        preview_path TEXT NOT NULL,
+                        thumb_path TEXT NOT NULL,
+                        content_hash BLOB NOT NULL,
+                        phash BLOB,
+                        exif_date TEXT,
+                        camera TEXT,
+                        lens TEXT,
+                        focal_length REAL,
+                        aperture REAL,
+                        shutter_speed TEXT,
+                        iso INTEGER,
+                        orientation INTEGER,
+                        flag TEXT NOT NULL DEFAULT 'unreviewed',
+                        destination TEXT NOT NULL DEFAULT 'unrouted',
+                        star_rating INTEGER NOT NULL DEFAULT 0,
+                        sharpness_score REAL,
+                        quality_score REAL,
+                        face_count INTEGER,
+                        eyes_open_count INTEGER,
+                        ai_analyzed_at TEXT,
+                        select_visited_at TEXT,
+                        file_size_bytes INTEGER,
+                        UNIQUE(content_hash, shoot_id)
+                    );
+                    INSERT INTO photos_v3
+                      SELECT id, shoot_id, filename, raw_path, preview_path,
+                             thumb_path, content_hash, phash, exif_date, camera,
+                             lens, focal_length, aperture, shutter_speed, iso,
+                             orientation, flag, destination, star_rating,
+                             sharpness_score, quality_score, face_count,
+                             eyes_open_count, ai_analyzed_at, select_visited_at,
+                             file_size_bytes
+                      FROM photos;
+                    DROP TABLE photos;
+                    ALTER TABLE photos_v3 RENAME TO photos;
+                    CREATE INDEX idx_photos_shoot ON photos(shoot_id);
+                    CREATE INDEX idx_photos_flag ON photos(shoot_id, flag);
+                    COMMIT;
+                    "#,
+                )?;
+            }
+            self.conn.execute_batch("PRAGMA user_version = 3")?;
         }
         Ok(())
     }
@@ -794,11 +881,20 @@ impl Database {
 
     // ---- Photos ----
 
-    pub fn photo_exists_by_hash(&self, content_hash: &[u8; 32]) -> Result<Option<i64>> {
+    /// Per-shoot dedup query. Returns `Some(photo_id)` if a photo with
+    /// this content_hash already exists in the given shoot. Used by the
+    /// import pipeline to skip within-shoot duplicates while allowing
+    /// the same hash to be (re-)imported into a different shoot — see
+    /// the v3 migration for the constraint relaxation.
+    pub fn photo_exists_in_shoot_by_hash(
+        &self,
+        shoot_id: i64,
+        content_hash: &[u8; 32],
+    ) -> Result<Option<i64>> {
         self.conn
             .query_row(
-                "SELECT id FROM photos WHERE content_hash = ?1",
-                params![&content_hash[..]],
+                "SELECT id FROM photos WHERE shoot_id = ?1 AND content_hash = ?2",
+                params![shoot_id, &content_hash[..]],
                 |row| row.get::<_, i64>(0),
             )
             .optional()
@@ -2113,9 +2209,9 @@ pub(crate) mod tests {
         db.insert_photos_batch(shoot_id, &[sample_insert(7, "x.nef")])
             .unwrap();
 
-        let existing = db.photo_exists_by_hash(&[7u8; 32]).unwrap();
+        let existing = db.photo_exists_in_shoot_by_hash(shoot_id, &[7u8; 32]).unwrap();
         assert!(existing.is_some());
-        let missing = db.photo_exists_by_hash(&[99u8; 32]).unwrap();
+        let missing = db.photo_exists_in_shoot_by_hash(shoot_id, &[99u8; 32]).unwrap();
         assert!(missing.is_none());
     }
 
@@ -2483,5 +2579,85 @@ pub(crate) mod tests {
             let faces = db.get_faces_for_photo(*id).unwrap();
             assert_eq!(faces.len(), 1, "photo {} face row should survive", id);
         }
+    }
+
+    /// #4 — the same content_hash can legitimately be (re-)imported into
+    /// two different shoots when the user explicitly selects it from the
+    /// scan dialog. The pre-fix UNIQUE(content_hash) blocked this; the
+    /// v3 migration relaxes to UNIQUE(content_hash, shoot_id).
+    #[test]
+    fn same_hash_can_be_inserted_across_shoots() {
+        let (mut db, _dir) = test_db();
+        let shoot_a = db
+            .insert_shoot("shoot-a", "2026-04-15", "/sa", "/da", "copy")
+            .unwrap();
+        let shoot_b = db
+            .insert_shoot("shoot-b", "2026-05-01", "/sb", "/db", "copy")
+            .unwrap();
+
+        let inserts = &[sample_insert(7, "shared.nef")];
+        let ids_a = db.insert_photos_batch(shoot_a, inserts).unwrap();
+        let ids_b = db.insert_photos_batch(shoot_b, inserts).unwrap();
+
+        assert_eq!(ids_a.len(), 1, "shoot A insert succeeded");
+        assert_eq!(ids_b.len(), 1, "shoot B insert succeeded with same hash");
+        assert_ne!(ids_a[0], ids_b[0], "rows are distinct photo_ids");
+
+        // Per-shoot dedup query: hash present only in its own shoot.
+        let in_a = db.photo_exists_in_shoot_by_hash(shoot_a, &[7u8; 32]).unwrap();
+        let in_b = db.photo_exists_in_shoot_by_hash(shoot_b, &[7u8; 32]).unwrap();
+        assert_eq!(in_a, Some(ids_a[0]));
+        assert_eq!(in_b, Some(ids_b[0]));
+    }
+
+    /// Same hash in the SAME shoot still fails — the composite
+    /// UNIQUE(content_hash, shoot_id) blocks the second insert at the
+    /// SQL level. Application-level dedup (process_one_file) checks
+    /// first to give a clean skip path; this test exercises the
+    /// constraint as the safety net.
+    #[test]
+    fn same_hash_in_same_shoot_still_fails() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("dup-shoot", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+        db.insert_photos_batch(shoot_id, &[sample_insert(9, "first.nef")])
+            .unwrap();
+
+        // Second insert with the same hash, same shoot — must error.
+        let result = db.insert_photos_batch(
+            shoot_id,
+            &[sample_insert(9, "second.nef")],
+        );
+        assert!(
+            result.is_err(),
+            "insert of duplicate hash within same shoot should fail",
+        );
+    }
+
+    /// Migration is gated on detecting the old constraint, so re-running
+    /// it is a no-op. This test specifically verifies that running
+    /// run_migrations on a freshly-created (already-v3) DB doesn't
+    /// trigger the table-rebuild branch.
+    #[test]
+    fn v3_migration_is_idempotent_on_fresh_db() {
+        let (db, _dir) = test_db();
+        // Fresh DB: user_version should be 3 (or higher) after open.
+        let version: i32 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            version >= 3,
+            "fresh DB should have completed v3 migration, got version={}",
+            version,
+        );
+        // Re-running migrations must not error or change anything.
+        db.run_migrations().unwrap();
+        let v2: i32 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v2, version, "user_version unchanged on re-run");
     }
 }
