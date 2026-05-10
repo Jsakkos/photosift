@@ -219,7 +219,17 @@ pub fn judgments_tool_schema() -> serde_json::Value {
                         "photo_id":    { "type": "integer" },
                         "composition": { "type": "integer", "minimum": 0, "maximum": 10 },
                         "aesthetic":   { "type": "integer", "minimum": 0, "maximum": 10 },
-                        "cluster_rank":{ "type": ["integer", "null"], "minimum": 1 },
+                        // cluster_rank is OPTIONAL (omitted from `required`)
+                        // rather than nullable. JSON Schema's `["integer",
+                        // "null"]` form is rejected by Gemini's OpenAPI-3.0
+                        // function-declaration parser, and we don't actually
+                        // need null on the wire — the model omits the field
+                        // for cluster entries it doesn't rank, and the
+                        // singletons code path overwrites cluster_rank to
+                        // None server-side regardless. Keeping the schema as
+                        // a plain integer means it parses cleanly under
+                        // Anthropic, Gemini, and any local server's grammar.
+                        "cluster_rank":{ "type": "integer", "minimum": 1 },
                         "is_keeper":   { "type": "boolean" },
                         "suggested_flag": {
                             "type": "string",
@@ -288,5 +298,58 @@ mod tests {
         let j: CuratorJudgment = serde_json::from_str(s).unwrap();
         assert!(j.cluster_rank.is_none());
         assert_eq!(j.suggested_flag, SuggestedFlag::Reject);
+    }
+
+    /// Both providers send the schema verbatim. Anthropic accepts the
+    /// JSON-Schema `["X","null"]` form; Gemini's OpenAPI-3.0 function-
+    /// declaration parser does not. Past breakage was silent: Stage 1
+    /// succeeded but every Stage 2 call returned a 400 that the
+    /// frontend never displayed. Guard against re-introduction by
+    /// asserting no array-typed `type` appears in either schema.
+    #[test]
+    fn schemas_use_no_array_typed_type() {
+        for schema in [judgments_tool_schema(), summary_tool_schema()] {
+            walk(&schema);
+        }
+        fn walk(v: &serde_json::Value) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    if let Some(t) = m.get("type") {
+                        assert!(
+                            !t.is_array(),
+                            "schema field uses array-typed `type` (Gemini-incompatible): {}",
+                            v,
+                        );
+                    }
+                    for (_, child) in m {
+                        walk(child);
+                    }
+                }
+                serde_json::Value::Array(arr) => arr.iter().for_each(walk),
+                _ => {}
+            }
+        }
+    }
+
+    /// `Option<i32>` accepts both omitted *and* null fields as `None`,
+    /// so dropping the nullable hint from cluster_rank doesn't break
+    /// either of those wire shapes — proving the schema change is safe
+    /// on the deserialize side regardless of which provider answered.
+    #[test]
+    fn cluster_rank_deserializes_when_omitted_or_null() {
+        let omitted = r#"{
+            "photo_id": 1, "composition": 5, "aesthetic": 5,
+            "is_keeper": false, "suggested_flag": "reject", "reason": "x"
+        }"#;
+        let j: CuratorJudgment = serde_json::from_str(omitted).unwrap();
+        assert_eq!(j.cluster_rank, None);
+
+        let nulled = r#"{
+            "photo_id": 1, "composition": 5, "aesthetic": 5,
+            "cluster_rank": null,
+            "is_keeper": false, "suggested_flag": "reject", "reason": "x"
+        }"#;
+        let j: CuratorJudgment = serde_json::from_str(nulled).unwrap();
+        assert_eq!(j.cluster_rank, None);
     }
 }

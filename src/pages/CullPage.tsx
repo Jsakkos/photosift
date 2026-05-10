@@ -131,11 +131,17 @@ export function CullPage() {
 
     // Curator events: refresh judgments after each cluster lands so
     // chips, the AI-rejects filter, and the cluster-rank ranking
-    // update live as the worker progresses.
+    // update live as the worker progresses. `curator:failed` events
+    // also surface here — the worker emits one per stage that errored
+    // (Stage 1 schema rejection, network blip, key revoked, etc.) and
+    // without a listener every failure was silent (the status bar
+    // would just stay "Running" forever).
     let unlistenCuratorCluster: (() => void) | null = null;
     let unlistenCuratorCompleted: (() => void) | null = null;
+    let unlistenCuratorFailed: (() => void) | null = null;
     const refreshCuratorJudgments =
       useProjectStore.getState().refreshCuratorJudgments;
+    const setToast = useProjectStore.getState().setToast;
     listen<{ shootId: number }>("curator:cluster_done", (event) => {
       if (event.payload.shootId === shootId) {
         void refreshCuratorJudgments();
@@ -146,6 +152,18 @@ export function CullPage() {
         void refreshCuratorJudgments();
       }
     }).then((fn) => { unlistenCuratorCompleted = fn; });
+    listen<{ shootId: number; reason?: string; groupId?: number | null }>(
+      "curator:failed",
+      (event) => {
+        if (event.payload.shootId !== shootId) return;
+        const where = event.payload.groupId != null
+          ? `cluster ${event.payload.groupId}`
+          : "stage 1";
+        const reason = event.payload.reason ?? "unknown error";
+        console.error(`[curator] ${where} failed: ${reason}`);
+        setToast(`Curator ${where} failed: ${reason}`, "error");
+      },
+    ).then((fn) => { unlistenCuratorFailed = fn; });
 
     return () => {
       unlistenReady?.();
@@ -153,6 +171,7 @@ export function CullPage() {
       unlistenComplete?.();
       unlistenCuratorCluster?.();
       unlistenCuratorCompleted?.();
+      unlistenCuratorFailed?.();
     };
   }, [id, loadShoot]);
 
