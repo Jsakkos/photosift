@@ -1,5 +1,7 @@
+import { useMemo } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { Kbd } from "./primitives";
+import { formatCuratorReason } from "../lib/curatorReason";
 
 /// Inline AI-suggestion panel rendered inside the FacesRail. Reads the
 /// judgment from the project-store map (bulk-loaded at loadShoot, kept
@@ -11,6 +13,28 @@ export function CuratorChip() {
     if (pid == null) return null;
     return s.curatorJudgments.get(pid) ?? null;
   });
+  const images = useProjectStore((s) => s.images);
+  // The Curator's reason text references peers by `[photo_id]` (the
+  // tech_line marker we send to the LLM). Substituting filenames here
+  // gives the user a recognizable handle without leaking filenames over
+  // IPC. See src/lib/curatorReason.ts for the helper.
+  const idToFilename = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const img of images) m.set(img.id, img.filename);
+    return m;
+  }, [images]);
+  const judgmentFilename = useMemo(
+    () =>
+      judgment != null ? (idToFilename.get(judgment.photoId) ?? null) : null,
+    [judgment, idToFilename],
+  );
+  const formattedReason = useMemo(
+    () =>
+      judgment != null
+        ? formatCuratorReason(judgment.reason, idToFilename)
+        : "",
+    [judgment, idToFilename],
+  );
 
   if (!judgment) return null;
 
@@ -107,8 +131,17 @@ export function CuratorChip() {
         className="px-[10px] py-[8px] text-[11px] leading-[1.5]"
         style={{ color: "var(--color-fg)" }}
       >
-        {judgment.reason}
+        {formattedReason}
       </p>
+      {judgmentFilename && (
+        <div
+          className="px-[10px] pb-[8px] font-mono text-[10px] truncate"
+          style={{ color: "var(--color-fg-mute)" }}
+          title={judgmentFilename}
+        >
+          {judgmentFilename}
+        </div>
+      )}
     </section>
   );
 }
