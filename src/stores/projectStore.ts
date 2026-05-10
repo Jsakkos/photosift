@@ -68,6 +68,23 @@ function routeMinStar(): number {
   return useSettingsStore.getState().settings.routeMinStar ?? 0;
 }
 
+/// Whether a photo has cleared the routing threshold — flagged pick AND
+/// rated at-or-above `routeMinStarGate`. Such photos are "ready to route"
+/// and should drop out of the Select grading queue (the user has already
+/// decided); SelectShell also uses this to exclude them from the pass-pill
+/// `eligible` set so the pill counts agree with what's actually shown.
+/// Returns false when the gate is 0 — no threshold means no skip.
+export function isRouteEligible(
+  img: ImageEntry,
+  routeMinStarGate: number,
+): boolean {
+  return (
+    routeMinStarGate > 0 &&
+    img.flag === "pick" &&
+    img.starRating >= routeMinStarGate
+  );
+}
+
 /// Session-scoped "pass floor" for Select. Read lazily so every
 /// computeDisplayItemsFiltered call picks up the current tier without
 /// threading the value through 18+ internal callers. Defaults to 0 on
@@ -524,15 +541,20 @@ export function computeDisplayItems(
     const seenGroups = new Set<number>();
     const passesSelectGate = (img: ImageEntry): boolean => {
       // showReviewed bypasses the flag filter (so picked/rejected become
-      // visible again) but NOT the pass floor — the floor is a workflow
-      // tier chosen by the user, not a review filter, so leaving it
-      // enforced here keeps "Show all" from silently breaking Pass 2+.
+      // visible again) but NOT the pass floor or the routed-eligible
+      // exclusion — both are workflow-stage decisions chosen by the user,
+      // not review filters, so leaving them enforced here keeps "Show all"
+      // from silently dragging already-graded keepers back into Select.
       const passesFlag = showReviewed
         ? true
         : selectRequiresPickFilter
           ? img.flag === "pick"
           : img.flag !== "reject";
-      return passesFlag && img.starRating >= selectMinStar;
+      return (
+        passesFlag &&
+        img.starRating >= selectMinStar &&
+        !isRouteEligible(img, routeMinStarGate)
+      );
     };
 
     for (let i = 0; i < images.length; i++) {
@@ -642,7 +664,14 @@ interface ProjectState {
   displayItems: DisplayItem[];
   activeInnerGroupId: number | null;
   lastFlagAction: { color: string; timestamp: number } | null;
-  toast: { message: string; kind: "info" | "error"; timestamp: number } | null;
+  toast: {
+    message: string;
+    kind: "info" | "error";
+    timestamp: number;
+    /// Optional action button. When set, the toast renders a clickable
+    /// label and stays on screen until dismissed (no auto-hide).
+    action?: { label: string; onClick: () => void };
+  } | null;
   /// Triage/Select rail visibility. Persisted via localStorage so the
   /// user's last T/F toggle state survives reloads. Not per-shoot.
   showAllStrip: boolean;
@@ -707,7 +736,11 @@ interface ProjectState {
   setViewMode: (mode: ViewMode) => void;
   advanceToNextUnreviewed: () => void;
   clearFlagFlash: () => void;
-  setToast: (message: string, kind?: "info" | "error") => void;
+  setToast: (
+    message: string,
+    kind?: "info" | "error",
+    action?: { label: string; onClick: () => void },
+  ) => void;
   clearToast: () => void;
   currentImage: () => ImageEntry | null;
   setFlagNoAutoReject: (flag: string) => Promise<void>;
@@ -1600,8 +1633,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   clearFlagFlash: () => set({ lastFlagAction: null }),
 
-  setToast: (message: string, kind: "info" | "error" = "info") =>
-    set({ toast: { message, kind, timestamp: Date.now() } }),
+  setToast: (
+    message: string,
+    kind: "info" | "error" = "info",
+    action?: { label: string; onClick: () => void },
+  ) =>
+    set({
+      toast: {
+        message,
+        kind,
+        timestamp: Date.now(),
+        ...(action ? { action } : {}),
+      },
+    }),
   clearToast: () => set({ toast: null }),
 
   toggleShortcutHints: () =>
@@ -1982,9 +2026,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const group = groups.find((g) => g.id === item.groupId);
     if (!group) return;
 
+    // Bracket members must respect both the active pass floor (#22) AND
+    // the routed-skip gate (#16): otherwise a 0★ photo can land in a ★≥2
+    // bracket, or an already-graded ★≥routeMinStar pick keeps reappearing
+    // in subsequent rounds. setSelectMinStar already clears the bracket
+    // on tier change, so an in-progress bracket can't go stale.
+    const minStar = currentSelectMinStar();
+    const routeStar = routeMinStar();
     const members = group.members
       .map((m) => images.find((i) => i.id === m.photoId))
-      .filter((i): i is ImageEntry => !!i && i.flag !== "reject")
+      .filter(
+        (i): i is ImageEntry =>
+          !!i &&
+          i.flag !== "reject" &&
+          i.starRating >= minStar &&
+          !isRouteEligible(i, routeStar),
+      )
       .map((i) => ({ id: i.id, qualityScore: i.qualityScore ?? null }));
 
     if (members.length < 2) return;
