@@ -1,10 +1,13 @@
 import { useProjectStore } from "../stores/projectStore";
 import { Kbd } from "./primitives";
 
-/// Inline AI-suggestion panel rendered inside the FacesRail. Reads the
-/// judgment from the project-store map (bulk-loaded at loadShoot, kept
-/// in sync via patchCuratorJudgment after accept/override). Hides
-/// itself when no judgment exists. Press `.` in Triage to accept.
+/// Inline Curator-suggestion panel rendered inside the FacesRail. Reads
+/// the judgment from the project-store map (bulk-loaded at loadShoot,
+/// kept in sync via patchCuratorJudgment after accept/override). When
+/// no judgment exists for the current photo, renders a slim empty-state
+/// hint pointing the user back to the Library (where Curator runs are
+/// kicked off) — this is the "empty state names the right subsystem"
+/// requirement from #17. Press `.` in Triage to accept.
 export function CuratorChip() {
   const judgment = useProjectStore((s) => {
     const pid = s.displayItems[s.currentIndex]?.image.id;
@@ -12,7 +15,27 @@ export function CuratorChip() {
     return s.curatorJudgments.get(pid) ?? null;
   });
 
-  if (!judgment) return null;
+  if (!judgment) {
+    return (
+      <section
+        aria-label="Curator — no judgment yet"
+        className="rounded-sm px-[10px] py-[8px] text-[11px] leading-snug"
+        style={{
+          background: "var(--color-bg2)",
+          border: "1px dashed var(--color-border)",
+          color: "var(--color-fg-dim)",
+        }}
+      >
+        <span
+          className="font-mono text-[10px] uppercase tracking-[1px] mr-[6px]"
+          style={{ color: "var(--color-fg-mute)" }}
+        >
+          Curator
+        </span>
+        No judgment yet — run from the Library card.
+      </section>
+    );
+  }
 
   const tone = (() => {
     switch (judgment.suggestedFlag) {
@@ -42,7 +65,7 @@ export function CuratorChip() {
 
   return (
     <section
-      aria-label="AI suggestion"
+      aria-label={`Curator suggestion (${providerLabel(judgment.provider)})`}
       className="rounded-sm overflow-hidden"
       style={{
         background: "var(--color-bg2)",
@@ -59,8 +82,9 @@ export function CuratorChip() {
           <span
             className="font-mono text-[10px] uppercase tracking-[1px]"
             style={{ color: tone.accent }}
+            title={`Curator (${providerLabel(judgment.provider)} · ${judgment.model})`}
           >
-            AI · {tone.label}
+            Curator · {tone.label}
           </span>
           <span
             title={`${providerLabel(judgment.provider)} · ${judgment.model}`}

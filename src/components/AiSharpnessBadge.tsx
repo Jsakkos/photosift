@@ -13,7 +13,7 @@ export function AiSharpnessBadge({ score }: { score: number }) {
         : "bg-red-500/90";
   const bandLabel = band === "green" ? "sharp" : band === "yellow" ? "soft" : "blurry";
   const title =
-    `Sharpness ${score}/10 (${bandLabel})\n` +
+    `On-device AI · Sharpness ${score}/10 (${bandLabel})\n` +
     `Laplacian variance percentile within this shoot.\n` +
     `Green 8-10 · Yellow 4-7 · Red 1-3.`;
   return (

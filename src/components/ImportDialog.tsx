@@ -446,7 +446,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
                         : "var(--color-fg-mute)",
                     }}
                   >
-                    Run AI suggestions on import
+                    Run Curator on import
                     <span
                       className="ml-2 font-mono text-[10px]"
                       style={{ color: "var(--color-fg-dim)" }}
@@ -471,7 +471,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
                     style={{ color: "var(--color-fg-dim)" }}
                   >
                     {curatorReady
-                      ? "AI characterizes the shoot then evaluates each cluster for composition + aesthetics. You can accept its suggestions with `.` in Triage."
+                      ? "The Curator characterizes the shoot then evaluates each cluster for composition + aesthetics. You can accept its suggestions with `.` in Triage."
                       : curatorProvider === "local"
                         ? "Set a model name for the local provider in Settings to enable."
                         : `Configure a ${curatorProviderLabel} API key in Settings to enable.`}
