@@ -122,6 +122,12 @@ export function ImportDialog({
   const [slug, setSlug] = useState(targetShoot?.slug ?? "");
   const [slugDirty, setSlugDirty] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>("copy");
+  // #4: a single user-controlled toggle for "skip duplicates", applied
+  // identically to drive (DateBrowser) and folder (FolderSubsetGrid)
+  // sources. Default ON — matches the pre-#4 implicit behaviour. When OFF,
+  // the backend bypasses the cross-shoot hash check; the per-shoot
+  // UNIQUE constraint still blocks same-shoot duplicates.
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [importing, setImporting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
@@ -314,12 +320,13 @@ export function ImportDialog({
         importMode,
         selectedPaths,
         existingShootId: targetShoot?.id ?? null,
+        skipDuplicates,
       });
     } catch (e) {
       setError(String(e));
       setImporting(false);
     }
-  }, [source, slug, importMode, selectedPaths, addMode, targetShoot]);
+  }, [source, slug, importMode, selectedPaths, skipDuplicates, addMode, targetShoot]);
 
   // Photo count that will actually be imported, used for the curator
   // cost estimate. The new SD-card / folder browsers feed `selectedPaths`
@@ -477,6 +484,30 @@ export function ImportDialog({
               >
                 {error}
               </p>
+            )}
+
+            {source && (
+              <label className="flex items-start gap-2 mb-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={skipDuplicates}
+                  onChange={(e) => setSkipDuplicates(e.target.checked)}
+                  className="mt-[2px] cursor-pointer"
+                />
+                <div>
+                  <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+                    Skip duplicates
+                  </div>
+                  <div
+                    className="text-[10px]"
+                    style={{ color: "var(--color-fg-dim)" }}
+                  >
+                    {skipDuplicates
+                      ? "Files already imported in any shoot are skipped."
+                      : "Duplicates can land in this shoot too — the same RAW will live in both shoots."}
+                  </div>
+                </div>
+              </label>
             )}
 
             {source && !addMode && (

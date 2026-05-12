@@ -19,6 +19,10 @@ pub fn start_import(
     // creating a new one — the slug/import_mode args are then ignored in
     // favour of the shoot's recorded values.
     existing_shoot_id: Option<i64>,
+    // ImportDialog's "Skip duplicates" checkbox (#4). `None` defaults to
+    // true so existing IPC callers (tests, scripted runs) keep the
+    // historical global-dedup behaviour.
+    skip_duplicates: Option<bool>,
     app: AppHandle,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
@@ -46,6 +50,7 @@ pub fn start_import(
     };
 
     let selected = selected_paths.map(|v| v.into_iter().map(PathBuf::from).collect());
+    let skip_duplicates = skip_duplicates.unwrap_or(true);
 
     // Clone state handle for the post-import hook.
     let app_for_ai = app.clone();
@@ -58,6 +63,7 @@ pub fn start_import(
             cancel_flag,
             selected,
             existing_shoot_id,
+            skip_duplicates,
         ) {
             Ok(shoot_id) => {
                 log::info!("Import completed: shoot_id={}", shoot_id);
