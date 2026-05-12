@@ -174,7 +174,7 @@ E2E rig is documented in user memory `reference_tauri_driver.md`. Use it for reg
 
 **Code changes are not done when they compile and the unit tests pass.** Before opening a PR for the user to review, the change must be exercised end-to-end against the running app. Use at least one of:
 
-- **`tauri-plugin-mcp` (preferred for ad-hoc UI verification)** — runs on `127.0.0.1:4000` in debug builds (`npm run tauri dev`). Provides programmatic screenshots, DOM inspection, JS evaluation, click/type. Walk through the affected screens, capture screenshots, **read the screenshots yourself** — do not ask the user "does this look right?". See user memory `reference_tauri_mcp.md`.
+- **`tauri-plugin-mcp` (preferred for ad-hoc UI verification)** — runs on `127.0.0.1:4000` in debug builds (`npm run tauri:dev`). Provides programmatic screenshots, DOM inspection, JS evaluation, click/type. Walk through the affected screens, capture screenshots, **read the screenshots yourself** — do not ask the user "does this look right?". See user memory `reference_tauri_mcp.md`.
 - **`tauri-driver` / WebdriverIO (preferred for repeatable / regression coverage)** — extend or run the relevant `tests/e2e/*.spec.ts` when the change is in a hot path that other features depend on.
 
 **Rule:** A PR is handed to the user only after the change has been exercised in the running app via one of these (or a written explicit reason — e.g. "pure backend refactor, full `cargo test --lib` coverage of the changed path"). Include "verified via tauri-mcp: [screens]" or "verified via tauri-driver: [test path]" in the PR description.
@@ -189,17 +189,30 @@ E2E rig is documented in user memory `reference_tauri_driver.md`. Use it for reg
 ## Commands
 
 ```powershell
-# Dev (kills the Vite + Tauri pair on Ctrl+C)
-npm run tauri dev
+# Dev (kills the Vite + Tauri pair on Ctrl+C). Use `tauri:dev` — it loads
+# `tauri.dev.conf.json` so the running window is identifiable as "PhotoSift —
+# DEV" and uses a distinct identifier (separate WebView2 storage from prod).
+npm run tauri:dev
 
 # Production build
 npm run tauri build
 
-# Probe the database
+# Probe the database — prod uses .photosift, debug builds use .photosift-dev
 sqlite3 ~/.photosift/photosift.db
+sqlite3 ~/.photosift-dev/photosift.db
 
 # Test with real D750 NEFs — point at a folder, expect ~6016x4016 embedded previews
 ```
+
+## Build Isolation (dev vs. prod)
+
+Debug builds keep their own state so a compiled prod binary can keep running uninterrupted while you develop:
+
+- **Data root.** Debug = `~/.photosift-dev/`, release = `~/.photosift/`. One `cfg!(debug_assertions)` branch in `db/schema.rs::photosift_home()` propagates through DB, cache, and `ensure_models_on_disk()`.
+- **Keychain.** Debug uses service `photosift-dev`, release `photosift`. `curator/mod.rs` exposes the right `KEYRING_SERVICE` via parallel `#[cfg]` consts. Re-enter API keys once when first running dev.
+- **Tauri identifier + window title.** `tauri.dev.conf.json` overrides `productName` → `PhotoSift (dev)`, `identifier` → `com.photosift.app.dev`, and window title → `PhotoSift — DEV`. Loaded only by `npm run tauri:dev` (`tauri dev --config …`). The distinct identifier also gives the WebView2 instance a separate `userDataFolder`, isolating `localStorage` UI flags.
+- **Escape hatch.** `PHOTOSIFT_HOME=<path>` env var overrides the data root. Use it sparingly to debug against prod data — writes mutate prod state.
+- **E2E.** `npm run test:e2e:build` produces a debug binary, so e2e also writes to `~/.photosift-dev/` and uses the dev keyring. No risk of e2e clobbering prod data.
 
 ## Gotchas & Conventions
 

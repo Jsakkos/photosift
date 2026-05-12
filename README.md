@@ -34,8 +34,10 @@ Prereqs: Rust (latest stable), Node 20+, and the platform [Tauri prerequisites](
 
 ```bash
 npm install
-npm run tauri dev
+npm run tauri:dev
 ```
+
+`tauri:dev` loads `src-tauri/tauri.dev.conf.json` so the dev window is identifiable as "PhotoSift — DEV" and uses a distinct Tauri identifier — that gives it its own data dir (`~/.photosift-dev/`), its own OS keychain entries, and its own WebView2 storage. A compiled production binary keeps running unmolested while you develop. Set `PHOTOSIFT_HOME=<path>` to override the data root (e.g. point dev at prod for debugging — note writes mutate prod state).
 
 To produce an installer:
 
@@ -61,11 +63,13 @@ npm run tauri build
 
 ## Data locations
 
+Release builds use `~/.photosift/`; debug builds (`tauri:dev`, `tauri build --debug`, e2e harness) use `~/.photosift-dev/`. Paths below show the release location.
+
 - **Database**: `~/.photosift/photosift.db` (SQLite)
 - **Preview cache**: `~/.photosift/cache/{shoot_id}/previews/` — full-res embedded JPEGs
 - **Thumbnail cache**: `~/.photosift/cache/{shoot_id}/thumbs/` — 512 px longest edge
 - **AI models** (optional): drop `eye_state.onnx`, `mouth_state.onnx`, `cat_detector.onnx` into `~/.photosift/models/` to swap the mocks for real classifiers. YuNet face detection is bundled.
-- **Curator** (optional, cloud): aesthetic / compositional culling via Anthropic, Gemini, or a local OpenAI-compatible endpoint. BYO API key — stored in the OS keychain, set under Settings → Curator. Suggestions are stored in `curator_judgments` and surfaced as overlays; nothing is auto-applied.
+- **Curator** (optional, cloud): aesthetic / compositional culling via Anthropic, Gemini, or a local OpenAI-compatible endpoint. BYO API key — stored in the OS keychain under service `photosift` (release) or `photosift-dev` (debug); set under Settings → Curator. Suggestions are stored in `curator_judgments` and surfaced as overlays; nothing is auto-applied.
 
 ## Tech stack
 

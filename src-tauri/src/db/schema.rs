@@ -2003,23 +2003,35 @@ fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {
     })
 }
 
-/// ~/.photosift/photosift.db
+/// ~/.photosift/photosift.db (release) or ~/.photosift-dev/photosift.db (debug).
 pub fn global_db_path() -> PathBuf {
     photosift_home().join("photosift.db")
 }
 
-/// ~/.photosift/ (or `$PHOTOSIFT_HOME` if set — used by screenshot CI and
-/// integration tests to redirect the entire app state directory at a
-/// throwaway location without touching the user's real home).
+/// Resolve the PhotoSift data root.
+///
+/// - Release builds default to `~/.photosift/`.
+/// - Debug builds default to `~/.photosift-dev/` so a running production
+///   binary keeps owning `.photosift` exclusively while dev work runs in
+///   parallel.
+/// - `$PHOTOSIFT_HOME` overrides both. Used by screenshot CI and
+///   integration tests to redirect the entire app state directory at a
+///   throwaway location, and as an escape hatch when you want a debug
+///   build to read prod data (note: writes will mutate prod state).
 pub fn photosift_home() -> PathBuf {
     if let Ok(custom) = std::env::var("PHOTOSIFT_HOME") {
         if !custom.is_empty() {
             return PathBuf::from(custom);
         }
     }
+    let dir_name = if cfg!(debug_assertions) {
+        ".photosift-dev"
+    } else {
+        ".photosift"
+    };
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".photosift")
+        .join(dir_name)
 }
 
 /// ~/.photosift/cache/{shoot_id}/
