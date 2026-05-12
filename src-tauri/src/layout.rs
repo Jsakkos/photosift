@@ -17,6 +17,10 @@
 //!   Export/           flag='pick', destination='export'    (ready for direct publish)
 //! ```
 //!
+//! The bucket folder names above are the defaults — they're configurable
+//! globally via `settings.folder_template` (see `crate::folder_template`),
+//! so a sync may target e.g. `RAW/discards/` instead of `RAW/rejects/`.
+//!
 //! `sync_shoot_layout` is the sole mover. It reads truth from the DB,
 //! moves each photo, writes a fresh XMP sidecar at the new location
 //! reflecting the current `(rating, flag, destination)`, and updates
@@ -28,24 +32,10 @@
 //! "done" enough to actually move files.
 
 use crate::db::schema::Database;
+use crate::folder_template::Buckets;
 use crate::metadata::xmp;
 use rusqlite::Result as SqlResult;
 use std::path::PathBuf;
-
-/// Subfolder (relative to the shoot root) that a photo should live in,
-/// based on its cull metadata. Reject/select/edit buckets nest under
-/// `RAW/`; export gets a top-level `Export/` folder so publishable
-/// artifacts sit apart from the working RAW tree.
-pub fn target_subdir_for(flag: &str, destination: &str) -> &'static str {
-    match (flag, destination) {
-        ("reject", _) => "RAW/rejects",
-        ("pick", "edit") => "RAW/edit",
-        ("pick", "export") => "Export",
-        ("pick", _) => "RAW/selects",
-        // unreviewed (or any unexpected state) stays in the import bucket.
-        _ => "RAW",
-    }
-}
 
 #[derive(Debug, Default, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,13 +114,22 @@ pub fn sync_shoot_layout(db: &Database, shoot_id: i64) -> Result<SyncReport, Str
         .ok_or_else(|| format!("shoot {} not found", shoot_id))?;
     let shoot_root = PathBuf::from(&shoot.dest_path);
 
+    // Bucket folder names come from the global settings (#10) — applied
+    // on every sync, so renaming a bucket relocates files on the next
+    // run. A fresh DB has no `folder_template` row, which reads back as
+    // `Buckets::default()` (`RAW`/`rejects`/`selects`/`edit`/`Export`).
+    let buckets: Buckets = db
+        .get_settings()
+        .map(|s| s.folder_template.buckets)
+        .unwrap_or_default();
+
     let photos = db.photos_for_shoot(shoot_id).map_err(|e| e.to_string())?;
     let mut report = SyncReport::default();
 
     for p in photos {
         let raw_path = PathBuf::from(&p.raw_path);
-        let target_subdir = target_subdir_for(&p.flag, &p.destination);
-        let target_path = shoot_root.join(target_subdir).join(&p.filename);
+        let target_subdir = buckets.subdir_for(&p.flag, &p.destination);
+        let target_path = shoot_root.join(&target_subdir).join(&p.filename);
 
         if raw_path == target_path {
             // File is already at its target folder, but the stars or
@@ -319,15 +318,8 @@ mod tests {
         (shoot_id, ids, shoot_root)
     }
 
-    #[test]
-    fn target_subdir_for_covers_all_states() {
-        assert_eq!(target_subdir_for("unreviewed", "unrouted"), "RAW");
-        assert_eq!(target_subdir_for("reject", "unrouted"), "RAW/rejects");
-        assert_eq!(target_subdir_for("reject", "edit"), "RAW/rejects");
-        assert_eq!(target_subdir_for("pick", "unrouted"), "RAW/selects");
-        assert_eq!(target_subdir_for("pick", "edit"), "RAW/edit");
-        assert_eq!(target_subdir_for("pick", "export"), "Export");
-    }
+    // Bucket-name → subdir mapping is covered by `folder_template`'s
+    // own unit tests (`default_bucket_subdirs`, `custom_bucket_subdirs`).
 
     #[test]
     fn sync_distributes_files_by_metadata() {
@@ -674,7 +666,7 @@ mod tests {
         assert_eq!(report.moved.len(), 1, "RAW move recorded");
 
         // Layout module joins subdir + filename in two steps, leaving
-        // the embedded forward slashes from `target_subdir_for` intact.
+        // the embedded forward slashes from `Buckets::subdir_for` intact.
         // Match that construction so string equality holds.
         let raw_target = shoot_root.join("RAW/rejects").join("DSCF0123.RAF");
         let jpeg_target = shoot_root.join("RAW/rejects").join("DSCF0123.JPG");

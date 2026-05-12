@@ -2,8 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../stores/settingsStore";
+import type { FolderTemplate } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
 import { useAiStore } from "../stores/aiStore";
+import { FolderLayoutEditor } from "./FolderLayoutEditor";
+import { validateFolderTemplate } from "../lib/folderTemplate";
 import type { AiProviderStatus, ApiKeyStatus, CuratorProvider } from "../types";
 import {
   clearCuratorApiKey,
@@ -72,6 +75,9 @@ export function SettingsDialog() {
   const [curatorRunning, setCuratorRunning] = useState(false);
   const [curatorMsg, setCuratorMsg] = useState<string | null>(null);
   const [curatorEstimate, setCuratorEstimate] = useState<number | null>(null);
+  const [folderTemplate, setFolderTemplate] = useState<FolderTemplate>(
+    settings.folderTemplate,
+  );
 
   /// Keychain status for the currently-selected provider. Local has no
   /// key so it always shows as "configured" (no auth needed).
@@ -118,6 +124,7 @@ export function SettingsDialog() {
       setModelLocal(settings.curatorModelLocal);
       setLocalBaseUrl(settings.curatorLocalBaseUrl);
       setCuratorMaxCostDollars((settings.curatorMaxCostPerShootCents / 100).toFixed(2));
+      setFolderTemplate(settings.folderTemplate);
       setLibraryRootError(null);
       setReclusterMsg(null);
       setReanalyzeMsg(null);
@@ -171,13 +178,15 @@ export function SettingsDialog() {
 
   if (!isOpen) return null;
 
+  const folderTemplateErrors = validateFolderTemplate(folderTemplate).all;
   const valid =
     nearDup >= 0 &&
     nearDup <= 64 &&
     related >= nearDup &&
     related <= 64 &&
     routeStar >= 0 &&
-    routeStar <= 5;
+    routeStar <= 5 &&
+    folderTemplateErrors.length === 0;
 
   const handleSave = async () => {
     const parsedDollars = parseFloat(curatorMaxCostDollars);
@@ -206,6 +215,7 @@ export function SettingsDialog() {
         curatorModelGemini: modelGemini,
         curatorModelLocal: modelLocal,
         curatorLocalBaseUrl: localBaseUrl,
+        folderTemplate,
       });
     } catch (e) {
       setLibraryRootError(String(e));
@@ -444,6 +454,8 @@ export function SettingsDialog() {
           </p>
         </div>
 
+        <FolderLayoutEditor value={folderTemplate} onChange={setFolderTemplate} />
+
         <div className="mb-4">
           <label className="block text-sm text-[var(--text-secondary)] mb-1">
             Near-duplicate threshold (hamming distance, 0–8 typical)
@@ -531,9 +543,17 @@ export function SettingsDialog() {
         </div>
 
         {!valid && (
-          <p className="text-red-400 text-sm mb-3">
-            Invalid values: thresholds within 0–64 (related ≥ near-duplicate), route star 0–5.
-          </p>
+          <div className="text-red-400 text-sm mb-3">
+            {folderTemplateErrors.length > 0 ? (
+              <ul className="list-disc list-inside space-y-0.5">
+                {folderTemplateErrors.map((e) => (
+                  <li key={e}>{e}</li>
+                ))}
+              </ul>
+            ) : (
+              "Invalid values: thresholds within 0–64 (related ≥ near-duplicate), route star 0–5."
+            )}
+          </div>
         )}
 
         {currentShoot && (
