@@ -59,6 +59,11 @@ impl ImportMode {
 
 /// Main import orchestrator. Runs on a background thread.
 /// Opens its own DB connection (WAL mode allows concurrent access).
+///
+/// `existing_shoot_id` selects the "add to existing shoot" path (#12): when
+/// `Some`, no shoot row is created — new files land under the existing shoot's
+/// folder (and its recorded import mode), and the shoot's pHash groups are
+/// rebuilt over the union of old + new photos.
 pub fn run_import(
     app: AppHandle,
     source: PathBuf,
@@ -66,6 +71,7 @@ pub fn run_import(
     import_mode: ImportMode,
     cancel: Arc<AtomicBool>,
     selected_paths: Option<Vec<PathBuf>>,
+    existing_shoot_id: Option<i64>,
 ) -> Result<i64, String> {
     let db = Database::open_global().map_err(|e| e.to_string())?;
     let db = Mutex::new(db);
@@ -106,24 +112,52 @@ pub fn run_import(
         }
     };
     let raw_bucket = folder_template.buckets.raw.clone();
-    let shoot_dir = match import_mode {
-        ImportMode::Copy => {
-            let lib_root = configured_lib_root.unwrap_or_else(copy::library_root);
-            copy::shoot_folder(&folder_template, &lib_root, &yyyy_mm, &slug)
+
+    // For "add to existing shoot" we adopt the existing shoot's folder and
+    // import mode rather than deriving a fresh canonical folder.
+    let existing_shoot = match existing_shoot_id {
+        Some(id) => {
+            let db_guard = db.lock().map_err(|e| e.to_string())?;
+            Some(
+                db_guard
+                    .get_shoot(id)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| format!("Shoot {} not found", id))?,
+            )
         }
-        ImportMode::InPlace => source.clone(),
+        None => None,
+    };
+    let import_mode = match &existing_shoot {
+        Some(s) => ImportMode::parse(&s.import_mode),
+        None => import_mode,
+    };
+    let shoot_dir = match &existing_shoot {
+        Some(s) => PathBuf::from(&s.dest_path),
+        None => match import_mode {
+            ImportMode::Copy => {
+                let lib_root = configured_lib_root.unwrap_or_else(copy::library_root);
+                copy::shoot_folder(&folder_template, &lib_root, &yyyy_mm, &slug)
+            }
+            ImportMode::InPlace => source.clone(),
+        },
     };
     let dest_path = shoot_dir.to_string_lossy().to_string();
 
-    let shoot_id = {
-        let db_guard = db.lock().map_err(|e| e.to_string())?;
-        let date = format!(
-            "{}-01",
-            &yyyy_mm
-        );
-        db_guard
-            .insert_shoot(&slug, &date, &source.to_string_lossy(), &dest_path, import_mode.as_str())
-            .map_err(|e| e.to_string())?
+    let shoot_id = match &existing_shoot {
+        Some(s) => s.id,
+        None => {
+            let db_guard = db.lock().map_err(|e| e.to_string())?;
+            let date = format!("{}-01", &yyyy_mm);
+            db_guard
+                .insert_shoot(
+                    &slug,
+                    &date,
+                    &source.to_string_lossy(),
+                    &dest_path,
+                    import_mode.as_str(),
+                )
+                .map_err(|e| e.to_string())?
+        }
     };
 
     let cache_dir = crate::db::schema::shoot_cache_dir(shoot_id);
@@ -275,6 +309,13 @@ pub fn run_import(
 
     {
         let db_guard = db.lock().map_err(|e| e.to_string())?;
+        // Adding a batch can change cluster membership for the whole shoot,
+        // so the groups are rebuilt from scratch over the union.
+        if existing_shoot.is_some() {
+            db_guard
+                .delete_all_groups_for_shoot(shoot_id)
+                .map_err(|e| e.to_string())?;
+        }
         for group in &groups {
             let group_id = db_guard
                 .create_group(shoot_id, group.group_type)
@@ -297,12 +338,18 @@ pub fn run_import(
         serde_json::json!({ "shootId": shoot_id }),
     );
 
-    // Update photo count
-    let photo_count = photo_ids.len();
+    // Update photo count. For an add-to-existing import the shoot row must
+    // reflect the union, not just this batch — recount from the photos table
+    // (cheap, runs once at the tail of an import).
+    let added_count = photo_ids.len();
     {
         let db_guard = db.lock().map_err(|e| e.to_string())?;
+        let total = db_guard
+            .photos_for_shoot(shoot_id)
+            .map(|v| v.len() as i64)
+            .unwrap_or(added_count as i64);
         db_guard
-            .update_shoot_photo_count(shoot_id, photo_count as i64)
+            .update_shoot_photo_count(shoot_id, total)
             .map_err(|e| e.to_string())?;
     }
 
@@ -310,7 +357,7 @@ pub fn run_import(
         "import-complete",
         ImportComplete {
             shoot_id,
-            photo_count,
+            photo_count: added_count,
             dedup_skipped,
         },
     );
@@ -561,7 +608,7 @@ fn process_one_file(
     })
 }
 
-fn derive_yyyy_mm(first_file: &Path) -> String {
+pub fn derive_yyyy_mm(first_file: &Path) -> String {
     if let Ok(ed) = exif::extract_exif(first_file) {
         if let Some(ref dt) = ed.capture_time {
             // EXIF date format: "2026-04-15 10:30:00" or "2026:04:15 10:30:00"

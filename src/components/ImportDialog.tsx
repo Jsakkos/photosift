@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useProjectStore } from "../stores/projectStore";
 import {
+  clearCuratorForShoot,
   estimateCuratorCostCents,
   formatCostCents,
   getCuratorApiKeyStatus,
+  getCuratorJudgmentsForShoot,
   startCuratorForShoot,
 } from "../lib/curatorApi";
 import type { DriveInfo } from "../types";
@@ -32,6 +35,10 @@ interface ImportDialogProps {
   onClose: () => void;
   onComplete: (shootId: number) => void;
   initialDrive?: DriveInfo | null;
+  /// When set, the dialog adds photos to this existing shoot (#12) instead
+  /// of creating a new one: no slug prompt, no import-mode toggle, and a
+  /// "re-run Curator" prompt after ingest if the shoot has judgments.
+  targetShoot?: { id: number; slug: string; date: string } | null;
 }
 
 type Source =
@@ -100,12 +107,19 @@ function PipelineRow({
   );
 }
 
-export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialogProps) {
+export function ImportDialog({
+  onClose,
+  onComplete,
+  initialDrive,
+  targetShoot,
+}: ImportDialogProps) {
+  const addMode = targetShoot != null;
+  const setToast = useProjectStore((s) => s.setToast);
   const { drives } = useDriveDetection();
   const [source, setSource] = useState<Source>(null);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [totalBytes, setTotalBytes] = useState(0);
-  const [slug, setSlug] = useState("");
+  const [slug, setSlug] = useState(targetShoot?.slug ?? "");
   const [slugDirty, setSlugDirty] = useState(false);
   const [importMode, setImportMode] = useState<ImportMode>("copy");
   const [importing, setImporting] = useState(false);
@@ -213,16 +227,37 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
     const unlistenComplete = listen<ImportComplete>("import-complete", (event) => {
       setImporting(false);
       setCancelling(false);
-      // Auto-start the curator on the new shoot if the user opted in
-      // for this import. Read the ref so we don't capture stale state.
-      if (curatorEnabledRef.current) {
-        startCuratorForShoot(event.payload.shootId).catch((e) => {
+      const shootId = event.payload.shootId;
+      if (addMode) {
+        // Adding a batch can change cluster membership and stale any cached
+        // Curator judgments — offer a one-click re-run if there are any.
+        getCuratorJudgmentsForShoot(shootId)
+          .then((judgments) => {
+            if (judgments.length === 0) return;
+            setToast(
+              `Added ${event.payload.photoCount} photo${event.payload.photoCount === 1 ? "" : "s"} — Curator judgments may be stale.`,
+              "info",
+              {
+                label: "Re-run Curator",
+                onClick: () => {
+                  clearCuratorForShoot(shootId)
+                    .then(() => startCuratorForShoot(shootId))
+                    .catch((e) => console.error("Failed to re-run curator:", e));
+                },
+              },
+            );
+          })
+          .catch(() => {});
+      } else if (curatorEnabledRef.current) {
+        // Auto-start the curator on the new shoot if the user opted in
+        // for this import. Read the ref so we don't capture stale state.
+        startCuratorForShoot(shootId).catch((e) => {
           // Don't block import success on curator start failure —
           // surface the error but let the import flow proceed.
           console.error("Failed to start curator:", e);
         });
       }
-      onComplete(event.payload.shootId);
+      onComplete(shootId);
     });
 
     const unlistenError = listen<string>("import-error", (event) => {
@@ -236,11 +271,11 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
       unlistenComplete.then((fn) => fn()).catch(() => {});
       unlistenError.then((fn) => fn()).catch(() => {});
     };
-  }, [importing, onComplete]);
+  }, [importing, onComplete, addMode, setToast]);
 
   const handleStart = useCallback(async () => {
     if (!source) return;
-    if (!slug.trim()) {
+    if (!addMode && !slug.trim()) {
       setError("Give this import a name.");
       return;
     }
@@ -248,22 +283,43 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
       setError("Select at least one photo to import.");
       return;
     }
+    const sourcePath =
+      source.kind === "drive" ? source.drive.mountPoint : source.path;
+
+    // Adding to an existing shoot: warn if the new batch's month doesn't
+    // match the shoot's, since that usually means the wrong folder.
+    if (addMode && targetShoot) {
+      try {
+        const derived = await invoke<string>("derive_import_year_month", {
+          sourcePath,
+        });
+        const shootMonth = targetShoot.date.slice(0, 7); // "YYYY-MM-01" -> "YYYY-MM"
+        if (derived !== shootMonth) {
+          const ok = window.confirm(
+            `These photos look like ${derived}, but "${targetShoot.slug}" is a ${shootMonth} shoot.\n\nAdd them to this shoot anyway?`,
+          );
+          if (!ok) return;
+        }
+      } catch {
+        // Non-fatal: if we can't derive the date, fall through and import.
+      }
+    }
+
     setError(null);
     setImporting(true);
     try {
-      const sourcePath =
-        source.kind === "drive" ? source.drive.mountPoint : source.path;
       await invoke("start_import", {
         sourcePath,
         slug: slug.trim(),
         importMode,
         selectedPaths,
+        existingShootId: targetShoot?.id ?? null,
       });
     } catch (e) {
       setError(String(e));
       setImporting(false);
     }
-  }, [source, slug, importMode, selectedPaths]);
+  }, [source, slug, importMode, selectedPaths, addMode, targetShoot]);
 
   // Photo count that will actually be imported, used for the curator
   // cost estimate. The new SD-card / folder browsers feed `selectedPaths`
@@ -299,9 +355,10 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
   };
 
   const importLabel = useMemo(() => {
-    if (selectedPaths.length === 0) return "Import";
-    return `Import ${selectedPaths.length} ${selectedPaths.length === 1 ? "photo" : "photos"}`;
-  }, [selectedPaths.length]);
+    const verb = addMode ? "Add" : "Import";
+    if (selectedPaths.length === 0) return verb;
+    return `${verb} ${selectedPaths.length} ${selectedPaths.length === 1 ? "photo" : "photos"}`;
+  }, [selectedPaths.length, addMode]);
 
   return (
     <div className="fixed inset-0 bg-black/55 flex items-center justify-center z-50">
@@ -317,7 +374,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
           className="text-[14px] font-semibold mb-4"
           style={{ color: "var(--color-fg)" }}
         >
-          Import
+          {addMode ? `Add photos to ${targetShoot!.slug}` : "Import"}
         </div>
 
         {!importing ? (
@@ -361,7 +418,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
               </div>
             )}
 
-            {source?.kind === "folder" && (
+            {source?.kind === "folder" && !addMode && (
               <div className="mb-4 mt-4">
                 <div
                   className="text-[11px] mb-[6px]"
@@ -419,7 +476,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
               </p>
             )}
 
-            {source && (
+            {source && !addMode && (
               <label
                 className="flex items-start gap-2 mb-4 cursor-pointer"
                 title={
@@ -488,7 +545,7 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
                 className="text-[11px] flex-shrink-0"
                 style={{ color: "var(--color-fg-dim)" }}
               >
-                Name
+                {addMode ? "Adding to" : "Name"}
               </div>
               <input
                 type="text"
@@ -497,8 +554,9 @@ export function ImportDialog({ onClose, onComplete, initialDrive }: ImportDialog
                   setSlug(e.target.value);
                   setSlugDirty(true);
                 }}
+                readOnly={addMode}
                 placeholder="e.g. 2026-03-05_nikon-d750"
-                className="flex-1 px-[10px] py-[6px] rounded-md text-[12px] font-mono"
+                className="flex-1 px-[10px] py-[6px] rounded-md text-[12px] font-mono read-only:opacity-70"
                 style={{
                   background: "var(--color-bg3)",
                   border: "1px solid var(--color-border)",
