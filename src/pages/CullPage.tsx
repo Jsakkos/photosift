@@ -11,6 +11,7 @@ import { TriageShell } from "../components/triage/TriageShell";
 import { SelectShell } from "../components/select/SelectShell";
 import { RouteShell } from "../components/route/RouteShell";
 import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
+import { FirstRunModal } from "../components/FirstRunModal";
 
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
@@ -248,6 +249,7 @@ export function CullPage() {
         <RouteShell />
       )}
       <ShortcutsOverlay />
+      <FirstRunModal view={currentView} />
     </div>
   );
 }
