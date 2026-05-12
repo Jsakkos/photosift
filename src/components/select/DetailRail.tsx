@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAiStore, sharpnessBadgeScore } from "../../stores/aiStore";
 import { FaceChip } from "../FaceChip";
-import { ExifChip, ScoreBar, Stars, ColorLabelRow } from "../primitives";
+import { ExifChip, ScoreBar, Stars } from "../primitives";
 import { verdictFor } from "../../lib/faceVerdict";
 import type { Face, ImageEntry } from "../../types";
 
@@ -148,18 +148,6 @@ export function DetailRail() {
           </div>
         )}
 
-        {/* Color label row — presentational only until the schema adds a
-            `photos.color_label` column + `set_color_label` Tauri command.
-            Docs: see plan file, "Open questions / follow-ups" section. */}
-        <div className="pt-2 border-t" style={{ borderColor: "var(--color-border)" }}>
-          <div
-            className="text-[10px] uppercase tracking-[0.6px] mb-2"
-            style={{ color: "var(--color-fg-mute)" }}
-          >
-            Color label
-          </div>
-          <ColorLabelRow value={null} />
-        </div>
       </div>
 
       <div
