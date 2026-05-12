@@ -6,6 +6,17 @@ interface Props {
   view: CullView;
 }
 
+interface EmptyCopy {
+  title: string;
+  body: string;
+  hint?: string;
+  /// Optional action button. When present, renders a primary button
+  /// below the body that invokes this callback. Used by the Select
+  /// branch's "all picks routed-eligible" case to give the user a
+  /// one-click jump to Route.
+  action?: { label: string; onClick: () => void };
+}
+
 /// Rendered in place of the loupe/filmstrip when the current view's
 /// filter matches no photos. Each view gets a message tailored to the
 /// expected next action so the blank screen doesn't read like a bug.
@@ -15,10 +26,17 @@ interface Props {
 export function EmptyViewState({ view }: Props) {
   const images = useProjectStore((s) => s.images);
   const selectMinStar = useProjectStore((s) => s.selectMinStar);
+  const setView = useProjectStore((s) => s.setView);
   const routeMinStar = useSettingsStore(
     (s) => s.settings.routeMinStar ?? 0,
   );
-  const { title, body, hint } = copy(view, images, routeMinStar, selectMinStar);
+  const { title, body, hint, action } = copy(
+    view,
+    images,
+    routeMinStar,
+    selectMinStar,
+    () => void setView("route"),
+  );
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-2 bg-[var(--bg-primary)] px-8">
       <p className="text-[var(--text-primary)] text-lg font-light">{title}</p>
@@ -27,6 +45,16 @@ export function EmptyViewState({ view }: Props) {
       </p>
       {hint && (
         <p className="text-[var(--text-secondary)]/60 text-xs mt-2">{hint}</p>
+      )}
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          className="mt-4 px-4 py-2 rounded-md text-sm font-medium cursor-pointer border-0"
+          style={{ background: "var(--color-accent)", color: "#1a1a1a" }}
+        >
+          {action.label}
+        </button>
       )}
     </div>
   );
@@ -37,7 +65,8 @@ function copy(
   images: { flag: string; destination: string; starRating: number }[],
   routeMinStar: number,
   selectMinStar: number,
-): { title: string; body: string; hint?: string } {
+  switchToRoute: () => void,
+): EmptyCopy {
   switch (view) {
     case "triage":
       return {
@@ -46,11 +75,31 @@ function copy(
           "Every photo has been reviewed. Switch to Select to compare picks within groups, or to Route to mark them for edit/publish.",
       };
     case "select": {
-      // Two reasons Select can be empty:
+      // Three reasons Select can be empty:
       //   (a) literally no picks yet — user hasn't triaged
-      //   (b) picks exist but were rejected or filtered (e.g. hide-soft
+      //   (b) all picks have cleared the routing threshold (#16) —
+      //       the Select gate skips them so the user knows to advance
+      //   (c) picks exist but were rejected or filtered (e.g. hide-soft
       //       threshold is hiding them)
       const picks = images.filter((i) => i.flag === "pick").length;
+      const routedReady =
+        routeMinStar > 0
+          ? images.filter(
+              (i) => i.flag === "pick" && i.starRating >= routeMinStar,
+            ).length
+          : 0;
+      // (b) — all picks ready to route. Show the action button so the
+      // user can jump straight to Route. This wins over the "below
+      // floor" branch below because in the all-routed case the picks
+      // ARE rated above any reasonable selectMinStar — claiming "none
+      // rated N★+" would be flat-out wrong.
+      if (picks > 0 && routedReady === picks) {
+        return {
+          title: "All picks ready to route",
+          body: `Every pick is rated ${routeMinStar}★ or higher. Switch to Route to assign destinations (Capture One or Export), or rate a pick down here to keep grading.`,
+          action: { label: "Open Route", onClick: switchToRoute },
+        };
+      }
       // Most common "empty Select" is the multi-pass floor sitting above
       // every rated photo. Point the user at the chips / bracket keys
       // instead of a filter they can't see.

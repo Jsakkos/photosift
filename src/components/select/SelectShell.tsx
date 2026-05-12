@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useProjectStore } from "../../stores/projectStore";
+import { useProjectStore, isRouteEligible } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { LoupeView } from "../LoupeView";
 import { HeatmapOverlay } from "../HeatmapOverlay";
@@ -29,18 +29,25 @@ function PassPills() {
   const selectMinStar = useProjectStore((s) => s.selectMinStar);
   const setSelectMinStar = useProjectStore((s) => s.setSelectMinStar);
   const selectRequiresPick = useSettingsStore((s) => s.settings.selectRequiresPick ?? false);
+  const routeMinStarGate = useSettingsStore((s) => s.settings.routeMinStar ?? 0);
 
+  // Pill counts must agree with what's actually shown in displayItems —
+  // exclude routed-eligible picks (#16) so the user doesn't see "★≥3 5"
+  // and then find an empty Select pool because all five are already
+  // routed-ready.
   const counts = useMemo(() => {
-    const eligible = images.filter((img) =>
-      selectRequiresPick ? img.flag === "pick" : img.flag !== "reject",
-    );
     const out = [0, 0, 0, 0, 0, 0];
-    for (const img of eligible) {
+    for (const img of images) {
+      const passesFlag = selectRequiresPick
+        ? img.flag === "pick"
+        : img.flag !== "reject";
+      if (!passesFlag) continue;
+      if (isRouteEligible(img, routeMinStarGate)) continue;
       const r = Math.max(0, Math.min(5, img.starRating));
       for (let n = 0; n <= r; n++) out[n]++;
     }
     return out;
-  }, [images, selectRequiresPick]);
+  }, [images, selectRequiresPick, routeMinStarGate]);
 
   return (
     <div

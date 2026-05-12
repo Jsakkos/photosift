@@ -193,3 +193,67 @@ describe("exitBracket", () => {
     expect(state.selectBracketSuppressedForGroup).toBe(group.id);
   });
 });
+
+describe("enterBracket — Wave 1 filter gates (#22 + #16)", () => {
+  test("respects active selectMinStar floor (#22)", () => {
+    // 0★ photo paired against 2★ photos in a ★≥2 bracket is the
+    // exact regression captured in issue #22.
+    const img1 = makeImage({ id: 1, flag: "pick", starRating: 0 });
+    const img2 = makeImage({ id: 2, flag: "pick", starRating: 2, qualityScore: 80 });
+    const img3 = makeImage({ id: 3, flag: "pick", starRating: 2, qualityScore: 70 });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+      { photoId: 3 },
+    ]);
+    seedSelectWithGroup([img1, img2, img3], group);
+    useProjectStore.setState({ selectMinStar: 2 });
+
+    useProjectStore.getState().enterBracket();
+
+    const state = useProjectStore.getState();
+    expect(state.selectBracket).not.toBeNull();
+    // 0★ photo (id=1) must NOT be in the bracket
+    expect(state.selectBracket!.seedOrder).not.toContain(1);
+    expect(state.selectBracket!.seedOrder.sort()).toEqual([2, 3]);
+  });
+
+  test("excludes routed-eligible picks (#16)", () => {
+    // routeMinStar default is 3; picks at ★≥3 are 'ready to route'
+    // and should not appear in subsequent Select brackets.
+    const img1 = makeImage({ id: 1, flag: "pick", starRating: 1, qualityScore: 90 });
+    const img2 = makeImage({ id: 2, flag: "pick", starRating: 1, qualityScore: 80 });
+    const img3 = makeImage({ id: 3, flag: "pick", starRating: 4 });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+      { photoId: 3 },
+    ]);
+    seedSelectWithGroup([img1, img2, img3], group);
+
+    useProjectStore.getState().enterBracket();
+
+    const state = useProjectStore.getState();
+    expect(state.selectBracket).not.toBeNull();
+    expect(state.selectBracket!.seedOrder).not.toContain(3);
+    expect(state.selectBracket!.seedOrder.sort()).toEqual([1, 2]);
+  });
+
+  test("does not enter when fewer than 2 members survive both gates", () => {
+    // floor=3, all photos at ★0 — bracket must not enter (members.length < 2)
+    const img1 = makeImage({ id: 1, flag: "pick", starRating: 0 });
+    const img2 = makeImage({ id: 2, flag: "pick", starRating: 0 });
+    const img3 = makeImage({ id: 3, flag: "pick", starRating: 0 });
+    const group = makeGroup([
+      { photoId: 1, isCover: true },
+      { photoId: 2 },
+      { photoId: 3 },
+    ]);
+    seedSelectWithGroup([img1, img2, img3], group);
+    useProjectStore.setState({ selectMinStar: 3 });
+
+    useProjectStore.getState().enterBracket();
+
+    expect(useProjectStore.getState().selectBracket).toBeNull();
+  });
+});

@@ -133,6 +133,14 @@ describe("Select multi-pass star-rating filter", () => {
     // tracking. Only one photo visible, so visiting it triggers the
     // bump; clamp prevents going above 5.
     setupMockIpc();
+    // Disable the routed-skip gate (#16) for this test so the recomputed
+    // displayItems still contains the photo at ★5 — otherwise the
+    // routed-skip would empty the list and maybeBumpFloor would early-
+    // return at `displayItems.length === 0`. The clamp-at-5 invariant
+    // is the thing under test here; routed-skip is covered separately.
+    useSettingsStore.setState((s) => ({
+      settings: { ...s.settings, routeMinStar: 0 },
+    }));
 
     const images = [makeImage({ id: 1, flag: "pick", starRating: 4 })];
     seedSelect(images, 4);
@@ -178,5 +186,105 @@ describe("Select multi-pass star-rating filter", () => {
     // Simulate what loadShoot does before its initial compute.
     useProjectStore.setState({ selectMinStar: 0 });
     expect(useProjectStore.getState().selectMinStar).toBe(0);
+  });
+});
+
+describe("Select view — routed-skip gate (#16)", () => {
+  test("picks at-or-above routeMinStar are excluded from displayItems", () => {
+    const images = [
+      makeImage({ id: 1, flag: "pick", starRating: 1 }),
+      makeImage({ id: 2, flag: "pick", starRating: 4 }), // routed-eligible
+    ];
+    const items = computeDisplayItems(
+      images,
+      "select",
+      [],
+      new Set(),
+      true,
+      /* routeMinStarGate */ 3,
+      undefined,
+      false,
+      0,
+    );
+    expect(items.map((i) => i.image.id)).toEqual([1]);
+  });
+
+  test("manually rating a routed-eligible pick down re-includes it", () => {
+    const images = [
+      makeImage({ id: 1, flag: "pick", starRating: 4 }),
+    ];
+    // First confirm it's hidden at routeMinStar=3
+    expect(
+      computeDisplayItems(
+        images,
+        "select",
+        [],
+        new Set(),
+        true,
+        3,
+        undefined,
+        false,
+        0,
+      ).map((i) => i.image.id),
+    ).toEqual([]);
+
+    // Rate down to 2, below threshold → should reappear
+    images[0] = { ...images[0], starRating: 2 };
+    expect(
+      computeDisplayItems(
+        images,
+        "select",
+        [],
+        new Set(),
+        true,
+        3,
+        undefined,
+        false,
+        0,
+      ).map((i) => i.image.id),
+    ).toEqual([1]);
+  });
+
+  test("routeMinStar=0 disables the routed-skip", () => {
+    // When the threshold is 0 (no gate) every pick should remain
+    // visible regardless of star rating, matching Route view behavior.
+    const images = [
+      makeImage({ id: 1, flag: "pick", starRating: 4 }),
+      makeImage({ id: 2, flag: "pick", starRating: 5 }),
+    ];
+    const items = computeDisplayItems(
+      images,
+      "select",
+      [],
+      new Set(),
+      true,
+      0,
+      undefined,
+      false,
+      0,
+    );
+    expect(items.map((i) => i.image.id)).toEqual([1, 2]);
+  });
+
+  test("rejects are unaffected by the routed-skip gate", () => {
+    // The routed-skip applies only to flag='pick'. Rejected photos
+    // are filtered by the existing flag filter, not this gate.
+    const images = [
+      makeImage({ id: 1, flag: "reject", starRating: 4 }),
+      makeImage({ id: 2, flag: "pick", starRating: 4 }),
+    ];
+    const items = computeDisplayItems(
+      images,
+      "select",
+      [],
+      new Set(),
+      true,
+      3,
+      undefined,
+      false,
+      0,
+    );
+    // Both excluded — reject by flag filter, pick by routed-skip
+    expect(items.map((i) => i.image.id)).toEqual([]);
   });
 });
