@@ -98,14 +98,18 @@ pub fn run_import(
     // Copy mode derives a canonical folder under the user's library root;
     // in-place mode registers files where they are and records the source
     // folder as the effective dest_path.
-    let configured_lib_root: Option<PathBuf> = {
+    let (configured_lib_root, folder_template): (Option<PathBuf>, crate::folder_template::FolderTemplate) = {
         let db_guard = db.lock().map_err(|e| e.to_string())?;
-        db_guard.get_settings().ok().and_then(|s| s.library_root.map(PathBuf::from))
+        match db_guard.get_settings() {
+            Ok(s) => (s.library_root.map(PathBuf::from), s.folder_template),
+            Err(_) => (None, crate::folder_template::FolderTemplate::default()),
+        }
     };
+    let raw_bucket = folder_template.buckets.raw.clone();
     let shoot_dir = match import_mode {
         ImportMode::Copy => {
             let lib_root = configured_lib_root.unwrap_or_else(copy::library_root);
-            copy::shoot_folder(&lib_root, &yyyy_mm, &slug)
+            copy::shoot_folder(&folder_template, &lib_root, &yyyy_mm, &slug)
         }
         ImportMode::InPlace => source.clone(),
     };
@@ -142,6 +146,7 @@ pub fn run_import(
             let result = process_one_file(
                 item,
                 &shoot_dir,
+                &raw_bucket,
                 &previews_dir,
                 &thumbs_dir,
                 &db,
@@ -316,6 +321,7 @@ pub fn run_import(
 fn process_one_file(
     item: &ImportItem,
     shoot_dir: &Path,
+    raw_bucket: &str,
     previews_dir: &Path,
     thumbs_dir: &Path,
     db: &Mutex<Database>,
@@ -376,7 +382,7 @@ fn process_one_file(
     let t_copy_hash = Instant::now();
     let (raw_path, content_hash, copy_made) = match import_mode {
         ImportMode::Copy => {
-            let dest = copy::plan_dest(shoot_dir, &filename);
+            let dest = copy::plan_dest(shoot_dir, raw_bucket, &filename);
             match copy::copy_with_hash(src_path, &dest) {
                 Ok((p, h)) => (p, h, true),
                 Err(e) => {
@@ -685,6 +691,7 @@ mod tests {
             match process_one_file(
                 item,
                 &shoot_root,
+                "RAW",
                 &previews_dir,
                 &thumbs_dir,
                 &db_mutex,

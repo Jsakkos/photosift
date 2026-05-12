@@ -1,6 +1,6 @@
 import { useProjectStore } from "../projectStore";
 import { computeDisplayItems } from "../projectStore";
-import { useSettingsStore } from "../settingsStore";
+import { useSettingsStore, DEFAULT_FOLDER_TEMPLATE } from "../settingsStore";
 import { setupMockIpc } from "../../test/mockIpc";
 import { makeImage, makeShoot, resetIds } from "../../test/fixtures";
 
@@ -29,6 +29,7 @@ beforeEach(() => {
       curatorModelGemini: "gemini-2.5-flash",
       curatorModelLocal: "",
       curatorLocalBaseUrl: "http://localhost:11434/v1",
+      folderTemplate: DEFAULT_FOLDER_TEMPLATE,
     },
   });
 });
