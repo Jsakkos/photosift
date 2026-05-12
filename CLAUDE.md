@@ -102,6 +102,7 @@ sqlite3 ~/.photosift/photosift.db
 
 ## Testing Notes
 
+- **Always verify your own work before reporting it done or asking the user to test.** Use a layered approach, in order: (1) `cargo test` + `npm run test:run` + `npx tsc --noEmit` for any code change; (2) for UI changes, drive the running app via `tauri-mcp` (`cargo tauri dev` — or run `cargo run --no-default-features` from `src-tauri` if vite is already up on :1420 — then use the `mcp__tauri-mcp__*` tools to navigate, exercise the feature, and screenshot the key states), or fall back to native screenshots if the bridge won't connect; (3) for backend/filesystem behavior, exercise it via tests or a CLI repro. Only after that should you summarize what you actually observed. Don't say "this works" or "done" on the strength of the diff alone, and don't push verification onto the user when you can run it yourself.
 - Always test import with real D750 NEF files. The embedded JPEG preview extraction and pHash computation depend on the specific RAW format.
 - Perceptual hash grouping thresholds (≤4 near-duplicate, 5-12 related) may need tuning with real-world bursts. Make thresholds configurable constants, not magic numbers.
 - Preview preloading should be tested with shoots of 200+ images to verify memory behavior.
