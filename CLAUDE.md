@@ -84,6 +84,8 @@ Each "pass" is a view preset (filter + available actions), not a separate mode:
 | Select | `flag != reject` | Expanded + comparison | `P` pick (auto-rejects group), `Tab` 2-up |
 | Route | `flag = pick` | None | Mouse-driven: select photos, pick Capture One / Export from the Route dropdown. No per-view hotkeys; `Ctrl+E` still exports XMP sidecars. |
 
+The first time a user enters each view, `FirstRunModal` shows a one-time explainer (gated by `settings.onboarded_triage` / `_select` / `_route`; dismissed via Esc or "Got it"). "Replay tour" in the `?` shortcuts overlay re-arms all three. Keep the modal copy in sync with the bindings in `src/hooks/useKeyboardNav.ts` and the table in `src/components/ShortcutsOverlay.tsx`.
+
 ## Common Tasks
 
 ```bash

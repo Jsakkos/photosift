@@ -75,6 +75,12 @@ export interface Settings {
   curatorLocalBaseUrl: string;
   /// Configurable shoot-folder layout — path template + bucket names.
   folderTemplate: FolderTemplate;
+  /// First-run guidance modals (#13): whether the user has dismissed
+  /// the one-time explainer for each culling view. "Replay tour" in the
+  /// shortcuts overlay resets all three to false.
+  onboardedTriage: boolean;
+  onboardedSelect: boolean;
+  onboardedRoute: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -97,6 +103,9 @@ const DEFAULT_SETTINGS: Settings = {
   curatorModelLocal: "",
   curatorLocalBaseUrl: "http://localhost:11434/v1",
   folderTemplate: DEFAULT_FOLDER_TEMPLATE,
+  onboardedTriage: false,
+  onboardedSelect: false,
+  onboardedRoute: false,
 };
 
 interface SettingsState {
