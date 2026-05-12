@@ -1,6 +1,39 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 
+/// Configurable shoot-folder layout (#10). Mirrors the Rust
+/// `folder_template::FolderTemplate`. Applied globally: the path
+/// template is used when a shoot is imported; bucket names are read on
+/// every layout sync, so renaming a bucket relocates files on the next
+/// sync.
+export interface FolderTemplate {
+  /// Tokens: {root} {year} {year-month} {slug}. Must include {slug}.
+  pathTemplate: string;
+  buckets: {
+    /// Import bucket — every RAW lands here on import.
+    raw: string;
+    /// flag = reject. Nested under `raw`.
+    rejects: string;
+    /// flag = pick, destination = unrouted. Nested under `raw`.
+    selects: string;
+    /// flag = pick, destination = edit. Nested under `raw`.
+    edit: string;
+    /// flag = pick, destination = export. Top-level sibling of `raw`.
+    export: string;
+  };
+}
+
+export const DEFAULT_FOLDER_TEMPLATE: FolderTemplate = {
+  pathTemplate: "{root}/DSLR/{year}/{year-month}_{slug}",
+  buckets: {
+    raw: "RAW",
+    rejects: "rejects",
+    selects: "selects",
+    edit: "edit",
+    export: "Export",
+  },
+};
+
 export interface Settings {
   nearDupThreshold: number;
   relatedThreshold: number;
@@ -40,6 +73,8 @@ export interface Settings {
   /// OpenAI-compatible base URL for the local provider, including the
   /// `/v1` suffix. Defaults to Ollama's port.
   curatorLocalBaseUrl: string;
+  /// Configurable shoot-folder layout — path template + bucket names.
+  folderTemplate: FolderTemplate;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -61,6 +96,7 @@ const DEFAULT_SETTINGS: Settings = {
   curatorModelGemini: "gemini-2.5-flash",
   curatorModelLocal: "",
   curatorLocalBaseUrl: "http://localhost:11434/v1",
+  folderTemplate: DEFAULT_FOLDER_TEMPLATE,
 };
 
 interface SettingsState {

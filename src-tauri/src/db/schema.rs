@@ -235,6 +235,11 @@ pub struct Settings {
     /// Studio, vLLM, llama.cpp). Defaults to Ollama's port. Must end
     /// with `/v1` — provider code appends `/chat/completions` etc.
     pub curator_local_base_url: String,
+    /// Configurable shoot-folder layout — the import path template and
+    /// the bucket folder names. Applied globally; see
+    /// `crate::folder_template`. Stored as JSON in the `folder_template`
+    /// column; a NULL or unparseable value falls back to the default.
+    pub folder_template: crate::folder_template::FolderTemplate,
 }
 
 impl Default for Settings {
@@ -258,6 +263,7 @@ impl Default for Settings {
             curator_model_gemini: crate::curator::default_model_for("gemini").to_string(),
             curator_model_local: crate::curator::default_model_for("local").to_string(),
             curator_local_base_url: "http://localhost:11434/v1".to_string(),
+            folder_template: crate::folder_template::FolderTemplate::default(),
         }
     }
 }
@@ -572,6 +578,10 @@ impl Database {
             "curator_local_base_url",
             "TEXT NOT NULL DEFAULT 'http://localhost:11434/v1'",
         )?;
+        // Configurable folder template (#10). Nullable: a NULL or
+        // unparseable value is read back as `FolderTemplate::default()`,
+        // so we don't need to bake the default JSON into the schema.
+        self.ensure_column("settings", "folder_template", "TEXT")?;
         // Destination enum consolidation (2026-04): the Route pass merged
         // `dxo` into `edit` (one "ready to edit" bucket) and renamed
         // `publish_direct` to `export`. Gate on `PRAGMA user_version` so we
@@ -1775,7 +1785,7 @@ impl Database {
                         curator_default_run_on_import, curator_model,
                         curator_max_cost_per_shoot_cents,
                         curator_provider, curator_model_anthropic, curator_model_gemini,
-                        curator_model_local, curator_local_base_url
+                        curator_model_local, curator_local_base_url, folder_template
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
@@ -1798,6 +1808,12 @@ impl Database {
                         curator_model_gemini: row.get(15)?,
                         curator_model_local: row.get(16)?,
                         curator_local_base_url: row.get(17)?,
+                        // NULL or unparseable JSON → fall back to the
+                        // default layout rather than failing the read.
+                        folder_template: row
+                            .get::<_, Option<String>>(18)?
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                            .unwrap_or_default(),
                     })
                 },
             )
@@ -1813,9 +1829,9 @@ impl Database {
                                    curator_default_run_on_import, curator_model,
                                    curator_max_cost_per_shoot_cents,
                                    curator_provider, curator_model_anthropic, curator_model_gemini,
-                                   curator_model_local, curator_local_base_url)
+                                   curator_model_local, curator_local_base_url, folder_template)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                     ?14, ?15, ?16, ?17, ?18)
+                     ?14, ?15, ?16, ?17, ?18, ?19)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
@@ -1834,7 +1850,8 @@ impl Database {
                 curator_model_anthropic = excluded.curator_model_anthropic,
                 curator_model_gemini = excluded.curator_model_gemini,
                 curator_model_local = excluded.curator_model_local,
-                curator_local_base_url = excluded.curator_local_base_url",
+                curator_local_base_url = excluded.curator_local_base_url,
+                folder_template = excluded.folder_template",
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
@@ -1854,6 +1871,8 @@ impl Database {
                 s.curator_model_gemini,
                 s.curator_model_local,
                 s.curator_local_base_url,
+                serde_json::to_string(&s.folder_template)
+                    .unwrap_or_else(|_| serde_json::to_string(&crate::folder_template::FolderTemplate::default()).unwrap()),
             ],
         )?;
         Ok(())

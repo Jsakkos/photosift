@@ -1,4 +1,4 @@
-import { useSettingsStore } from "../settingsStore";
+import { useSettingsStore, DEFAULT_FOLDER_TEMPLATE } from "../settingsStore";
 import { setupMockIpc } from "../../test/mockIpc";
 
 beforeEach(() => {
@@ -22,6 +22,7 @@ beforeEach(() => {
       curatorModelGemini: "gemini-2.5-flash",
       curatorModelLocal: "",
       curatorLocalBaseUrl: "http://localhost:11434/v1",
+      folderTemplate: DEFAULT_FOLDER_TEMPLATE,
     },
     isLoaded: false,
     isOpen: false,

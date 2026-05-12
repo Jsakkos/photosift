@@ -3,6 +3,7 @@ mod commands;
 mod curator;
 mod db;
 mod drives;
+mod folder_template;
 mod ingest;
 mod layout;
 mod metadata;

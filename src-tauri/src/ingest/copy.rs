@@ -1,21 +1,34 @@
+use crate::folder_template::FolderTemplate;
 use sha2::{Digest, Sha256};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
-/// Build the destination path for a file within a shoot folder: {shoot_folder}/RAW/{filename}
-pub fn plan_dest(shoot_folder: &Path, filename: &str) -> PathBuf {
-    shoot_folder.join("RAW").join(filename)
+/// Build the destination path for a file within a shoot folder:
+/// `{shoot_folder}/{raw_bucket}/{filename}`. `raw_bucket` is the
+/// configured import-bucket name (default `RAW`).
+pub fn plan_dest(shoot_folder: &Path, raw_bucket: &str, filename: &str) -> PathBuf {
+    shoot_folder.join(raw_bucket).join(filename)
 }
 
-/// Derive the shoot folder path, appending _2, _3 etc. if the folder already exists.
-pub fn shoot_folder(library_root: &Path, yyyy_mm: &str, slug: &str) -> PathBuf {
-    let yyyy = &yyyy_mm[..4];
-    let base = format!("{}_{}", yyyy_mm, slug);
-    let parent = library_root.join("DSLR").join(yyyy);
-    let candidate = parent.join(&base);
+/// Resolve the shoot folder path from the configured path template,
+/// appending `_2`, `_3`, ... if a folder with that name already exists.
+pub fn shoot_folder(
+    template: &FolderTemplate,
+    library_root: &Path,
+    yyyy_mm: &str,
+    slug: &str,
+) -> PathBuf {
+    let candidate = template.resolve_shoot_dir(library_root, yyyy_mm, slug);
     if !candidate.exists() {
         return candidate;
     }
+    // Disambiguate by suffixing the last path segment (the shoot-folder
+    // name) — e.g. `2026-05_greece` → `2026-05_greece_2`.
+    let parent = candidate.parent().unwrap_or(Path::new("."));
+    let base = candidate
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{}_{}", yyyy_mm, slug));
     for i in 2..100 {
         let suffixed = parent.join(format!("{}_{}", base, i));
         if !suffixed.exists() {
