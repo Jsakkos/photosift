@@ -1,59 +1,41 @@
 # PhotoSift — Future Work
 
-Items flagged after shipping Phase A–E (settings panel, pHash config, XMP import/export, manual groups, triage-expand) on 2026-04-16. Add your own action items below.
-
-## 1. Stricter per-view filter gates (user-configurable)
-
-The current view filters don't match the intended mental model:
-
-| View    | Current filter                              | Intended filter                          |
-|---------|---------------------------------------------|------------------------------------------|
-| Triage  | `flag = unreviewed`                         | same (pick/reject gate)                  |
-| Select  | `flag != reject` (picks + unreviewed)       | `flag = pick` only (must pass triage)    |
-| Route   | `flag = pick && destination = unrouted`     | `flag = pick && star >= 3 && unrouted`   |
-
-Implication: stars become part of the Select pass, not post-edit. `PhotoSift_Spec.md` currently says stars are post-edit — the spec needs to be updated (or the divergence called out explicitly).
-
-**Why:** Stricter progressive-narrowing pipeline — each pass fully qualifies a photo before it's eligible for the next pass.
-
-**Approach:** Add two fields to the `settings` table + Zustand settings store:
-- `select_requires_pick` (default `true`) — Select view filters `flag = pick`
-- `route_min_star` (default `3`, `0` disables) — Route view adds `star_rating >= N`
-
-Update `computeDisplayItems` in `src/stores/projectStore.ts` (select branch ~line 98, route branch ~line 116) to read these. Surface in `SettingsDialog.tsx` as two extra controls. Extend `computeDisplayItems.test.ts` for the new gates.
+Forward-looking action items. Shipped work is logged at the bottom.
 
 ---
 
-## 2. Shortcut reference + tooltips
+## Open items
 
-`src/components/ShortcutHints.tsx` already exists, bound to `?`. It's **incomplete** — missing recent additions: `,` (settings), `Ctrl+G` / `Ctrl+Shift+G` (group/ungroup), `Ctrl+E` (export XMP), comparison mode keys (`1`/`2`/`Tab`/`Shift+Tab`). Users don't know `?` opens it — no persistent hint anywhere in the UI.
+### 1. Complete the shortcuts overlay
 
-**Approach:**
-- Add the missing entries to `NAV_SHORTCUTS` / section arrays in `ShortcutHints.tsx` (group editing in `SELECT_SHORTCUTS`; global `,` and `Ctrl+E` in `NAV_SHORTCUTS`).
-- Add a small persistent footer hint (Toolbar or above Filmstrip): `Press ? for shortcuts` — subtle text, dismissible.
-- Add `title=` tooltips on every clickable button currently missing one. The gear icon and Group/Ungroup buttons already have titles; follow that pattern. Quick audit: most Toolbar / ViewSelector / GridView bulk-action buttons are bare.
+`src/components/ShortcutsOverlay.tsx` exists and is bound to `?` (and `,` opens settings), but it is still missing several shortcuts that `useKeyboardNav.ts` actually binds:
 
----
+- `Ctrl+E` — export XMP sidecars (global)
+- `Ctrl+G` / `Ctrl+Shift+G` — group / ungroup (Select view)
 
-## 3. Group expand/collapse in triage (keyboard + double-click)
+There is also no persistent on-screen hint that `?` opens the overlay — users have to discover it. Consider a subtle, dismissible "Press `?` for shortcuts" line in the toolbar or above the filmstrip.
 
-No way to expand a collapsed group from the keyboard in triage. The Phase A change made double-click on a GroupStack enter loupe mode; the intent is that double-click should expand the group (and a keyboard shortcut should do the same).
-
-**Design tension:** double-click currently routes to loupe everywhere (consistent gesture). Expanding is a different intent.
-
-**Recommended split:**
-- **Keyboard:** `Enter` on a focused GroupStack in triage (or select) expands inline; Enter again collapses. Scope this so in sequential/triage with a GroupStack focused, Enter = toggle-expand.
-- **Double-click:** Reserve for loupe globally, but special-case GroupStack — double-click on a *collapsed* group expands it; double-click on a thumb (or expanded member) enters loupe. Context-sensitive but readable.
-
-Reuse the Phase-D `expandedGroupIds: Set<number>` idea that was deferred in the original plan — add to `projectStore`, modify `computeDisplayItems` triage branch to emit members when the group's id is in the set. `Filmstrip.tsx` and `GridView.tsx` call the toggle action on GroupStack double-click / Enter.
-
-**Why:** The "Expand groups in triage by default" setting (Phase D) is all-or-nothing; per-group drill-down lets users stay in triage tempo while resolving individual bursts.
+While in there: audit every clickable button in `Toolbar.tsx`, `ViewSelector.tsx`, and the Grid bulk-action buttons for missing `title=` attributes (the gear icon and Group/Ungroup already have them — follow that pattern).
 
 ---
 
 ## Your action items
 
-1. Allow file import to be more configurable. I want to be able to set either import in-place, which will help me go through my existing files, or copy to library, for new photos. I need to be able to set the library location. Right now, we've been using an alternate location for testing, but that will not be the location I want for production.
-2. Add eye detection and sharpness viewing, like narrative select.
-3. Add face dectection and sharpness viewing like narrative select.
+Add your own here. Resolved items move to the Shipped log below.
 
+---
+
+## Shipped log
+
+### 2026-04-21 — UI overhaul, AI enrichment surface
+
+- **Per-view filter gates** (originally listed as future item #1) — `select_requires_pick` and `route_min_star` are first-class settings stored in the `settings` table and read by `computeDisplayItems` in `src/stores/projectStore.ts`. Exposed in `SettingsDialog.tsx` and covered by `src/stores/__tests__/computeDisplayItems.test.ts`.
+- **Group expand/collapse in triage** (originally listed as future item #3) — `expandedGroupIds: Set<number>` lives on `projectStore`. `computeDisplayItems` triage branch emits members when a group's id is in the set. Toggled from `GroupStack` interactions.
+- **Eye + sharpness viewing** (originally an action item) — `EyeStatusBadge`, `AiSharpnessBadge`, `AiSmileIcon`, and `FaceThumb` surface the per-photo AI verdicts in `select/DetailRail` and `triage/FacesRail`.
+- **Face detection viewing** (originally an action item) — `FaceChip`, `FaceThumb`, `triage/FacesRail`, and `HeatmapOverlay` (toggle with `H`) visualize face detections from the on-device AI worker.
+- **In-place vs copy import** (originally an action item) — `src/components/ImportDialog.tsx` has an `ImportMode = "copy" | "in_place"` selector. Library root + bucket folder names are user-configurable in Settings via `FolderLayoutEditor.tsx`, persisted to the `settings` table.
+- **Shortcut overlay (partial)** — `ShortcutsOverlay` exists and is keyboard-discoverable. Remaining gaps tracked above as open item #1.
+
+### 2026-04-16 — Phase A–E
+
+Initial settings panel, configurable pHash thresholds, XMP import/export, manual groups, triage-expand foundation.

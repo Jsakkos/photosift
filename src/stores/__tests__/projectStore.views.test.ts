@@ -27,6 +27,10 @@ beforeEach(() => {
       curatorModelLocal: "",
       curatorLocalBaseUrl: "http://localhost:11434/v1",
       folderTemplate: DEFAULT_FOLDER_TEMPLATE,
+      onboardedTriage: true,
+      onboardedSelect: true,
+      onboardedRoute: true,
+      onboardedWizard: true,
     },
   });
 });

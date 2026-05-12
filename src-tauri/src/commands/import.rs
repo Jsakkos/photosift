@@ -15,6 +15,10 @@ pub fn start_import(
     // falls back to the pre-C2 behavior of importing every supported file
     // under `source_path`.
     selected_paths: Option<Vec<String>>,
+    // When set, files are added to this existing shoot (#12) instead of
+    // creating a new one — the slug/import_mode args are then ignored in
+    // favour of the shoot's recorded values.
+    existing_shoot_id: Option<i64>,
     app: AppHandle,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
@@ -23,7 +27,8 @@ pub fn start_import(
         return Err("Source path is not a valid directory".into());
     }
 
-    if slug.trim().is_empty() {
+    // The slug is only used when creating a fresh shoot.
+    if existing_shoot_id.is_none() && slug.trim().is_empty() {
         return Err("Slug cannot be empty".into());
     }
 
@@ -45,7 +50,15 @@ pub fn start_import(
     // Clone state handle for the post-import hook.
     let app_for_ai = app.clone();
     std::thread::spawn(move || {
-        match ingest::run_import(app.clone(), source, slug_clean, mode, cancel_flag, selected) {
+        match ingest::run_import(
+            app.clone(),
+            source,
+            slug_clean,
+            mode,
+            cancel_flag,
+            selected,
+            existing_shoot_id,
+        ) {
             Ok(shoot_id) => {
                 log::info!("Import completed: shoot_id={}", shoot_id);
                 enqueue_ai_for_shoot(&app_for_ai, shoot_id);
@@ -58,6 +71,22 @@ pub fn start_import(
     });
 
     Ok(())
+}
+
+/// Preflight for "add to existing shoot": derive the YYYY-MM of the source
+/// folder's first photo so the UI can warn before committing when it doesn't
+/// match the target shoot's month.
+#[tauri::command]
+pub fn derive_import_year_month(source_path: String) -> Result<String, String> {
+    let source = PathBuf::from(&source_path);
+    if !source.is_dir() {
+        return Err("Source path is not a valid directory".into());
+    }
+    let items = ingest::pairing::pair(ingest::walker::walk_source(&source));
+    let first = items
+        .first()
+        .ok_or_else(|| "No supported image files found in source directory".to_string())?;
+    Ok(ingest::derive_yyyy_mm(first.primary_path()))
 }
 
 #[tauri::command]

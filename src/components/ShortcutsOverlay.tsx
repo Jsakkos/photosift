@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useProjectStore } from "../stores/projectStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import { Kbd } from "./primitives";
 
 // Source of truth for key bindings lives in src/hooks/useKeyboardNav.ts.
@@ -78,6 +79,25 @@ const SECTIONS: Section[] = [
 export function ShortcutsOverlay() {
   const show = useProjectStore((s) => s.showShortcutHints);
   const toggle = useProjectStore((s) => s.toggleShortcutHints);
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  const openWizardTour = useSettingsStore((s) => s.openWizardTour);
+
+  // "Replay tour" — re-arm the per-view first-run modals (#13) and
+  // close this overlay so the user lands back on the cull view.
+  const replayTour = () => {
+    void updateSettings({
+      onboardedTriage: false,
+      onboardedSelect: false,
+      onboardedRoute: false,
+    });
+    toggle();
+  };
+
+  // "Take the tour" — re-open the onboarding wizard at its three-pass step.
+  const takeTheTour = () => {
+    openWizardTour();
+    toggle();
+  };
 
   // Esc closes the overlay even when focus lives on the main shell.
   // The main keydown handler in useKeyboardNav already forwards `?`, so
@@ -130,15 +150,35 @@ export function ShortcutsOverlay() {
               Shortcuts
             </div>
           </div>
-          <button
-            type="button"
-            onClick={toggle}
-            className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent"
-            style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
-            aria-label="Close shortcuts"
-          >
-            Close · <Kbd>Esc</Kbd>
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={takeTheTour}
+              className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent underline"
+              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
+              title="Re-open the three-pass onboarding tour"
+            >
+              Take the tour
+            </button>
+            <button
+              type="button"
+              onClick={replayTour}
+              className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent underline"
+              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
+              title="Show the per-view first-run guidance again"
+            >
+              Replay tour
+            </button>
+            <button
+              type="button"
+              onClick={toggle}
+              className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent"
+              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
+              aria-label="Close shortcuts"
+            >
+              Close · <Kbd>Esc</Kbd>
+            </button>
+          </div>
         </div>
 
         <div

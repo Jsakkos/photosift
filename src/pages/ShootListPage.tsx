@@ -24,11 +24,13 @@ function ShootCard({
   progress,
   onOpen,
   onDelete,
+  onAddPhotos,
 }: {
   shoot: ShootSummary;
   progress?: { imported: number; total: number };
   onOpen: () => void;
   onDelete: (e: React.MouseEvent) => void;
+  onAddPhotos: (e: React.MouseEvent) => void;
 }) {
   const picks = shoot.picks ?? 0;
   const rejects = shoot.rejects ?? 0;
@@ -119,19 +121,34 @@ function ShootCard({
             {status === "routed" ? "✓ routed" : "triaged"}
           </div>
         )}
-        <button
-          type="button"
-          onClick={onDelete}
-          title="Delete shoot"
-          aria-label={`Delete shoot ${shoot.slug}`}
-          className="absolute top-2 left-2 w-6 h-6 flex items-center justify-center rounded-xs opacity-0 group-hover:opacity-100 transition-opacity"
-          style={{
-            background: "rgba(0,0,0,0.6)",
-            color: "var(--color-fg-dim)",
-          }}
-        >
-          ×
-        </button>
+        <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={onAddPhotos}
+            title="Add photos to this shoot"
+            aria-label={`Add photos to shoot ${shoot.slug}`}
+            className="w-6 h-6 flex items-center justify-center rounded-xs"
+            style={{
+              background: "rgba(0,0,0,0.6)",
+              color: "var(--color-fg-dim)",
+            }}
+          >
+            ＋
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            title="Delete shoot"
+            aria-label={`Delete shoot ${shoot.slug}`}
+            className="w-6 h-6 flex items-center justify-center rounded-xs"
+            style={{
+              background: "rgba(0,0,0,0.6)",
+              color: "var(--color-fg-dim)",
+            }}
+          >
+            ×
+          </button>
+        </div>
       </div>
       <div className="px-[14px] py-3">
         <div className="flex items-baseline justify-between mb-1 gap-3">
@@ -184,6 +201,7 @@ export function ShootListPage() {
   const openSettings = useSettingsStore((s) => s.openDialog);
   const navigate = useNavigate();
   const [showImport, setShowImport] = useState(false);
+  const [addTarget, setAddTarget] = useState<ShootSummary | null>(null);
   const [importingProgress, setImportingProgress] = useState<ImportingProgress>(new Map());
   const [query, setQuery] = useState("");
   const requestedDrive = useImportIntentStore((s) => s.requestedDrive);
@@ -275,6 +293,7 @@ export function ShootListPage() {
 
   return (
     <div
+      data-testid="shoot-list-page"
       className="h-screen w-screen flex flex-col overflow-hidden"
       style={{ background: "var(--color-bg)", color: "var(--color-fg)" }}
     >
@@ -387,6 +406,10 @@ export function ShootListPage() {
                 progress={importingProgress.get(shoot.id)}
                 onOpen={() => navigate(`/shoots/${shoot.id}`)}
                 onDelete={(e) => void handleDelete(shoot, e)}
+                onAddPhotos={(e) => {
+                  e.stopPropagation();
+                  setAddTarget(shoot);
+                }}
               />
             ))}
           </div>
@@ -413,6 +436,17 @@ export function ShootListPage() {
             setShowImport(false);
             clearImportRequest();
             navigate(`/shoots/${shootId}`);
+          }}
+        />
+      )}
+
+      {addTarget && (
+        <ImportDialog
+          targetShoot={{ id: addTarget.id, slug: addTarget.slug, date: addTarget.date }}
+          onClose={() => setAddTarget(null)}
+          onComplete={() => {
+            setAddTarget(null);
+            refresh();
           }}
         />
       )}

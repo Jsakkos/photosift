@@ -23,9 +23,14 @@ beforeEach(() => {
       curatorModelLocal: "",
       curatorLocalBaseUrl: "http://localhost:11434/v1",
       folderTemplate: DEFAULT_FOLDER_TEMPLATE,
+      onboardedTriage: true,
+      onboardedSelect: true,
+      onboardedRoute: true,
+      onboardedWizard: true,
     },
     isLoaded: false,
     isOpen: false,
+    wizardReplay: false,
   });
 });
 
@@ -67,6 +72,14 @@ describe("settingsStore", () => {
     expect(useSettingsStore.getState().isOpen).toBe(true);
     useSettingsStore.getState().closeDialog();
     expect(useSettingsStore.getState().isOpen).toBe(false);
+  });
+
+  test("openWizardTour / closeWizardTour flip wizardReplay", () => {
+    expect(useSettingsStore.getState().wizardReplay).toBe(false);
+    useSettingsStore.getState().openWizardTour();
+    expect(useSettingsStore.getState().wizardReplay).toBe(true);
+    useSettingsStore.getState().closeWizardTour();
+    expect(useSettingsStore.getState().wizardReplay).toBe(false);
   });
 
   test("reclusterShoot invokes recluster_shoot with shootId", async () => {
