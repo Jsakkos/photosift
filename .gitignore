@@ -30,3 +30,7 @@ target/tauri-mcp/
 
 # App data (never commit local database or caches)
 .photosift/
+.tools/
+
+# Claude Code runtime artifacts (per-session, never commit)
+.claude/*.lock

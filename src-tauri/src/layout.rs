@@ -174,6 +174,45 @@ pub fn sync_shoot_layout(db: &Database, shoot_id: i64) -> Result<SyncReport, Str
             continue;
         }
 
+        // Sibling JPEG (RAW+JPEG mode) follows the RAW into the same
+        // bucket so Capture One/DxO see the pair grouped on disk. We
+        // preserve the source extension casing (`.JPG` from Fuji,
+        // `.jpg` from others) — Windows is case-insensitive but Linux
+        // and macOS-on-APFS case-preserving environments would round-
+        // trip a case change as a bogus rename.
+        if let Some(ref jpeg_old) = p.sidecar_jpeg_path {
+            let jpeg_old_path = PathBuf::from(jpeg_old);
+            let jpeg_ext = jpeg_old_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("jpg");
+            let jpeg_new_path = target_path.with_extension(jpeg_ext);
+            if jpeg_old_path != jpeg_new_path {
+                if jpeg_old_path.exists() {
+                    if let Err(e) = std::fs::rename(&jpeg_old_path, &jpeg_new_path) {
+                        report.errors.push(format!(
+                            "rename sibling jpeg {} -> {}: {}",
+                            jpeg_old_path.display(),
+                            jpeg_new_path.display(),
+                            e
+                        ));
+                    } else if let Err(e) = db.update_sidecar_jpeg_path(
+                        p.id,
+                        Some(&jpeg_new_path.to_string_lossy()),
+                    ) {
+                        report.errors.push(format!(
+                            "db sidecar_jpeg_path update for {}: {}",
+                            p.id, e
+                        ));
+                    }
+                } else {
+                    report
+                        .missing
+                        .push(jpeg_old_path.to_string_lossy().into_owned());
+                }
+            }
+        }
+
         // Always (re)write the XMP at the destination so the sidecar
         // reflects current cull state (rating + PhotoSift destination;
         // the flag is carried by the folder itself). Clean up any stale
@@ -269,6 +308,7 @@ mod tests {
                 file_size_bytes: None,
                 initial_flag: None,
                 initial_star_rating: None,
+                sidecar_jpeg_path: None,
             });
         }
         let ids = db.insert_photos_batch(shoot_id, &inserts).unwrap();
@@ -570,5 +610,87 @@ mod tests {
         assert_eq!(db.get_select_max_floor(shoot_id).unwrap(), 2);
         db.bump_select_max_floor(shoot_id, 5).unwrap();
         assert_eq!(db.get_select_max_floor(shoot_id).unwrap(), 5);
+    }
+
+    /// RAW+JPEG mode: when a photo carries `sidecar_jpeg_path`, layout
+    /// sync moves the JPEG into the same bucket as the RAW and updates
+    /// the DB column to the new path.
+    #[test]
+    fn sync_moves_sibling_jpeg_with_raw() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let mut db = Database::open(&db_path).unwrap();
+
+        let shoot_root = dir.path().join("shoot");
+        let raw_dir = shoot_root.join("RAW");
+        fs::create_dir_all(&raw_dir).unwrap();
+
+        let shoot_id = db
+            .insert_shoot(
+                "test",
+                "2026-04-21",
+                dir.path().to_str().unwrap(),
+                shoot_root.to_str().unwrap(),
+                "copy",
+            )
+            .unwrap();
+
+        let raw_src = raw_dir.join("DSCF0123.RAF");
+        let jpeg_src = raw_dir.join("DSCF0123.JPG");
+        fs::write(&raw_src, b"fake raf").unwrap();
+        fs::write(&jpeg_src, b"fake jpg").unwrap();
+
+        let insert = PhotoInsert {
+            filename: "DSCF0123.RAF".into(),
+            raw_path: raw_src.to_string_lossy().into_owned(),
+            preview_path: "/fake/p.jpg".into(),
+            thumb_path: "/fake/t.jpg".into(),
+            content_hash: [9u8; 32],
+            phash: None,
+            exif_date: Some("2026-04-15 10:00:00".into()),
+            camera: None,
+            lens: None,
+            focal_length: None,
+            aperture: None,
+            shutter_speed: None,
+            iso: None,
+            orientation: None,
+            file_size_bytes: None,
+            initial_flag: None,
+            initial_star_rating: None,
+            sidecar_jpeg_path: Some(jpeg_src.to_string_lossy().into_owned()),
+        };
+        let ids = db.insert_photos_batch(shoot_id, &[insert]).unwrap();
+        let photo_id = ids[0];
+
+        db.set_flag(photo_id, "reject").unwrap();
+
+        let report = sync_shoot_layout(&db, shoot_id).unwrap();
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        assert_eq!(report.moved.len(), 1, "RAW move recorded");
+
+        // Layout module joins subdir + filename in two steps, leaving
+        // the embedded forward slashes from `target_subdir_for` intact.
+        // Match that construction so string equality holds.
+        let raw_target = shoot_root.join("RAW/rejects").join("DSCF0123.RAF");
+        let jpeg_target = shoot_root.join("RAW/rejects").join("DSCF0123.JPG");
+        assert!(raw_target.exists(), "RAW moved to rejects/");
+        assert!(jpeg_target.exists(), "JPEG followed RAW into rejects/");
+        assert!(!raw_src.exists(), "old RAW gone");
+        assert!(!jpeg_src.exists(), "old JPEG gone");
+
+        let row = db.get_photo_by_id(photo_id).unwrap();
+        assert_eq!(row.raw_path, raw_target.to_string_lossy());
+        assert_eq!(
+            row.sidecar_jpeg_path.as_deref(),
+            Some(jpeg_target.to_string_lossy().as_ref()),
+            "DB sidecar_jpeg_path tracks the new JPEG location"
+        );
+
+        // Idempotent — second run is a no-op for the JPEG too.
+        let report2 = sync_shoot_layout(&db, shoot_id).unwrap();
+        assert_eq!(report2.moved.len(), 0);
+        assert_eq!(report2.skipped_already_placed, 1);
+        assert!(report2.errors.is_empty());
     }
 }

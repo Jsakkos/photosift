@@ -152,6 +152,11 @@ pub struct PhotoRow {
     /// auto-reorganize trigger to decide whether the Select pass is far
     /// enough along to finalize the kept set into `selects/`.
     pub select_visited_at: Option<String>,
+    /// Path to a sibling JPEG that travels with this RAW (RAW+JPEG mode).
+    /// `None` for plain RAW or standalone JPEG photos. The sibling does
+    /// not get its own photo row — it follows the RAW through layout
+    /// moves so Capture One/DxO see it next to the RAW on disk.
+    pub sidecar_jpeg_path: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -354,6 +359,9 @@ pub struct PhotoInsert {
     pub initial_flag: Option<String>,
     /// Initial star rating from EXIF/XMP sidecar at import time.
     pub initial_star_rating: Option<i32>,
+    /// Path to a sibling JPEG (RAW+JPEG shoot mode). Stored on the RAW row;
+    /// no separate photo row is created for the JPEG.
+    pub sidecar_jpeg_path: Option<String>,
 }
 
 impl Database {
@@ -499,6 +507,10 @@ impl Database {
         // that's half of the Select→Route sync trigger.
         self.ensure_column("photos", "select_visited_at", "TEXT")?;
         self.ensure_column("photos", "file_size_bytes", "INTEGER")?;
+        // RAW+JPEG mode: when the camera writes a same-basename JPEG
+        // alongside the RAW, store its path here so layout sync can move
+        // them together.
+        self.ensure_column("photos", "sidecar_jpeg_path", "TEXT")?;
         // `shoots.select_max_floor_reached` is the other half — records
         // the highest pass-floor (selectMinStar) the user has ever bumped
         // to for this shoot, so "did they actually run a narrowing pass?"
@@ -843,8 +855,8 @@ impl Database {
                     shoot_id, filename, raw_path, preview_path, thumb_path,
                     content_hash, phash, exif_date, camera, lens,
                     focal_length, aperture, shutter_speed, iso, orientation,
-                    flag, star_rating, file_size_bytes
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                    flag, star_rating, file_size_bytes, sidecar_jpeg_path
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             )?;
             for p in photos {
                 let flag = p.initial_flag.clone().unwrap_or_else(|| "unreviewed".into());
@@ -868,6 +880,7 @@ impl Database {
                     flag,
                     rating,
                     p.file_size_bytes.map(|n| n as i64),
+                    p.sidecar_jpeg_path,
                 ])?;
                 ids.push(tx.last_insert_rowid());
             }
@@ -900,7 +913,7 @@ impl Database {
                     iso, orientation, flag, destination, star_rating,
                     face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
                     (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score,
-                    select_visited_at
+                    select_visited_at, sidecar_jpeg_path
              FROM photos WHERE id = ?1",
             params![photo_id],
             row_to_photo,
@@ -914,7 +927,7 @@ impl Database {
                     iso, orientation, flag, destination, star_rating,
                     face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
                     (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score,
-                    select_visited_at
+                    select_visited_at, sidecar_jpeg_path
              FROM photos
              WHERE shoot_id = ?1
              ORDER BY exif_date ASC NULLS LAST, id ASC",
@@ -937,7 +950,7 @@ impl Database {
                     iso, orientation, flag, destination, star_rating,
                     face_count, eyes_open_count, sharpness_score, quality_score, ai_analyzed_at,
                     (SELECT MAX(smile_score) FROM faces WHERE photo_id = photos.id) AS max_smile_score,
-                    select_visited_at
+                    select_visited_at, sidecar_jpeg_path
              FROM photos
              WHERE shoot_id = ?1 AND destination = ?2
              ORDER BY exif_date ASC NULLS LAST, id ASC",
@@ -1020,6 +1033,21 @@ impl Database {
         self.conn.execute(
             "UPDATE photos SET raw_path = ?2 WHERE id = ?1",
             params![photo_id, new_raw_path],
+        )?;
+        Ok(())
+    }
+
+    /// Update the on-disk location of the sibling JPEG after layout sync
+    /// has moved both files together. `new_path` is `None` only if the
+    /// JPEG was lost or removed; normal flow always writes a fresh path.
+    pub fn update_sidecar_jpeg_path(
+        &self,
+        photo_id: i64,
+        new_path: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE photos SET sidecar_jpeg_path = ?2 WHERE id = ?1",
+            params![photo_id, new_path],
         )?;
         Ok(())
     }
@@ -1900,6 +1928,7 @@ fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {
         ai_analyzed_at: row.get(21)?,
         max_smile_score: row.get(22)?,
         select_visited_at: row.get(23)?,
+        sidecar_jpeg_path: row.get(24)?,
     })
 }
 
@@ -1953,11 +1982,110 @@ pub(crate) mod tests {
             file_size_bytes: Some(1024),
             initial_flag: None,
             initial_star_rating: None,
+            sidecar_jpeg_path: None,
         }
     }
 
     pub(crate) fn sample_insert_for_test(hash_byte: u8, filename: &str) -> PhotoInsert {
         sample_insert(hash_byte, filename)
+    }
+
+    /// Contract: a paired RAW+JPG frame produces ONE photo row whose
+    /// `sidecar_jpeg_path` points at the JPG. The AI worker pulls work
+    /// from `photos_needing_ai`, which is a per-row query — the JPG is
+    /// metadata on the row, not its own row, so AI runs once per frame.
+    ///
+    /// Before this test, scan_folder used to emit the JPG as a separate
+    /// tile, the user would import both, and AI would run twice on what
+    /// was effectively the same image. This test guards against the
+    /// regression by inserting the post-fix shape and verifying that
+    /// photos_needing_ai counts each frame once.
+    #[test]
+    fn ai_worker_does_not_double_count_paired_raf_jpg() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("test", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+
+        let mut paired = sample_insert(0xAA, "DSCF0001.RAF");
+        paired.sidecar_jpeg_path = Some("/d/DSCF0001.JPG".into());
+        let lone_raw = sample_insert(0xBB, "DSCF0002.RAF");
+        let lone_jpg = sample_insert(0xCC, "wedding.jpg");
+
+        let ids = db
+            .insert_photos_batch(shoot_id, &[paired, lone_raw, lone_jpg])
+            .unwrap();
+        assert_eq!(ids.len(), 3, "three frames → three photo rows");
+
+        let needing = db.photos_needing_ai(shoot_id).unwrap();
+        assert_eq!(
+            needing.len(),
+            3,
+            "AI worker should see one work item per frame, not per file"
+        );
+    }
+
+    /// `sidecar_jpeg_path` is nullable, additive, and round-trips via
+    /// the typed insert/select API. Schema migrations from older DBs
+    /// already cover backfill (the column was added with no default
+    /// after `file_size_bytes`); this test guards the API path.
+    #[test]
+    fn sidecar_jpeg_path_round_trips_through_insert_and_select() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("test", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+
+        let mut with_sibling = sample_insert(0x11, "DSCF0010.RAF");
+        with_sibling.sidecar_jpeg_path = Some("/d/DSCF0010.JPG".into());
+        let without_sibling = sample_insert(0x22, "DSCF0011.RAF");
+
+        let ids = db
+            .insert_photos_batch(shoot_id, &[with_sibling, without_sibling])
+            .unwrap();
+
+        let p1 = db.get_photo_by_id(ids[0]).unwrap();
+        let p2 = db.get_photo_by_id(ids[1]).unwrap();
+        assert_eq!(p1.sidecar_jpeg_path.as_deref(), Some("/d/DSCF0010.JPG"));
+        assert_eq!(p2.sidecar_jpeg_path, None);
+
+        // photos_for_shoot must surface the field too — the import
+        // pipeline reads it during layout sync.
+        let photos = db.photos_for_shoot(shoot_id).unwrap();
+        let by_id: std::collections::HashMap<_, _> =
+            photos.iter().map(|p| (p.id, p)).collect();
+        assert_eq!(
+            by_id[&ids[0]].sidecar_jpeg_path.as_deref(),
+            Some("/d/DSCF0010.JPG")
+        );
+        assert_eq!(by_id[&ids[1]].sidecar_jpeg_path, None);
+    }
+
+    /// `update_sidecar_jpeg_path` is what `sync_shoot_layout` calls
+    /// after moving the JPG sibling into its new bucket. It must
+    /// accept both Some(new_path) (move case) and None (caller cleared
+    /// the linkage, e.g., after a manual JPG deletion).
+    #[test]
+    fn update_sidecar_jpeg_path_handles_some_and_none() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("test", "2026-04-15", "/s", "/d", "copy")
+            .unwrap();
+        let mut p = sample_insert(0x33, "DSCF0020.RAF");
+        p.sidecar_jpeg_path = Some("/d/RAW/DSCF0020.JPG".into());
+        let id = db.insert_photos_batch(shoot_id, &[p]).unwrap()[0];
+
+        db.update_sidecar_jpeg_path(id, Some("/d/RAW/rejects/DSCF0020.JPG"))
+            .unwrap();
+        let after_move = db.get_photo_by_id(id).unwrap();
+        assert_eq!(
+            after_move.sidecar_jpeg_path.as_deref(),
+            Some("/d/RAW/rejects/DSCF0020.JPG")
+        );
+
+        db.update_sidecar_jpeg_path(id, None).unwrap();
+        let after_clear = db.get_photo_by_id(id).unwrap();
+        assert_eq!(after_clear.sidecar_jpeg_path, None);
     }
 
     #[test]

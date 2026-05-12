@@ -1,4 +1,5 @@
 use crate::db::schema::Database;
+use crate::ingest::pairing::{self, ImportItem};
 use crate::ingest::{preview, walker};
 use crate::metadata::{exif, orientation};
 use base64::Engine;
@@ -38,6 +39,12 @@ pub struct ScanEntry {
     /// to render portrait NEFs with the correct 2:3 aspect ratio instead
     /// of falling back to landscape 3:2.
     pub orientation: Option<i32>,
+    /// When the user's camera was in RAW+JPEG mode and this entry
+    /// represents a RAW with a same-stem JPEG sibling, this is the
+    /// JPG's absolute path. The frontend uses it for the "+JPG" badge
+    /// on the tile; the backend uses it on its own re-derive when the
+    /// thumb extractor sees a RAW path.
+    pub sibling_jpeg_path: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -102,7 +109,12 @@ fn scan_folder_blocking(
         return Err(format!("Source path does not exist: {}", source));
     }
     let files = walker::walk_source(&src_path);
-    let total = files.len();
+    // Group RAW + sibling-JPEG pairs so a RAW+JPEG folder produces one
+    // tile per frame in the date browser instead of two. The browser's
+    // selection stays one-path-per-tile (the RAW), which is what
+    // run_import expects on the other side.
+    let items = pairing::pair(files);
+    let total = items.len();
 
     let known: Arc<HashSet<(String, String, u64)>> = if dedup_known {
         let set = Database::open_global()
@@ -124,8 +136,8 @@ fn scan_folder_blocking(
 
     let counter = AtomicUsize::new(0);
     pool.install(|| {
-        files.par_iter().for_each(|p| {
-            let entry = scan_one_file(p, with_thumbnails, &known);
+        items.par_iter().for_each(|item| {
+            let entry = scan_one_import_item(item, with_thumbnails, &known);
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let _ = app.emit(
                 "scan-progress",
@@ -143,19 +155,34 @@ fn scan_folder_blocking(
     Ok(total)
 }
 
-fn scan_one_file(
-    path: &Path,
+/// Per-`ImportItem` entry builder. Paired RAW+JPG items report ONE
+/// entry whose `path` is the RAW (so `start_import` sees the RAW path)
+/// and whose `sibling_jpeg_path` carries the JPG. EXIF and thumbnail
+/// decoding both prefer the sibling JPG when present — its EXIF is
+/// clean standard data and its decode is fast.
+fn scan_one_import_item(
+    item: &ImportItem,
     with_thumbnails: bool,
     known: &HashSet<(String, String, u64)>,
 ) -> ScanEntry {
-    let filename = path
+    let primary = item.primary_path().as_path();
+    let exif_source = match item {
+        ImportItem::RawWithSibling { jpeg, .. } => jpeg.as_path(),
+        _ => primary,
+    };
+    let sibling_jpeg_path = match item {
+        ImportItem::RawWithSibling { jpeg, .. } => Some(jpeg.to_string_lossy().into_owned()),
+        _ => None,
+    };
+
+    let filename = primary
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let file_size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let file_size_bytes = std::fs::metadata(primary).map(|m| m.len()).unwrap_or(0);
 
-    let exif_data = exif::extract_exif(path).ok();
+    let exif_data = exif::extract_exif(exif_source).ok();
     let captured_at = exif_data.as_ref().and_then(|e| e.capture_time.clone());
     let camera = exif_data.as_ref().and_then(|e| e.camera_model.clone());
     let orientation_tag = exif_data.as_ref().and_then(|e| e.orientation);
@@ -170,13 +197,13 @@ fn scan_one_file(
     };
 
     let thumb_data_url = if with_thumbnails {
-        build_scan_thumb(path, orientation_tag)
+        build_scan_thumb(exif_source, orientation_tag)
     } else {
         None
     };
 
     ScanEntry {
-        path: path.to_string_lossy().into_owned(),
+        path: primary.to_string_lossy().into_owned(),
         filename,
         captured_at,
         camera,
@@ -184,6 +211,7 @@ fn scan_one_file(
         thumb_data_url,
         already_imported,
         orientation: orientation_tag,
+        sibling_jpeg_path,
     }
 }
 
@@ -206,10 +234,16 @@ pub async fn extract_thumbnails_for_paths(
         pool.install(|| {
             paths.par_iter().for_each(|p| {
                 let path = PathBuf::from(p);
-                let orientation_tag = exif::extract_exif(&path)
+                // For paired RAW+JPG items the scan emits the RAW path
+                // (so `start_import` sees the RAW). When we lazily
+                // decode a thumbnail later, prefer the JPG sibling
+                // for the same reasons the scan does — faster decode,
+                // standard EXIF.
+                let decode_path = pairing::find_sibling_jpeg(&path).unwrap_or(path.clone());
+                let orientation_tag = exif::extract_exif(&decode_path)
                     .ok()
                     .and_then(|e| e.orientation);
-                let thumb = build_scan_thumb(&path, orientation_tag);
+                let thumb = build_scan_thumb(&decode_path, orientation_tag);
                 let _ = app.emit(
                     "scan-thumb-ready",
                     ScanThumbReady {
@@ -295,4 +329,142 @@ fn build_scan_thumb(path: &Path, orientation_tag: Option<i32>) -> Option<String>
 
     let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
     Some(format!("data:image/jpeg;base64,{}", encoded))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metadata::exif::tests::{make_jpeg_with_exif, make_synthetic_raf};
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    fn empty_known() -> HashSet<(String, String, u64)> {
+        HashSet::new()
+    }
+
+    /// The bug we're guarding against: paired RAW+JPG used to produce
+    /// two scan entries, with the RAF tile dateless (kamadak-exif can't
+    /// parse RAF) and the JPG tile dated. After the fix there's one
+    /// entry per frame, the entry's `path` is the RAW (so start_import
+    /// receives RAW paths), and EXIF/dates come through cleanly via the
+    /// JPG sibling.
+    #[test]
+    fn paired_item_emits_one_entry_with_raw_path_and_jpeg_exif() {
+        let dir = TempDir::new().unwrap();
+        let raf = dir.path().join("DSCF0001.RAF");
+        let jpg = dir.path().join("DSCF0001.JPG");
+        // RAF body: magic + a junk "JPEG" (no EXIF). If the scan ever
+        // accidentally reads EXIF from this file, capture_time will be
+        // missing and the test will fail.
+        let mut raf_bytes = Vec::from(b"FUJIFILMCCD-RAW \0".as_slice());
+        raf_bytes.extend_from_slice(&[0u8; 100]);
+        std::fs::write(&raf, &raf_bytes).unwrap();
+        std::fs::write(
+            &jpg,
+            make_jpeg_with_exif("2024:08:02 09:15:00", "FUJIFILM X-T5"),
+        )
+        .unwrap();
+
+        let item = ImportItem::RawWithSibling {
+            raw: raf.clone(),
+            jpeg: jpg.clone(),
+        };
+
+        let entry = scan_one_import_item(&item, false, &empty_known());
+
+        assert_eq!(entry.path, raf.to_string_lossy(), "tile.path must be the RAW");
+        assert_eq!(
+            entry.sibling_jpeg_path.as_deref(),
+            Some(jpg.to_string_lossy().as_ref()),
+            "sibling_jpeg_path must be populated for the +JPG badge"
+        );
+        assert!(
+            entry.captured_at.is_some(),
+            "captured_at must come from the sibling JPG's EXIF, not the RAF"
+        );
+        assert!(
+            entry
+                .camera
+                .as_deref()
+                .map(|c| c.contains("X-T5"))
+                .unwrap_or(false),
+            "camera must come from the JPG's EXIF, got {:?}",
+            entry.camera,
+        );
+    }
+
+    #[test]
+    fn lone_raf_entry_has_null_sibling_and_uses_raf_exif() {
+        let dir = TempDir::new().unwrap();
+        let raf = dir.path().join("alone.RAF");
+        std::fs::write(&raf, make_synthetic_raf("2024:08:02 09:15:00", "X-T5")).unwrap();
+
+        let item = ImportItem::RawOnly { raw: raf.clone() };
+        let entry = scan_one_import_item(&item, false, &empty_known());
+
+        assert_eq!(entry.path, raf.to_string_lossy());
+        assert_eq!(
+            entry.sibling_jpeg_path, None,
+            "lone RAW must not advertise a sibling"
+        );
+        assert!(
+            entry.captured_at.is_some(),
+            "lone RAF must still pull a date through the embedded-JPEG path"
+        );
+    }
+
+    #[test]
+    fn lone_jpeg_entry_passes_through() {
+        let dir = TempDir::new().unwrap();
+        let jpg = dir.path().join("standalone.jpg");
+        std::fs::write(
+            &jpg,
+            make_jpeg_with_exif("2024:01:15 14:30:00", "NIKON D750"),
+        )
+        .unwrap();
+
+        let item = ImportItem::JpegOnly { jpeg: jpg.clone() };
+        let entry = scan_one_import_item(&item, false, &empty_known());
+
+        assert_eq!(entry.path, jpg.to_string_lossy());
+        assert_eq!(entry.sibling_jpeg_path, None);
+        assert!(entry.captured_at.is_some());
+    }
+
+    #[test]
+    fn paired_item_dedup_uses_raw_filename_and_size() {
+        // The dedup heuristic is (camera_lowercase, filename_lowercase,
+        // file_size_bytes). For paired items it should key on the
+        // RAW's filename + size — the RAW is the canonical photo and
+        // its stats are what previous imports tracked.
+        let dir = TempDir::new().unwrap();
+        let raf = dir.path().join("DSCF0042.RAF");
+        let jpg = dir.path().join("DSCF0042.JPG");
+        std::fs::write(&raf, b"FUJIFILMCCD-RAW \0junkfiller").unwrap();
+        std::fs::write(
+            &jpg,
+            make_jpeg_with_exif("2024:08:02 09:15:00", "FUJIFILM X-T5"),
+        )
+        .unwrap();
+
+        let raf_size = std::fs::metadata(&raf).unwrap().len();
+
+        let mut known = HashSet::new();
+        known.insert((
+            "fujifilm x-t5".to_string(),
+            "dscf0042.raf".to_string(),
+            raf_size,
+        ));
+
+        let item = ImportItem::RawWithSibling {
+            raw: raf,
+            jpeg: jpg,
+        };
+        let entry = scan_one_import_item(&item, false, &known);
+
+        assert!(
+            entry.already_imported,
+            "paired-item dedup must key on the RAW's filename+size"
+        );
+    }
 }

@@ -71,6 +71,7 @@ impl CuratorProvider for GeminiProvider {
             generation_config: Some(GenerationConfig {
                 max_output_tokens: Some(8),
                 response_mime_type: None,
+                thinking_config: Some(ThinkingConfig { thinking_budget: 0 }),
             }),
         };
         let resp = self
@@ -125,8 +126,13 @@ impl CuratorProvider for GeminiProvider {
                 },
             }),
             generation_config: Some(GenerationConfig {
-                max_output_tokens: Some(600),
+                // 600 was tight: with 2.5-Flash thinking enabled the
+                // function-call output got truncated mid-token. We
+                // disable thinking below, but bump the ceiling anyway
+                // so a verbose summary still fits.
+                max_output_tokens: Some(1024),
                 response_mime_type: None,
+                thinking_config: Some(ThinkingConfig { thinking_budget: 0 }),
             }),
         };
 
@@ -188,6 +194,7 @@ impl CuratorProvider for GeminiProvider {
             generation_config: Some(GenerationConfig {
                 max_output_tokens: Some(220 * cluster.frames.len() as u32),
                 response_mime_type: None,
+                thinking_config: Some(ThinkingConfig { thinking_budget: 0 }),
             }),
         };
 
@@ -211,6 +218,16 @@ impl CuratorProvider for GeminiProvider {
 
     fn model(&self) -> &str {
         &self.model
+    }
+
+    /// Free-tier Gemini caps at 5 requests/minute on most models; with
+    /// the default 4-way parallelism even small shoots blow the limit
+    /// instantly. Serialize Stage 2 calls so each request waits for the
+    /// previous to land. Paid-tier users see negligible slowdown
+    /// (Stage 2 is HTTP-bound, ~2-4s per call) and free-tier users get
+    /// a working curator instead of a wall of 429s.
+    fn concurrency_limit(&self) -> usize {
+        1
     }
 }
 
@@ -255,28 +272,61 @@ async fn send_with_retries(
                     bail!("Gemini auth rejected: {} {}", status, body);
                 }
                 if status == StatusCode::OK {
-                    let parsed: GeminiResponse = resp
-                        .json()
+                    // Read as bytes first so we can log the raw body
+                    // when deserialization fails. resp.json() consumes
+                    // the response and gives us no body to inspect on
+                    // error — that's exactly the situation that turned
+                    // a real shape mismatch into "parse Gemini response
+                    // body" with no way to diagnose.
+                    let bytes = resp
+                        .bytes()
                         .await
-                        .context("parse Gemini response body")?;
-                    return Ok(parsed);
+                        .context("read Gemini response bytes")?;
+                    match serde_json::from_slice::<GeminiResponse>(&bytes) {
+                        Ok(parsed) => return Ok(parsed),
+                        Err(e) => {
+                            let preview = String::from_utf8_lossy(&bytes);
+                            let head: String = preview.chars().take(2000).collect();
+                            log::error!(
+                                "Gemini response parse failed: {}\nBody (first 2000 chars): {}",
+                                e,
+                                head
+                            );
+                            // Surface a snippet through anyhow's chain
+                            // so the UI toast carries something useful.
+                            let snippet: String = preview.chars().take(220).collect();
+                            return Err(anyhow!(
+                                "parse Gemini response body: {} — body[0..220]: {}",
+                                e,
+                                snippet
+                            ));
+                        }
+                    }
                 }
-                let retry_after_secs = resp
+                let header_secs = resp
                     .headers()
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|s| s.parse::<u64>().ok());
                 let body = resp.text().await.unwrap_or_default();
+                // Gemini doesn't set a Retry-After header; instead it
+                // embeds the wait in the response body, both as
+                // free-text in `error.message` ("Please retry in
+                // 21.018392938s.") and structurally in
+                // `error.details[*].retryDelay` ("21s"). Parse the
+                // structural form first; fall back to a regex on the
+                // message for older response shapes.
+                let body_secs = parse_gemini_retry_delay(&body);
                 let err = anyhow!("gemini {}: {}", status, body);
 
                 let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
                 if !retryable || attempt == backoff_ms.len() {
                     return Err(err);
                 }
-                let wait_ms = match retry_after_secs {
-                    Some(s) => s.saturating_mul(1000),
-                    None => backoff_ms[attempt],
-                };
+                let wait_ms = header_secs
+                    .or(body_secs)
+                    .map(|s| s.saturating_mul(1000).saturating_add(500))
+                    .unwrap_or(backoff_ms[attempt]);
                 last_err = Some(err);
                 tokio::time::sleep(Duration::from_millis(wait_ms)).await;
             }
@@ -292,8 +342,45 @@ async fn send_with_retries(
     Err(last_err.unwrap_or_else(|| anyhow!("retry loop exited unexpectedly")))
 }
 
+/// Extract the rate-limit retry hint from a Gemini 429 body. Returns
+/// the wait in seconds (rounded up) when present. Tries the structured
+/// `error.details[*].retryDelay` field first (the public API contract),
+/// then falls back to scraping `error.message`'s "Please retry in N.NNNs"
+/// for older shapes that omit the structured field.
+fn parse_gemini_retry_delay(body: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    if let Some(details) = v.pointer("/error/details").and_then(|d| d.as_array()) {
+        for detail in details {
+            if let Some(rd) = detail.get("retryDelay").and_then(|x| x.as_str()) {
+                // Format is "Ns" or "N.NNNs". Strip trailing 's' and
+                // round up so a 21.018s hint produces a 22-second wait
+                // (one second of slack avoids landing back in the same
+                // per-minute window).
+                if let Some(num_str) = rd.strip_suffix('s') {
+                    if let Ok(secs) = num_str.parse::<f64>() {
+                        return Some(secs.ceil() as u64);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(msg) = v.pointer("/error/message").and_then(|m| m.as_str()) {
+        if let Some(idx) = msg.find("retry in ") {
+            let tail = &msg[idx + "retry in ".len()..];
+            let num: String = tail.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            if let Ok(secs) = num.parse::<f64>() {
+                return Some(secs.ceil() as u64);
+            }
+        }
+    }
+    None
+}
+
 /// Pull the named functionCall from the first candidate and decode its
 /// args into `T`. Tolerates extra parts (text + functionCall mixed).
+/// When the candidate carries no `content` (the Gemini API does this on
+/// `MALFORMED_FUNCTION_CALL`, `SAFETY`, `MAX_TOKENS`, …) emit a
+/// finish-reason-aware error instead of a generic missing-field one.
 fn parse_function_call<T: serde::de::DeserializeOwned>(
     resp: &GeminiResponse,
     tool_name: &str,
@@ -302,7 +389,23 @@ fn parse_function_call<T: serde::de::DeserializeOwned>(
         .candidates
         .first()
         .ok_or_else(|| anyhow!("Gemini response has no candidates"))?;
-    for part in &cand.content.parts {
+    let content = match &cand.content {
+        Some(c) => c,
+        None => {
+            let reason = cand.finish_reason.as_deref().unwrap_or("UNSPECIFIED");
+            let detail = cand
+                .finish_message
+                .as_deref()
+                .map(|m| format!(" — {}", m))
+                .unwrap_or_default();
+            bail!(
+                "Gemini returned no content (finishReason={}){}",
+                reason,
+                detail
+            );
+        }
+    };
+    for part in &content.parts {
         if let ResponsePart::FunctionCall { function_call } = part {
             if function_call.name == tool_name {
                 return serde_json::from_value(function_call.args.clone())
@@ -385,6 +488,21 @@ struct GenerationConfig {
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_mime_type: Option<String>,
+    /// Gemini 2.5+ uses internal "thinking" by default. Under
+    /// `mode: ANY` (forced function call) plus a tight output budget
+    /// the thinking tokens eat the budget, the function-call output
+    /// gets truncated, and the API tags the response
+    /// `MALFORMED_FUNCTION_CALL` (with `print(default_api.foo(...))`
+    /// pseudocode in `finishMessage`). Setting `thinkingBudget: 0`
+    /// disables thinking entirely — we don't need it for tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking_config: Option<ThinkingConfig>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThinkingConfig {
+    thinking_budget: i32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -397,8 +515,19 @@ struct GeminiResponse {
 }
 
 #[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 struct Candidate {
-    content: ResponseContent,
+    /// Missing whenever Gemini returns a non-success terminal state
+    /// (`MALFORMED_FUNCTION_CALL`, `SAFETY`, `MAX_TOKENS`). Keep it
+    /// optional so the deserializer doesn't blow up on those — we
+    /// surface `finish_reason` / `finish_message` from
+    /// `parse_function_call` instead.
+    #[serde(default)]
+    content: Option<ResponseContent>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+    #[serde(default)]
+    finish_message: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -443,14 +572,16 @@ mod tests {
     fn fixture(args: serde_json::Value, tool_name: &str) -> GeminiResponse {
         GeminiResponse {
             candidates: vec![Candidate {
-                content: ResponseContent {
+                content: Some(ResponseContent {
                     parts: vec![ResponsePart::FunctionCall {
                         function_call: FunctionCall {
                             name: tool_name.to_string(),
                             args,
                         },
                     }],
-                },
+                }),
+                finish_reason: Some("STOP".into()),
+                finish_message: None,
             }],
             usage_metadata: Some(UsageMetadata {
                 prompt_token_count: Some(1500),
@@ -511,15 +642,116 @@ mod tests {
         // Candidate exists, but parts contain only a text response.
         let resp = GeminiResponse {
             candidates: vec![Candidate {
-                content: ResponseContent {
+                content: Some(ResponseContent {
                     parts: vec![ResponsePart::Other(serde_json::json!({
                         "text": "I cannot do that."
                     }))],
-                },
+                }),
+                finish_reason: Some("STOP".into()),
+                finish_message: None,
             }],
             usage_metadata: None,
         };
         assert!(parse_function_call::<ShootSummary>(&resp, SUMMARY_TOOL_NAME).is_err());
+    }
+
+    /// The exact wire shape we observed in the field on 2026-05-09:
+    /// gemini-2.5-flash with thinking enabled returned a candidate with
+    /// no `content`, only `finishReason: "MALFORMED_FUNCTION_CALL"` and
+    /// truncated pseudocode in `finishMessage`. The old deserializer
+    /// blew up with a generic `missing field 'content'` error. Now we
+    /// parse the response cleanly and `parse_function_call` surfaces
+    /// the finish reason in the error chain.
+    #[test]
+    fn parse_handles_malformed_function_call_response() {
+        let raw = r#"{
+            "candidates": [{
+                "finishReason": "MALFORMED_FUNCTION_CALL",
+                "index": 0,
+                "finishMessage": "Malformed function call: print(default_api.record_shoot_summary(shoot_type=\"family_"
+            }],
+            "usageMetadata": {"promptTokenCount": 7542, "totalTokenCount": 7542},
+            "modelVersion": "gemini-2.5-flash",
+            "responseId": "abc"
+        }"#;
+        let parsed: GeminiResponse =
+            serde_json::from_str(raw).expect("response parses without error");
+        assert_eq!(parsed.candidates.len(), 1);
+        assert!(parsed.candidates[0].content.is_none());
+        assert_eq!(
+            parsed.candidates[0].finish_reason.as_deref(),
+            Some("MALFORMED_FUNCTION_CALL")
+        );
+
+        let err = parse_function_call::<ShootSummary>(&parsed, SUMMARY_TOOL_NAME)
+            .expect_err("should error with finish-reason context");
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("MALFORMED_FUNCTION_CALL"),
+            "error must surface finishReason: {}",
+            msg
+        );
+    }
+
+    /// Gemini 429 bodies carry the rate-limit hint in two places:
+    /// `error.details[*].retryDelay` (structured) and
+    /// `error.message` (free text). Without parsing one of them we
+    /// retry on the fixed 1/4/16s schedule, all attempts hit the same
+    /// per-minute limit, and we exhaust attempts before the limit
+    /// resets. This test pins the structured-form parse against the
+    /// exact body shape we observed from gemini-2.5-flash on free
+    /// tier 2026-05-09.
+    #[test]
+    fn parse_retry_delay_reads_structured_form() {
+        let body = r#"{
+            "error": {
+                "code": 429,
+                "message": "Quota exceeded. Please retry in 21.018392938s.",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {"@type": "type.googleapis.com/google.rpc.QuotaFailure"},
+                    {"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                     "retryDelay": "21s"}
+                ]
+            }
+        }"#;
+        // Structured "21s" → 21 seconds.
+        assert_eq!(parse_gemini_retry_delay(body), Some(21));
+    }
+
+    #[test]
+    fn parse_retry_delay_falls_back_to_message() {
+        let body = r#"{
+            "error": {
+                "code": 429,
+                "message": "Quota exceeded. Please retry in 7.4s.",
+                "status": "RESOURCE_EXHAUSTED"
+            }
+        }"#;
+        // No structured field → fall back to message regex.
+        // Round up so 7.4s becomes 8 seconds.
+        assert_eq!(parse_gemini_retry_delay(body), Some(8));
+    }
+
+    #[test]
+    fn parse_retry_delay_returns_none_on_unrelated_bodies() {
+        assert_eq!(parse_gemini_retry_delay("not json"), None);
+        assert_eq!(parse_gemini_retry_delay(r#"{"foo": 1}"#), None);
+    }
+
+    /// `thinkingBudget: 0` must serialize as the camelCase
+    /// `thinkingConfig.thinkingBudget` Gemini expects. A typo here
+    /// would silently leave thinking on for 2.5 models.
+    #[test]
+    fn thinking_config_serializes_to_camel_case() {
+        let cfg = GenerationConfig {
+            max_output_tokens: Some(1024),
+            response_mime_type: None,
+            thinking_config: Some(ThinkingConfig { thinking_budget: 0 }),
+        };
+        let s = serde_json::to_string(&cfg).unwrap();
+        assert!(s.contains("\"thinkingConfig\""), "{}", s);
+        assert!(s.contains("\"thinkingBudget\":0"), "{}", s);
     }
 
     #[test]
