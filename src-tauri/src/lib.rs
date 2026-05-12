@@ -274,6 +274,7 @@ pub fn run() {
             commands::shoots::delete_shoot,
             commands::import::start_import,
             commands::import::cancel_import,
+            commands::import::derive_import_year_month,
             commands::scan::scan_folder,
             commands::scan::extract_thumbnails_for_paths,
             commands::drives::list_removable_drives,
