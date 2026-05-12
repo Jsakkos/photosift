@@ -308,7 +308,7 @@ Both Capture One and DxO read `xmp:Rating` and `xmp:Label` natively. The custom 
 
 ### Editor Handoff
 
-After XMP export, open a Capture One session (or DxO project) pointed at the shoot's `RAW/` folder. Ratings and labels appear automatically. The photographer edits, exports finished images to an `Export/` subfolder:
+After XMP export, open a Capture One session (or DxO project) pointed at the shoot's `RAW/` folder. Ratings and labels appear automatically. The photographer edits, exports finished images to the shoot's top-level `Export/` folder. PhotoSift itself also uses `Export/`: picks routed to `destination='export'` (and their sibling JPEGs, if any) are moved there by `sync_shoot_layout`, so the folder collects everything publishable for the shoot:
 
 ```
 DSLR/2026/2026-06_Greece/
@@ -316,7 +316,10 @@ DSLR/2026/2026-06_Greece/
     DSC_0001.NEF
     DSC_0001.xmp
   Export/
-    DSC_0001.jpg
+    DSC_0002.NEF        # routed to export by PhotoSift
+    DSC_0002.JPG        # sibling JPEG, followed the RAW
+    DSC_0002.xmp
+    DSC_0001.jpg        # finished export from Capture One / DxO
 ```
 
 ### Publishing

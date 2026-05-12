@@ -2,8 +2,11 @@
 //!
 //! After import every RAW sits in `{shoot}/RAW/`. As the user progresses
 //! through triage → select → route we re-home files into bucket folders
-//! nested under `RAW/` so the filesystem reflects the cull while staying
-//! visually grouped:
+//! so the filesystem reflects the cull while staying visually grouped.
+//! Reject/select/edit buckets nest under `RAW/`; the export bucket is a
+//! top-level `Export/` folder so finished/publishable artifacts sit
+//! apart from the working RAW tree (and alongside whatever the user's
+//! editor later drops there):
 //!
 //! ```text
 //! DSLR/2026/2026-04_slug/
@@ -11,7 +14,7 @@
 //!   RAW/rejects/      flag='reject'
 //!   RAW/selects/      flag='pick', destination='unrouted'
 //!   RAW/edit/         flag='pick', destination='edit'      (ready for Capture One / DxO / etc.)
-//!   RAW/export/       flag='pick', destination='export'    (ready for direct publish)
+//!   Export/           flag='pick', destination='export'    (ready for direct publish)
 //! ```
 //!
 //! `sync_shoot_layout` is the sole mover. It reads truth from the DB,
@@ -30,13 +33,14 @@ use rusqlite::Result as SqlResult;
 use std::path::PathBuf;
 
 /// Subfolder (relative to the shoot root) that a photo should live in,
-/// based on its cull metadata. Destinations beyond `RAW` are nested under
-/// it so everything stays grouped.
+/// based on its cull metadata. Reject/select/edit buckets nest under
+/// `RAW/`; export gets a top-level `Export/` folder so publishable
+/// artifacts sit apart from the working RAW tree.
 pub fn target_subdir_for(flag: &str, destination: &str) -> &'static str {
     match (flag, destination) {
         ("reject", _) => "RAW/rejects",
         ("pick", "edit") => "RAW/edit",
-        ("pick", "export") => "RAW/export",
+        ("pick", "export") => "Export",
         ("pick", _) => "RAW/selects",
         // unreviewed (or any unexpected state) stays in the import bucket.
         _ => "RAW",
@@ -322,7 +326,7 @@ mod tests {
         assert_eq!(target_subdir_for("reject", "edit"), "RAW/rejects");
         assert_eq!(target_subdir_for("pick", "unrouted"), "RAW/selects");
         assert_eq!(target_subdir_for("pick", "edit"), "RAW/edit");
-        assert_eq!(target_subdir_for("pick", "export"), "RAW/export");
+        assert_eq!(target_subdir_for("pick", "export"), "Export");
     }
 
     #[test]
@@ -355,7 +359,7 @@ mod tests {
         assert!(shoot_root.join("RAW/rejects/b.nef").exists());
         assert!(shoot_root.join("RAW/selects/c.nef").exists());
         assert!(shoot_root.join("RAW/edit/d.nef").exists());
-        assert!(shoot_root.join("RAW/export/e.nef").exists());
+        assert!(shoot_root.join("Export/e.nef").exists());
 
         // DB rows now point to the new on-disk locations. Match on the
         // literal forward-slash form the subdir constants use — Path::join
@@ -364,7 +368,7 @@ mod tests {
             (ids[1], "RAW/rejects"),
             (ids[2], "RAW/selects"),
             (ids[3], "RAW/edit"),
-            (ids[4], "RAW/export"),
+            (ids[4], "Export"),
         ] {
             let row = db.get_photo_by_id(id).unwrap();
             assert!(
@@ -692,5 +696,88 @@ mod tests {
         assert_eq!(report2.moved.len(), 0);
         assert_eq!(report2.skipped_already_placed, 1);
         assert!(report2.errors.is_empty());
+    }
+
+    /// Routing a RAW+JPEG pick to Export lands both files in the
+    /// top-level `Export/` folder (not `RAW/export/`), with a sidecar,
+    /// and the move reverses cleanly when the destination flips back.
+    #[test]
+    fn sync_routes_paired_pick_to_export_bucket() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let mut db = Database::open(&db_path).unwrap();
+
+        let shoot_root = dir.path().join("shoot");
+        let raw_dir = shoot_root.join("RAW");
+        fs::create_dir_all(&raw_dir).unwrap();
+
+        let shoot_id = db
+            .insert_shoot(
+                "test",
+                "2026-05-06",
+                dir.path().to_str().unwrap(),
+                shoot_root.to_str().unwrap(),
+                "copy",
+            )
+            .unwrap();
+
+        let raw_src = raw_dir.join("DSC_0042.NEF");
+        let jpeg_src = raw_dir.join("DSC_0042.JPG");
+        fs::write(&raw_src, b"fake nef").unwrap();
+        fs::write(&jpeg_src, b"fake jpg").unwrap();
+
+        let insert = PhotoInsert {
+            filename: "DSC_0042.NEF".into(),
+            raw_path: raw_src.to_string_lossy().into_owned(),
+            preview_path: "/fake/p.jpg".into(),
+            thumb_path: "/fake/t.jpg".into(),
+            content_hash: [7u8; 32],
+            phash: None,
+            exif_date: Some("2026-05-06 12:00:00".into()),
+            camera: None,
+            lens: None,
+            focal_length: None,
+            aperture: None,
+            shutter_speed: None,
+            iso: None,
+            orientation: None,
+            file_size_bytes: None,
+            initial_flag: None,
+            initial_star_rating: None,
+            sidecar_jpeg_path: Some(jpeg_src.to_string_lossy().into_owned()),
+        };
+        let ids = db.insert_photos_batch(shoot_id, &[insert]).unwrap();
+        let photo_id = ids[0];
+
+        db.set_flag(photo_id, "pick").unwrap();
+        db.set_destination(photo_id, "export").unwrap();
+
+        let report = sync_shoot_layout(&db, shoot_id).unwrap();
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        assert_eq!(report.moved.len(), 1);
+
+        let raw_target = shoot_root.join("Export").join("DSC_0042.NEF");
+        let jpeg_target = shoot_root.join("Export").join("DSC_0042.JPG");
+        let xmp_target = shoot_root.join("Export").join("DSC_0042.xmp");
+        assert!(raw_target.exists(), "RAW moved to Export/");
+        assert!(jpeg_target.exists(), "sibling JPEG followed into Export/");
+        assert!(xmp_target.exists(), "sidecar written in Export/");
+        assert!(
+            !shoot_root.join("RAW/export").exists(),
+            "no legacy RAW/export/ bucket"
+        );
+        let xmp = fs::read_to_string(&xmp_target).unwrap();
+        assert!(xmp.contains("photosift:destination=\"export\""));
+        assert!(!xmp.contains("xmp:Label"));
+
+        // Flip back to unrouted → both files flow into RAW/selects/.
+        db.set_destination(photo_id, "unrouted").unwrap();
+        let report2 = sync_shoot_layout(&db, shoot_id).unwrap();
+        assert_eq!(report2.moved.len(), 1);
+        assert!(shoot_root.join("RAW/selects/DSC_0042.NEF").exists());
+        assert!(shoot_root.join("RAW/selects/DSC_0042.JPG").exists());
+        assert!(!raw_target.exists(), "Export/ RAW gone after reverse");
+        assert!(!jpeg_target.exists(), "Export/ JPEG gone after reverse");
+        assert!(!xmp_target.exists(), "Export/ sidecar cleaned up after reverse");
     }
 }
