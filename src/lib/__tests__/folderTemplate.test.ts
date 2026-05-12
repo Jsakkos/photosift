@@ -58,6 +58,8 @@ describe("preview helpers", () => {
     const byLabel = Object.fromEntries(rows.map((r) => [r.label, r.path]));
     expect(byLabel.import).toMatch(/_greece-trip\/RAW\/$/);
     expect(byLabel.rejects).toMatch(/_greece-trip\/RAW\/rejects\/$/);
+    // Unrouted picks partition by star floor under selects/ (#11).
+    expect(byLabel.selects).toMatch(/_greece-trip\/RAW\/selects\/\{0,1,2,3\+\}\/$/);
     expect(byLabel.export).toMatch(/_greece-trip\/Export\/$/);
     expect(byLabel.export).not.toMatch(/RAW\/Export/);
   });
