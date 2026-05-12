@@ -104,6 +104,7 @@ sqlite3 ~/.photosift/photosift.db
 
 ## Testing Notes
 
+- **Clean up after yourself.** Any `cargo tauri dev` / `npm run dev` / vite server you start, you kill before the task is done. Orphaned dev servers hold port 1420 (Tauri pins it, no auto-increment) and cause confusing "Port already in use" failures and stale-UI confusion in later sessions. Leave the workspace tidy — no background processes, no half-built state.
 - Always test import with real D750 NEF files. The embedded JPEG preview extraction and pHash computation depend on the specific RAW format.
 - Perceptual hash grouping thresholds (≤4 near-duplicate, 5-12 related) may need tuning with real-world bursts. Make thresholds configurable constants, not magic numbers.
 - Preview preloading should be tested with shoots of 200+ images to verify memory behavior.
