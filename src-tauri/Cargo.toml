@@ -48,7 +48,8 @@ base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "time", "macros"] }
 # OS keychain storage for the user's Anthropic API key. Service name
-# `"photosift"`, account `"anthropic_api_key"`. Stored only via
+# `"photosift"` (release) or `"photosift-dev"` (debug builds — see
+# `curator/mod.rs`), account `"anthropic_api_key"`. Stored only via
 # `commands::curator::set_anthropic_api_key`; never returned to the
 # frontend after write.
 #

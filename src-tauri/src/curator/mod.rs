@@ -29,8 +29,12 @@ pub enum CuratorStatus {
     Disabled,
 }
 
-/// The OS keychain service name. Account name varies per provider —
-/// see `keyring_account_for`.
+/// The OS keychain service name. Debug builds use a `-dev` suffix so dev
+/// work doesn't read or overwrite production curator keys. Account name
+/// varies per provider — see `keyring_account_for`.
+#[cfg(debug_assertions)]
+pub const KEYRING_SERVICE: &str = "photosift-dev";
+#[cfg(not(debug_assertions))]
 pub const KEYRING_SERVICE: &str = "photosift";
 
 /// Per-provider keychain account names. `"local"` providers don't use

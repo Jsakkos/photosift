@@ -2003,16 +2003,27 @@ fn row_to_photo(row: &rusqlite::Row) -> Result<PhotoRow> {
     })
 }
 
-/// ~/.photosift/photosift.db
+/// ~/.photosift/photosift.db (release) or ~/.photosift-dev/photosift.db (debug).
 pub fn global_db_path() -> PathBuf {
     photosift_home().join("photosift.db")
 }
 
-/// ~/.photosift/
+/// Resolve the PhotoSift data root. Debug builds use `.photosift-dev` so a
+/// running production binary keeps owning `.photosift` exclusively. The
+/// `PHOTOSIFT_HOME` env var overrides everything (set to your prod path
+/// when you need dev to read prod data — note writes will mutate prod).
 pub fn photosift_home() -> PathBuf {
+    if let Ok(custom) = std::env::var("PHOTOSIFT_HOME") {
+        return PathBuf::from(custom);
+    }
+    let dir_name = if cfg!(debug_assertions) {
+        ".photosift-dev"
+    } else {
+        ".photosift"
+    };
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".photosift")
+        .join(dir_name)
 }
 
 /// ~/.photosift/cache/{shoot_id}/
