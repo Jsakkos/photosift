@@ -111,14 +111,16 @@ export function previewShootDir(pathTemplate: string): string {
 
 /// The on-disk tree a fresh-imported, fully-culled shoot would have,
 /// given the template. `rejects`/`selects`/`edit` nest under `raw`;
-/// `export` is a top-level sibling (issue #7).
+/// `export` is a top-level sibling (#7). Unrouted picks are further
+/// partitioned by star floor under `selects/` (#11), shown here as the
+/// literal `{0,1,2,3+}` since the bin names aren't user-configurable.
 export function previewBucketTree(t: FolderTemplate): { label: string; path: string }[] {
   const shoot = previewShootDir(t.pathTemplate);
   const b = t.buckets;
   return [
     { label: "import", path: `${shoot}/${b.raw}/` },
     { label: "rejects", path: `${shoot}/${b.raw}/${b.rejects}/` },
-    { label: "selects", path: `${shoot}/${b.raw}/${b.selects}/` },
+    { label: "selects", path: `${shoot}/${b.raw}/${b.selects}/{0,1,2,3+}/` },
     { label: "edit", path: `${shoot}/${b.raw}/${b.edit}/` },
     { label: "export", path: `${shoot}/${b.export}/` },
   ];

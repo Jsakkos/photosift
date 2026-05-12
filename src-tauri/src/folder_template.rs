@@ -50,17 +50,36 @@ impl Default for Buckets {
     }
 }
 
+/// Star-floor bin name for an unrouted Select pick (#11). 3+ collapses
+/// 3/4/5 because the routing flow treats anything ★≥3 as a clear keeper
+/// (see `PASS_TIERS` in `RouteShell.tsx`). Negative ratings clamp to 0.
+pub fn select_star_bin(star_rating: i32) -> &'static str {
+    match star_rating {
+        i if i <= 0 => "0",
+        1 => "1",
+        2 => "2",
+        _ => "3+",
+    }
+}
+
 impl Buckets {
     /// Subfolder (relative to the shoot root) a photo should live in,
     /// given its cull metadata. `rejects`/`selects`/`edit` nest under
-    /// `raw`; `export` is top-level. Unreviewed (or any unexpected
-    /// state) stays in the import bucket.
-    pub fn subdir_for(&self, flag: &str, destination: &str) -> String {
+    /// `raw`; `export` is top-level; unreviewed (or any unexpected
+    /// state) stays in the import bucket. Unrouted picks are further
+    /// partitioned by star floor into `{selects}/{0,1,2,3+}/` so the
+    /// on-disk layout mirrors the Select pass (#11).
+    pub fn subdir_for(&self, flag: &str, destination: &str, star_rating: i32) -> String {
         match (flag, destination) {
             ("reject", _) => format!("{}/{}", self.raw, self.rejects),
             ("pick", "edit") => format!("{}/{}", self.raw, self.edit),
             ("pick", "export") => self.export.clone(),
-            ("pick", _) => format!("{}/{}", self.raw, self.selects),
+            ("pick", _) => format!(
+                "{}/{}/{}",
+                self.raw,
+                self.selects,
+                select_star_bin(star_rating)
+            ),
             _ => self.raw.clone(),
         }
     }
@@ -209,11 +228,28 @@ mod tests {
     #[test]
     fn default_bucket_subdirs() {
         let b = Buckets::default();
-        assert_eq!(b.subdir_for("unreviewed", "unrouted"), "RAW");
-        assert_eq!(b.subdir_for("reject", "unrouted"), "RAW/rejects");
-        assert_eq!(b.subdir_for("pick", "unrouted"), "RAW/selects");
-        assert_eq!(b.subdir_for("pick", "edit"), "RAW/edit");
-        assert_eq!(b.subdir_for("pick", "export"), "Export");
+        assert_eq!(b.subdir_for("unreviewed", "unrouted", 0), "RAW");
+        assert_eq!(b.subdir_for("reject", "unrouted", 0), "RAW/rejects");
+        assert_eq!(b.subdir_for("pick", "edit", 4), "RAW/edit");
+        assert_eq!(b.subdir_for("pick", "export", 5), "Export");
+        // Unrouted picks partition by star floor.
+        assert_eq!(b.subdir_for("pick", "unrouted", 0), "RAW/selects/0");
+        assert_eq!(b.subdir_for("pick", "unrouted", 1), "RAW/selects/1");
+        assert_eq!(b.subdir_for("pick", "unrouted", 2), "RAW/selects/2");
+        assert_eq!(b.subdir_for("pick", "unrouted", 3), "RAW/selects/3+");
+        assert_eq!(b.subdir_for("pick", "unrouted", 5), "RAW/selects/3+");
+    }
+
+    #[test]
+    fn select_star_bin_collapses_three_plus_and_clamps() {
+        assert_eq!(select_star_bin(-1), "0");
+        assert_eq!(select_star_bin(0), "0");
+        assert_eq!(select_star_bin(1), "1");
+        assert_eq!(select_star_bin(2), "2");
+        assert_eq!(select_star_bin(3), "3+");
+        assert_eq!(select_star_bin(4), "3+");
+        assert_eq!(select_star_bin(5), "3+");
+        assert_eq!(select_star_bin(99), "3+");
     }
 
     #[test]
@@ -225,11 +261,11 @@ mod tests {
             edit: "to-edit".to_string(),
             export: "Publish".to_string(),
         };
-        assert_eq!(b.subdir_for("reject", "x"), "Originals/trash");
-        assert_eq!(b.subdir_for("pick", "edit"), "Originals/to-edit");
-        assert_eq!(b.subdir_for("pick", "export"), "Publish");
-        assert_eq!(b.subdir_for("pick", "unrouted"), "Originals/keepers");
-        assert_eq!(b.subdir_for("unreviewed", "x"), "Originals");
+        assert_eq!(b.subdir_for("reject", "x", 0), "Originals/trash");
+        assert_eq!(b.subdir_for("pick", "edit", 0), "Originals/to-edit");
+        assert_eq!(b.subdir_for("pick", "export", 0), "Publish");
+        assert_eq!(b.subdir_for("pick", "unrouted", 2), "Originals/keepers/2");
+        assert_eq!(b.subdir_for("unreviewed", "x", 0), "Originals");
     }
 
     #[test]

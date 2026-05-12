@@ -10,16 +10,19 @@
 //!
 //! ```text
 //! DSLR/2026/2026-04_slug/
-//!   RAW/              flag='unreviewed'
-//!   RAW/rejects/      flag='reject'
-//!   RAW/selects/      flag='pick', destination='unrouted'
-//!   RAW/edit/         flag='pick', destination='edit'      (ready for Capture One / DxO / etc.)
-//!   Export/           flag='pick', destination='export'    (ready for direct publish)
+//!   RAW/                  flag='unreviewed'
+//!   RAW/rejects/          flag='reject'
+//!   RAW/selects/{0,1,2,3+}/   flag='pick', destination='unrouted'  (binned by star floor)
+//!   RAW/edit/             flag='pick', destination='edit'      (ready for Capture One / DxO / etc.)
+//!   Export/               flag='pick', destination='export'    (ready for direct publish)
 //! ```
 //!
 //! The bucket folder names above are the defaults — they're configurable
 //! globally via `settings.folder_template` (see `crate::folder_template`),
 //! so a sync may target e.g. `RAW/discards/` instead of `RAW/rejects/`.
+//! Unrouted picks partition by star floor under `selects/` (`0`/`1`/`2`,
+//! and `3+` collapsing 3-5) so the on-disk layout mirrors the Select
+//! pass.
 //!
 //! `sync_shoot_layout` is the sole mover. It reads truth from the DB,
 //! moves each photo, writes a fresh XMP sidecar at the new location
@@ -128,7 +131,7 @@ pub fn sync_shoot_layout(db: &Database, shoot_id: i64) -> Result<SyncReport, Str
 
     for p in photos {
         let raw_path = PathBuf::from(&p.raw_path);
-        let target_subdir = buckets.subdir_for(&p.flag, &p.destination);
+        let target_subdir = buckets.subdir_for(&p.flag, &p.destination, p.star_rating);
         let target_path = shoot_root.join(&target_subdir).join(&p.filename);
 
         if raw_path == target_path {
@@ -349,7 +352,8 @@ mod tests {
 
         assert!(shoot_root.join("RAW/a.nef").exists());
         assert!(shoot_root.join("RAW/rejects/b.nef").exists());
-        assert!(shoot_root.join("RAW/selects/c.nef").exists());
+        // c is an unrated pick → the 0-star Select bin.
+        assert!(shoot_root.join("RAW/selects/0/c.nef").exists());
         assert!(shoot_root.join("RAW/edit/d.nef").exists());
         assert!(shoot_root.join("Export/e.nef").exists());
 
@@ -358,7 +362,7 @@ mod tests {
         // preserves those slashes verbatim on every platform.
         for (id, sub) in [
             (ids[1], "RAW/rejects"),
-            (ids[2], "RAW/selects"),
+            (ids[2], "RAW/selects/0"),
             (ids[3], "RAW/edit"),
             (ids[4], "Export"),
         ] {
@@ -375,9 +379,9 @@ mod tests {
 
     #[test]
     fn sync_refreshes_xmp_when_file_already_placed() {
-        // After a rating change in Select, the file doesn't move (it's
-        // already in RAW/selects/). The XMP must still be rewritten so
-        // the on-disk rating matches the DB.
+        // A rating change *within the same Select star bin* (3↔4↔5 all
+        // map to the `3+` bin) doesn't move the file. The XMP must still
+        // be rewritten so the on-disk rating matches the DB.
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let mut db = Database::open(&db_path).unwrap();
@@ -385,19 +389,66 @@ mod tests {
             make_shoot_with_photos(&mut db, &dir, &["a.NEF"]);
 
         db.set_flag(ids[0], "pick").unwrap();
-        db.set_star_rating(ids[0], 2).unwrap();
+        db.set_star_rating(ids[0], 3).unwrap();
         sync_shoot_layout(&db, shoot_id).unwrap();
-        let xmp_path = shoot_root.join("RAW/selects/a.xmp");
+        let xmp_path = shoot_root.join("RAW/selects/3+/a.xmp");
         assert!(xmp_path.exists());
-        assert!(fs::read_to_string(&xmp_path).unwrap().contains("xmp:Rating=\"2\""));
+        assert!(fs::read_to_string(&xmp_path).unwrap().contains("xmp:Rating=\"3\""));
 
-        // Rating bumped; file stays put. Sync must refresh the sidecar.
+        // Bump 3 → 5: still the `3+` bin, so the file stays put. Sync
+        // must refresh the sidecar in place.
         db.set_star_rating(ids[0], 5).unwrap();
         let report = sync_shoot_layout(&db, shoot_id).unwrap();
         assert!(report.moved.is_empty());
         assert_eq!(report.skipped_already_placed, 1);
         assert!(report.errors.is_empty(), "no errors: {:?}", report.errors);
         assert!(fs::read_to_string(&xmp_path).unwrap().contains("xmp:Rating=\"5\""));
+    }
+
+    #[test]
+    fn sync_bins_select_picks_by_star_floor() {
+        // Four unrouted picks at ratings 0/1/2/4 land in
+        // selects/{0,1,2,3+}/. Re-rating one moves it to the new bin and
+        // cleans up the old sidecar; the move is idempotent.
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let mut db = Database::open(&db_path).unwrap();
+        let (shoot_id, ids, shoot_root) = make_shoot_with_photos(
+            &mut db,
+            &dir,
+            &["a.nef", "b.nef", "c.nef", "d.nef"],
+        );
+
+        let ratings = [0, 1, 2, 4];
+        for (id, r) in ids.iter().zip(ratings) {
+            db.set_flag(*id, "pick").unwrap();
+            db.set_star_rating(*id, r).unwrap();
+        }
+
+        let report = sync_shoot_layout(&db, shoot_id).unwrap();
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        assert_eq!(report.moved.len(), 4);
+        assert!(shoot_root.join("RAW/selects/0/a.nef").exists());
+        assert!(shoot_root.join("RAW/selects/1/b.nef").exists());
+        assert!(shoot_root.join("RAW/selects/2/c.nef").exists());
+        assert!(shoot_root.join("RAW/selects/3+/d.nef").exists());
+
+        // Idempotent: a re-sync with no metadata change moves nothing.
+        let again = sync_shoot_layout(&db, shoot_id).unwrap();
+        assert!(again.moved.is_empty());
+        assert_eq!(again.skipped_already_placed, 4);
+
+        // Promote b from 1★ to 3★ → it moves from selects/1/ to
+        // selects/3+/, taking its sidecar with it.
+        db.set_star_rating(ids[1], 3).unwrap();
+        let after = sync_shoot_layout(&db, shoot_id).unwrap();
+        assert_eq!(after.moved.len(), 1);
+        assert!(!shoot_root.join("RAW/selects/1/b.nef").exists());
+        assert!(!shoot_root.join("RAW/selects/1/b.xmp").exists());
+        assert!(shoot_root.join("RAW/selects/3+/b.nef").exists());
+        let xmp = fs::read_to_string(shoot_root.join("RAW/selects/3+/b.xmp")).unwrap();
+        assert!(xmp.contains("xmp:Rating=\"3\""));
+        assert!(!xmp.contains("xmp:Label"));
     }
 
     #[test]
@@ -507,8 +558,9 @@ mod tests {
         db.set_flag(ids[0], "pick").unwrap();
         sync_shoot_layout(&db, shoot_id).unwrap();
         assert!(!rejects_xmp.exists(), "old xmp cleared from rejects");
-        let selects_xmp = shoot_root.join("RAW/selects/a.xmp");
-        assert!(selects_xmp.exists(), "new xmp in selects");
+        // Unrated pick → the 0-star Select bin.
+        let selects_xmp = shoot_root.join("RAW/selects/0/a.xmp");
+        assert!(selects_xmp.exists(), "new xmp in selects/0");
         let content = fs::read_to_string(&selects_xmp).unwrap();
         assert!(content.contains("photosift:destination=\"unrouted\""));
         assert!(!content.contains("xmp:Label"));
@@ -762,12 +814,13 @@ mod tests {
         assert!(xmp.contains("photosift:destination=\"export\""));
         assert!(!xmp.contains("xmp:Label"));
 
-        // Flip back to unrouted → both files flow into RAW/selects/.
+        // Flip back to unrouted → both files flow into RAW/selects/0/
+        // (the pick is unrated, so the 0-star Select bin).
         db.set_destination(photo_id, "unrouted").unwrap();
         let report2 = sync_shoot_layout(&db, shoot_id).unwrap();
         assert_eq!(report2.moved.len(), 1);
-        assert!(shoot_root.join("RAW/selects/DSC_0042.NEF").exists());
-        assert!(shoot_root.join("RAW/selects/DSC_0042.JPG").exists());
+        assert!(shoot_root.join("RAW/selects/0/DSC_0042.NEF").exists());
+        assert!(shoot_root.join("RAW/selects/0/DSC_0042.JPG").exists());
         assert!(!raw_target.exists(), "Export/ RAW gone after reverse");
         assert!(!jpeg_target.exists(), "Export/ JPEG gone after reverse");
         assert!(!xmp_target.exists(), "Export/ sidecar cleaned up after reverse");

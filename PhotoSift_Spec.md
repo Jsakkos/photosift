@@ -129,6 +129,8 @@ Select is an iterative pass, modeled on the Lightroom "rate-then-raise-the-floor
 
 When every visible photo has already been rated above the current floor, PhotoSift auto-advances the floor one tier so the user doesn't have to press `]` manually. `[` steps back to a lower floor for second thoughts.
 
+When the Select pass completes, `sync_shoot_layout` partitions the unrouted picks on disk into `RAW/selects/{0,1,2,3+}/` by their current star floor (`3+` collapses 3–5, since the Route pass treats ★≥3 as a clear keeper). The folders mirror the in-app passes, so a decision made in an earlier round stays visible — and out of the way — outside the app. Re-rating a photo moves it to the matching bin on the next sync.
+
 `Tab` opens 2-up comparison with linked zoom/pan. Inside comparison, `1` picks the left panel and `2` picks the right (auto-rejects the other) — this is a burst-disambiguation shortcut distinct from the non-comparison `1`–`5` rating keys.
 
 #### Pass 3 — Route
