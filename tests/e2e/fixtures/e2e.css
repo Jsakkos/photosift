@@ -1,0 +1,38 @@
+/* Injected by tests/e2e/helpers/screenshot-helpers.mjs before every
+ * screenshot capture to pin font rendering, caret visibility, and any
+ * other source of non-determinism that varies between dev machines
+ * and the windows-latest CI runner.
+ *
+ * Don't import this from app code — it's strictly a test-time override.
+ */
+
+* {
+  -webkit-font-smoothing: none !important;
+  font-smooth: never !important;
+  text-rendering: geometricPrecision !important;
+  /* Animation/transitions add timing-dependent intermediate frames to
+   * any screenshot taken near the moment the UI changes. Skip them. */
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+input,
+textarea,
+[contenteditable] {
+  caret-color: transparent !important;
+}
+
+/* Some buttons/menus animate scrollbar visibility. Pin it. */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}
