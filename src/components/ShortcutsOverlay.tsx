@@ -80,6 +80,7 @@ export function ShortcutsOverlay() {
   const show = useProjectStore((s) => s.showShortcutHints);
   const toggle = useProjectStore((s) => s.toggleShortcutHints);
   const updateSettings = useSettingsStore((s) => s.updateSettings);
+  const openWizardTour = useSettingsStore((s) => s.openWizardTour);
 
   // "Replay tour" — re-arm the per-view first-run modals (#13) and
   // close this overlay so the user lands back on the cull view.
@@ -89,6 +90,12 @@ export function ShortcutsOverlay() {
       onboardedSelect: false,
       onboardedRoute: false,
     });
+    toggle();
+  };
+
+  // "Take the tour" — re-open the onboarding wizard at its three-pass step.
+  const takeTheTour = () => {
+    openWizardTour();
     toggle();
   };
 
@@ -144,6 +151,15 @@ export function ShortcutsOverlay() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={takeTheTour}
+              className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent underline"
+              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
+              title="Re-open the three-pass onboarding tour"
+            >
+              Take the tour
+            </button>
             <button
               type="button"
               onClick={replayTour}

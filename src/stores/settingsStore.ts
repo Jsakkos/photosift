@@ -81,6 +81,9 @@ export interface Settings {
   onboardedTriage: boolean;
   onboardedSelect: boolean;
   onboardedRoute: boolean;
+  /// First-run onboarding wizard (#9): true once completed or skipped.
+  /// Pre-existing installs are migrated to true so upgrades don't see it.
+  onboardedWizard: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -106,23 +109,31 @@ const DEFAULT_SETTINGS: Settings = {
   onboardedTriage: false,
   onboardedSelect: false,
   onboardedRoute: false,
+  onboardedWizard: false,
 };
 
 interface SettingsState {
   settings: Settings;
   isLoaded: boolean;
   isOpen: boolean;
+  /// "Take the tour" re-opened the onboarding wizard at its three-pass
+  /// step. Ephemeral (not persisted) — distinct from the first-run case,
+  /// which is driven by `settings.onboardedWizard`.
+  wizardReplay: boolean;
   loadSettings: () => Promise<void>;
   updateSettings: (partial: Partial<Settings>) => Promise<void>;
   reclusterShoot: (shootId: number) => Promise<number>;
   openDialog: () => void;
   closeDialog: () => void;
+  openWizardTour: () => void;
+  closeWizardTour: () => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   isLoaded: false,
   isOpen: false,
+  wizardReplay: false,
 
   loadSettings: async () => {
     try {
@@ -155,4 +166,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   openDialog: () => set({ isOpen: true }),
   closeDialog: () => set({ isOpen: false }),
+  openWizardTour: () => set({ wizardReplay: true }),
+  closeWizardTour: () => set({ wizardReplay: false }),
 }));
