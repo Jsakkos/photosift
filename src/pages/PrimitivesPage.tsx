@@ -50,6 +50,7 @@ export function PrimitivesPage() {
 
   return (
     <div
+      data-testid="primitives-page"
       className="h-full flex flex-col overflow-hidden"
       style={{ background: "var(--color-bg)", color: "var(--color-fg)" }}
     >

@@ -10,3 +10,5 @@ pub mod rating;
 pub mod scan;
 pub mod settings;
 pub mod shoots;
+#[cfg(debug_assertions)]
+pub mod testing;

@@ -148,9 +148,25 @@ npm run test:coverage
 cd src-tauri && cargo test --lib
 
 # End-to-end (WebdriverIO + tauri-driver) — runs against a built debug binary
-npm run test:e2e:build   # produces target/debug/photosift.exe
-npm run test:e2e         # runs wdio.conf.mjs
+npm run test:e2e:build              # produces target/debug/photosift.exe
+npm run test:e2e                    # raf-import IPC regression
+npm run test:e2e:screenshots        # screenshot CI suite (issue #20)
+npm run test:e2e:screenshots:update # regenerate the committed baselines
 ```
+
+### Screenshot CI
+
+`.github/workflows/screenshots.yml` runs the screenshot suite on every PR on
+`windows-latest`. Failures upload `tests/e2e/__diff__/*.png` as artifacts and
+post a PR summary comment. To accept the new visuals as canonical, apply the
+**`regenerate-screenshots`** PR label — `.github/workflows/regenerate-screenshots.yml`
+commits fresh baselines back to the PR branch with `[skip ci]`.
+
+The harness lives in `tests/e2e/screenshots/*.spec.mjs` + `tests/e2e/helpers/`.
+DB state is seeded via the **debug-only** `seed_test_fixtures` Tauri command
+(`src-tauri/src/commands/testing.rs`), redirected at a throwaway `$PHOTOSIFT_HOME`
+that defaults to `<repo>/.photosift-ci-local/` for local runs. Release builds
+do not register these commands.
 
 E2E rig is documented in user memory `reference_tauri_driver.md`. Use it for regression coverage of hot paths; use the dev MCP bridge (below) for ad-hoc verification.
 
@@ -163,7 +179,12 @@ E2E rig is documented in user memory `reference_tauri_driver.md`. Use it for reg
 
 **Rule:** A PR is handed to the user only after the change has been exercised in the running app via one of these (or a written explicit reason — e.g. "pure backend refactor, full `cargo test --lib` coverage of the changed path"). Include "verified via tauri-mcp: [screens]" or "verified via tauri-driver: [test path]" in the PR description.
 
-Unit tests prove correctness; in-app verification proves the feature actually works for the user.
+- **Always verify your own work before reporting it done or asking the user to test.** Use a layered approach, in order: (1) `cargo test` + `npm run test:run` + `npx tsc --noEmit` for any code change; (2) for UI changes, drive the running app via `tauri-mcp` (`cargo tauri dev` — or run `cargo run --no-default-features` from `src-tauri` if vite is already up on :1420 — then use the `mcp__tauri-mcp__*` tools to navigate, exercise the feature, and screenshot the key states), or fall back to native screenshots if the bridge won't connect; (3) for backend/filesystem behavior, exercise it via tests or a CLI repro. Only after that should you summarize what you actually observed. Don't say "this works" or "done" on the strength of the diff alone, and don't push verification onto the user when you can run it yourself.
+- Always test import with real D750 NEF files. The embedded JPEG preview extraction and pHash computation depend on the specific RAW format.
+- Perceptual hash grouping thresholds (≤4 near-duplicate, 5-12 related) may need tuning with real-world bursts. Make thresholds configurable constants, not magic numbers.
+- Preview preloading should be tested with shoots of 200+ images to verify memory behavior.
+- Keyboard handling must work when the image preview has focus. Watch for focus stealing.
+- Unit tests prove correctness; in-app verification proves the feature actually works for the user.
 
 ## Commands
 
@@ -201,6 +222,8 @@ Debug builds keep their own state so a compiled prod binary can keep running uni
 - **`keyring 3.x`** defaults to a mock backend without `*-native` features → `set_password()` silently succeeds but `get_password()` returns `NoEntry`. The Cargo manifest enables native backends for all three desktop OSes; don't remove them.
 - **Two import paths** — any per-file feature added to `commands::import::start_import` must also be added to `commands::scan::scan_folder` and vice versa.
 - **Tauri MCP plugin is debug-only** — `#[cfg(debug_assertions)]` gate in `lib.rs`. Release builds don't ship the bridge.
+- **`PHOTOSIFT_HOME` env override** — `db::schema::photosift_home()` consults `PHOTOSIFT_HOME` first, falling back to `~/.photosift`. Used by screenshot CI and integration tests to redirect the whole state directory (DB, models, caches) without touching the user's real library. Empty string is treated as unset.
+- **Screenshot test commands are debug-only too** — `commands::testing::{seed_test_fixtures, set_screenshot_state}` register only under `#[cfg(debug_assertions)]` via two arms in `lib.rs`'s `invoke_handler`. Cannot ship in release.
 - **Conventional commits** — `feat:`, `fix:`, `refactor:`, etc.
 - **Rust**: `rustfmt`, `clippy` clean. `anyhow` in command handlers, `thiserror` in module-internal error types.
 - **TypeScript**: strict, no `any`. Functional components with hooks.

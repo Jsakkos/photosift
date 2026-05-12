@@ -2008,13 +2008,21 @@ pub fn global_db_path() -> PathBuf {
     photosift_home().join("photosift.db")
 }
 
-/// Resolve the PhotoSift data root. Debug builds use `.photosift-dev` so a
-/// running production binary keeps owning `.photosift` exclusively. The
-/// `PHOTOSIFT_HOME` env var overrides everything (set to your prod path
-/// when you need dev to read prod data — note writes will mutate prod).
+/// Resolve the PhotoSift data root.
+///
+/// - Release builds default to `~/.photosift/`.
+/// - Debug builds default to `~/.photosift-dev/` so a running production
+///   binary keeps owning `.photosift` exclusively while dev work runs in
+///   parallel.
+/// - `$PHOTOSIFT_HOME` overrides both. Used by screenshot CI and
+///   integration tests to redirect the entire app state directory at a
+///   throwaway location, and as an escape hatch when you want a debug
+///   build to read prod data (note: writes will mutate prod state).
 pub fn photosift_home() -> PathBuf {
     if let Ok(custom) = std::env::var("PHOTOSIFT_HOME") {
-        return PathBuf::from(custom);
+        if !custom.is_empty() {
+            return PathBuf::from(custom);
+        }
     }
     let dir_name = if cfg!(debug_assertions) {
         ".photosift-dev"

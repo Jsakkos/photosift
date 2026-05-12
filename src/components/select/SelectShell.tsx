@@ -355,7 +355,7 @@ export function SelectShell() {
   const inBracket = useProjectStore((s) => s.selectBracket !== null);
 
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div data-testid="select-shell" className="flex-1 flex overflow-hidden">
       <SelectVisitTracker />
       <BracketAutoEnter />
       {showAllStrip && <StarGroupedStrip />}

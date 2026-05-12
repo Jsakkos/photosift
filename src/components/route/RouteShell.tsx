@@ -283,7 +283,11 @@ export function RouteShell() {
     PASS_TIERS.find((t) => t.floor === selectMinStar)?.label ?? "all";
 
   return (
-    <div className="flex-1 grid min-h-0" style={{ gridTemplateColumns: "1fr 320px" }}>
+    <div
+      data-testid="route-shell"
+      className="flex-1 grid min-h-0"
+      style={{ gridTemplateColumns: "1fr 320px" }}
+    >
       <div className="flex flex-col min-h-0 p-4">
         <div className="flex items-baseline justify-between mb-[14px] gap-4">
           <div>

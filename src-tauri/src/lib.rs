@@ -268,7 +268,78 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        // Two invocation arms so the screenshot-CI testing commands
+        // (which can truncate the DB) compile out of release builds
+        // entirely. `tauri::generate_handler!` is a macro and can't take
+        // `#[cfg]`-d entries as arguments, so we register the whole
+        // handler list inside each cfg branch.
+        ;
+
+        #[cfg(debug_assertions)]
+        let builder = builder.invoke_handler(tauri::generate_handler![
+            commands::shoots::list_shoots,
+            commands::shoots::get_shoot,
+            commands::shoots::delete_shoot,
+            commands::import::start_import,
+            commands::import::cancel_import,
+            commands::import::derive_import_year_month,
+            commands::scan::scan_folder,
+            commands::scan::extract_thumbnails_for_paths,
+            commands::drives::list_removable_drives,
+            commands::image::get_image_list,
+            commands::image::get_image_metadata,
+            commands::rating::set_rating,
+            commands::culling::set_flag,
+            commands::culling::set_destination,
+            commands::culling::bulk_set_flag,
+            commands::culling::undo_last,
+            commands::culling::get_view_cursor,
+            commands::culling::set_view_cursor,
+            commands::culling::get_groups_for_shoot,
+            commands::culling::set_group_cover,
+            commands::culling::create_group_from_photos,
+            commands::culling::ungroup_photos,
+            commands::settings::get_settings,
+            commands::settings::update_settings,
+            commands::settings::recluster_shoot,
+            commands::export::export_publish_direct,
+            commands::ai::get_ai_status,
+            commands::ai::cancel_ai_analysis,
+            commands::ai::reanalyze_shoot,
+            commands::ai::get_faces_for_photo,
+            commands::ai::get_heatmap,
+            commands::ai::get_shoot_sharpness_percentiles,
+            commands::layout::sync_layout_if_eligible,
+            commands::layout::mark_photo_visited_in_select,
+            commands::layout::bump_select_max_floor,
+            commands::layout::get_shoot_bucket_path,
+            commands::layout::open_shoot_folder,
+            commands::curator::set_anthropic_api_key,
+            commands::curator::clear_anthropic_api_key,
+            commands::curator::get_anthropic_api_key_status,
+            commands::curator::test_anthropic_connection,
+            commands::curator::set_curator_api_key,
+            commands::curator::clear_curator_api_key,
+            commands::curator::get_curator_api_key_status,
+            commands::curator::test_curator_connection,
+            commands::curator::start_curator_for_shoot,
+            commands::curator::cancel_curator,
+            commands::curator::resume_curator_for_shoot,
+            commands::curator::clear_curator_for_shoot,
+            commands::curator::get_curator_status,
+            commands::curator::get_curator_judgment_for_photo,
+            commands::curator::get_curator_judgments_for_shoot,
+            commands::curator::get_curator_summary,
+            commands::curator::get_curator_agreement_stats,
+            commands::curator::estimate_curator_cost_cents,
+            commands::curator::accept_curator_suggestion,
+            commands::curator::record_curator_override,
+            commands::testing::seed_test_fixtures,
+            commands::testing::set_screenshot_state,
+        ]);
+
+        #[cfg(not(debug_assertions))]
+        let builder = builder.invoke_handler(tauri::generate_handler![
             commands::shoots::list_shoots,
             commands::shoots::get_shoot,
             commands::shoots::delete_shoot,
