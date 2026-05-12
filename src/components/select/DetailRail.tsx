@@ -102,12 +102,12 @@ export function DetailRail() {
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
         {disabled && (
           <div className="text-[11px] py-6 text-center" style={{ color: "var(--color-fg-mute)" }}>
-            AI disabled.
+            On-device AI disabled — enable it in Settings.
           </div>
         )}
         {!disabled && !analyzedAt && (
           <div className="text-[11px] py-6 text-center" style={{ color: "var(--color-fg-mute)" }}>
-            Not analyzed yet.
+            Not analyzed by on-device AI yet.
           </div>
         )}
         {!disabled && analyzedAt && faces !== null && faces.length > 0 && photoId !== null && (

@@ -36,7 +36,7 @@ export function AiEyeIcon({
       : state === "closed"
         ? "Both eyes closed"
         : "One eye open";
-  const title = `${label}\nPer-eye open/closed from the eye classifier.\nFeeds the AI pick score.`;
+  const title = `On-device AI · ${label}\nPer-eye open/closed from the eye classifier.\nFeeds the on-device AI pick score.`;
 
   return (
     <div

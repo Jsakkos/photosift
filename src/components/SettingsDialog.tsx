@@ -323,7 +323,7 @@ export function SettingsDialog() {
     try {
       await startCuratorForShoot(currentShoot.id);
       setCuratorMsg(
-        "Started. Watch the Triage chip / 'AI rejects' filter populate as clusters complete.",
+        "Started. Watch the Triage chip / 'Curator rejects' filter populate as clusters complete.",
       );
     } catch (e) {
       setCuratorMsg(`Start failed: ${e}`);
@@ -336,7 +336,7 @@ export function SettingsDialog() {
     if (!currentShoot) return;
     if (
       !window.confirm(
-        "Re-run AI suggestions on this shoot? Existing AI judgments will be discarded.",
+        "Re-run the Curator on this shoot? Existing Curator judgments will be discarded.",
       )
     )
       return;
@@ -355,7 +355,7 @@ export function SettingsDialog() {
 
   const handleReanalyze = async () => {
     if (!currentShoot) return;
-    if (!window.confirm("Re-analyze this shoot? Existing AI data will be discarded.")) return;
+    if (!window.confirm("Re-analyze this shoot with on-device AI? Existing on-device AI data will be discarded.")) return;
     setReanalyzing(true);
     setReanalyzeMsg(null);
     try {
@@ -557,9 +557,14 @@ export function SettingsDialog() {
         )}
 
         <div className="mb-4 pt-4 border-t border-white/5">
-          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
-            AI analysis
+          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-1">
+            On-device AI
           </h3>
+          <p className="text-xs text-[var(--text-secondary)] mb-3">
+            Local ONNX models. Computes face detection, eye open/closed,
+            smile, and sharpness percentile per photo. Feeds the AI-pick
+            badge in the grid and the score bars in the faces rail.
+          </p>
 
           <div className="mb-3 flex items-center justify-between text-sm">
             <span className="text-[var(--text-secondary)]">Inference backend</span>
@@ -575,7 +580,7 @@ export function SettingsDialog() {
               onChange={(e) => setEnableAi(e.target.checked)}
               className="w-4 h-4"
             />
-            Enable AI analysis on import
+            Enable on-device AI on import
           </label>
           <p className="text-xs text-[var(--text-secondary)] -mt-2 ml-6 mb-3">
             When on, each import kicks off face + eye + sharpness analysis in the background.
@@ -599,7 +604,7 @@ export function SettingsDialog() {
             <div className="mt-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-[var(--text-secondary)]">
-                  Re-analyze this shoot with AI
+                  Re-analyze this shoot with on-device AI
                 </span>
                 <button
                   onClick={handleReanalyze}
@@ -617,12 +622,14 @@ export function SettingsDialog() {
         </div>
 
         <div className="mb-4 pt-4 border-t border-white/5">
-          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
-            AI Curator
+          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-1">
+            Curator (cloud)
           </h3>
           <p className="text-xs text-[var(--text-secondary)] mb-3">
-            Compositional and aesthetic judgment via a vision LLM. Runs after import
-            and writes per-photo suggestions you accept with{" "}
+            Compositional and aesthetic judgment via a vision LLM (Anthropic,
+            Gemini, or a local OpenAI-compatible endpoint). Computes a
+            per-photo keep/toss recommendation, cluster rank, and a written
+            reason. Accept with{" "}
             <kbd className="px-1 bg-[var(--bg-tertiary)] rounded">.</kbd> in Triage.
             Cloud keys are stored in the OS keychain — never written to the database.
           </p>
@@ -831,7 +838,7 @@ export function SettingsDialog() {
               className="w-4 h-4"
               disabled={!activeKeyStatus?.configured}
             />
-            Run AI suggestions on import (default for new shoots)
+            Run Curator on import (default for new shoots)
           </label>
           <p className="text-xs text-[var(--text-secondary)] -mt-1 ml-6 mb-3">
             Per-shoot toggle in the import dialog can override this default.
@@ -863,7 +870,7 @@ export function SettingsDialog() {
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-sm text-[var(--text-primary)] truncate">
-                    Run AI suggestions on{" "}
+                    Run Curator on{" "}
                     <span className="font-mono">{currentShoot.slug}</span>
                   </div>
                   <div className="text-xs text-[var(--text-secondary)] mt-0.5">

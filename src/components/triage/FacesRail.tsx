@@ -91,11 +91,21 @@ export function FacesRail() {
       }}
     >
       <div className="px-3 py-[10px] border-b" style={{ borderColor: "var(--color-border)" }}>
-        <div className="text-[11px] font-medium" style={{ color: "var(--color-fg)" }}>
-          Faces
+        <div
+          className="text-[11px] font-medium flex items-center gap-[6px]"
+          style={{ color: "var(--color-fg)" }}
+        >
+          <span>Faces</span>
+          <span
+            className="font-mono text-[9px] uppercase tracking-[0.5px] px-[5px] py-[1px] rounded-xs"
+            style={{ color: "var(--color-fg-mute)", background: "var(--color-bg2)" }}
+            title="Source: local ONNX models (face detect, eye/smile classifiers, sharpness)."
+          >
+            On-device AI
+          </span>
           {faces !== null && (
             <span
-              className="ml-[6px] font-mono text-[10px]"
+              className="font-mono text-[10px]"
               style={{ color: "var(--color-fg-mute)" }}
             >
               · {faces.length} detected
@@ -107,12 +117,12 @@ export function FacesRail() {
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
         {disabled && (
           <div className="text-[11px] py-8 text-center" style={{ color: "var(--color-fg-mute)" }}>
-            AI provider disabled.
+            On-device AI disabled — enable it in Settings to score this frame.
           </div>
         )}
         {!disabled && !analyzedAt && (
           <div className="text-[11px] py-8 text-center" style={{ color: "var(--color-fg-mute)" }}>
-            Not analyzed yet.
+            Not analyzed by on-device AI yet.
           </div>
         )}
         {!disabled && analyzedAt && faces !== null && faces.length > 0 && photoId !== null && (

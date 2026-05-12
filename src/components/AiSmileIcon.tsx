@@ -32,8 +32,8 @@ export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
       : `Smile confidence ${(smileScore * 100).toFixed(0)}%`;
   const title =
     smileScore == null
-      ? "Smile unknown — mouth classifier couldn't score this face."
-      : `${label}\nHappy-class probability from the mouth classifier.\nGreen ≥60% · Yellow 40-60% · Red ≤40%.\nMultiplies into AI pick score at half weight.`;
+      ? "On-device AI · Smile unknown — mouth classifier couldn't score this face."
+      : `On-device AI · ${label}\nHappy-class probability from the mouth classifier.\nGreen ≥60% · Yellow 40-60% · Red ≤40%.\nMultiplies into the on-device AI pick score at half weight.`;
 
   const opacity = smileScore == null ? "opacity-60" : "";
 

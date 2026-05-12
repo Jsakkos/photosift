@@ -20,7 +20,7 @@ export function AiProgressIndicator() {
         aria-hidden="true"
       />
       <span>
-        Analyzing {analyzed + failed}/{total}
+        On-device AI: {analyzed + failed}/{total}
         {failed > 0 && (
           <span className="text-yellow-400"> · {failed} skipped</span>
         )}
@@ -31,7 +31,7 @@ export function AiProgressIndicator() {
           invoke("cancel_ai_analysis").catch(() => {});
         }}
         className="underline opacity-70 hover:opacity-100"
-        aria-label="Cancel AI analysis"
+        aria-label="Cancel on-device AI analysis"
       >
         cancel
       </button>
