@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
 import { Photo } from "../primitives";
+import { RouteLightbox } from "./RouteLightbox";
 import type { ImageEntry } from "../../types";
 
 type DestinationId = "edit" | "export";
@@ -166,11 +167,10 @@ export function RouteShell() {
   const displayItems = useProjectStore((s) => s.displayItems);
   const selectMinStar = useProjectStore((s) => s.selectMinStar);
   const setSelectMinStar = useProjectStore((s) => s.setSelectMinStar);
-  const setCurrentIndex = useProjectStore((s) => s.setCurrentIndex);
-  const setViewMode = useProjectStore((s) => s.setViewMode);
   const bulkSetDestination = useProjectStore((s) => s.bulkSetDestination);
   const setToast = useProjectStore((s) => s.setToast);
   const [destChoice, setDestChoice] = useState<DestinationId>("edit");
+  const [lightboxPhotoId, setLightboxPhotoId] = useState<number | null>(null);
 
   const picks = useMemo(() => displayItems.map((d) => d.image), [displayItems]);
 
@@ -221,12 +221,21 @@ export function RouteShell() {
 
   const clearSelection = () => setSelectedIds(new Set());
 
-  const openInLoupe = (id: number) => {
-    const idx = displayItems.findIndex((d) => d.image.id === id);
-    if (idx < 0) return;
-    setCurrentIndex(idx);
-    setViewMode("sequential");
+  // ⤢ on a pick tile opens a Route-local lightbox (embedded preview at
+  // fit-screen). Route doesn't have a sequential/loupe view of its own
+  // — that's Triage/Select — so we render a contained modal here
+  // instead of trying to jam Route into the sequential mode shape.
+  const openInLightbox = (id: number) => {
+    setLightboxPhotoId(id);
   };
+  const lightboxFilename = useMemo(
+    () =>
+      lightboxPhotoId === null
+        ? undefined
+        : displayItems.find((d) => d.image.id === lightboxPhotoId)?.image
+            .filename,
+    [lightboxPhotoId, displayItems],
+  );
 
   const applyDestination = async (dest: DestinationId | "unrouted") => {
     const ids = hasSelection ? [...selectedIds] : picks.map((p) => p.id);
@@ -365,7 +374,7 @@ export function RouteShell() {
               image={image}
               selected={selectedIds.has(image.id)}
               onToggle={() => toggleSelect(image.id)}
-              onOpen={() => openInLoupe(image.id)}
+              onOpen={() => openInLightbox(image.id)}
             />
           ))}
           {picks.length === 0 && (
@@ -467,6 +476,11 @@ export function RouteShell() {
           />
         )}
       </div>
+      <RouteLightbox
+        photoId={lightboxPhotoId}
+        filename={lightboxFilename}
+        onClose={() => setLightboxPhotoId(null)}
+      />
     </div>
   );
 }
