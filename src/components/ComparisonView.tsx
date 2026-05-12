@@ -2,8 +2,9 @@ import { useRef, useState, useCallback } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
 import { currentPair as bracketCurrentPair } from "../lib/bracket";
+import { humanizeCuratorReason } from "../lib/curatorText";
 import { Kbd, Stars } from "./primitives";
-import type { ImageEntry } from "../types";
+import type { CuratorJudgment, ImageEntry } from "../types";
 
 type Side = "L" | "R";
 
@@ -13,7 +14,87 @@ type PanelProps = {
   url: string | null;
   scale: number;
   imgStyle: React.CSSProperties;
+  judgment: CuratorJudgment | null;
+  clusterSize: number;
+  filenameFor: (photoId: number) => string | null;
 };
+
+function providerInitial(provider: string): string {
+  switch (provider) {
+    case "anthropic":
+      return "A";
+    case "gemini":
+      return "G";
+    case "local":
+      return "L";
+    default:
+      return "?";
+  }
+}
+
+function providerLabel(provider: string): string {
+  switch (provider) {
+    case "anthropic":
+      return "Anthropic";
+    case "gemini":
+      return "Gemini";
+    case "local":
+      return "Local";
+    default:
+      return provider || "unknown";
+  }
+}
+
+/// Dim footer strip under the image showing the Curator's per-photo take.
+/// Collapses to nothing when there's no judgment — the filename still lives
+/// in the row above, so an unjudged side just shows filename + stars + pills.
+function CuratorRow({
+  judgment,
+  clusterSize,
+  filenameFor,
+}: {
+  judgment: CuratorJudgment;
+  clusterSize: number;
+  filenameFor: (photoId: number) => string | null;
+}) {
+  const rank =
+    judgment.clusterRank != null
+      ? clusterSize > 1
+        ? `#${judgment.clusterRank} of ${clusterSize}`
+        : `#${judgment.clusterRank}`
+      : null;
+  return (
+    <div
+      className="px-4 py-[6px] border-t flex items-center gap-2 min-w-0"
+      style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
+    >
+      <span
+        title={`${providerLabel(judgment.provider)} · ${judgment.model}`}
+        className="font-mono text-[9px] uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs shrink-0"
+        style={{ color: "var(--color-fg-dim)", background: "var(--color-bg3)" }}
+      >
+        {providerInitial(judgment.provider)}
+      </span>
+      <span
+        className="text-[11px] leading-[1.4] truncate min-w-0"
+        style={{ color: "var(--color-fg-dim)" }}
+        title={humanizeCuratorReason(judgment.reason, filenameFor)}
+      >
+        {humanizeCuratorReason(judgment.reason, filenameFor)}
+      </span>
+      {(rank || judgment.isKeeper) && (
+        <span
+          className="font-mono text-[9px] tabular-nums shrink-0 ml-auto pl-2"
+          style={{ color: "var(--color-fg-mute)" }}
+        >
+          {rank}
+          {rank && judgment.isKeeper ? " · " : ""}
+          {judgment.isKeeper ? "keeper" : ""}
+        </span>
+      )}
+    </div>
+  );
+}
 
 function ScorePill({ label, value }: { label: string; value: number }) {
   const high = value >= 85;
@@ -32,7 +113,16 @@ function ScorePill({ label, value }: { label: string; value: number }) {
   );
 }
 
-function ComparePanel({ side, image, url, scale, imgStyle }: PanelProps) {
+function ComparePanel({
+  side,
+  image,
+  url,
+  scale,
+  imgStyle,
+  judgment,
+  clusterSize,
+  filenameFor,
+}: PanelProps) {
   if (!image) return <div className="flex-1" style={{ background: "#0a0a0a" }} />;
   const rating = Math.max(0, Math.min(5, image.starRating)) as 0 | 1 | 2 | 3 | 4 | 5;
   const sharp = Math.round(image.sharpnessScore ?? 0);
@@ -94,6 +184,13 @@ function ComparePanel({ side, image, url, scale, imgStyle }: PanelProps) {
         <ScorePill label="eye" value={eye} />
         <ScorePill label="smile" value={smile} />
       </div>
+      {judgment && (
+        <CuratorRow
+          judgment={judgment}
+          clusterSize={clusterSize}
+          filenameFor={filenameFor}
+        />
+      )}
     </div>
   );
 }
@@ -102,6 +199,7 @@ export function ComparisonView() {
   const selectBracket = useProjectStore((s) => s.selectBracket);
   const images = useProjectStore((s) => s.images);
   const groups = useProjectStore((s) => s.groups);
+  const curatorJudgments = useProjectStore((s) => s.curatorJudgments);
 
   const pair = selectBracket ? bracketCurrentPair(selectBracket) : null;
   const leftId = pair?.left ?? null;
@@ -109,6 +207,16 @@ export function ComparisonView() {
 
   const leftImage = images.find((i) => i.id === leftId) ?? null;
   const rightImage = images.find((i) => i.id === rightId) ?? null;
+
+  const filenameFor = useCallback(
+    (photoId: number) => images.find((i) => i.id === photoId)?.filename ?? null,
+    [images],
+  );
+  const clusterSize = selectBracket
+    ? groups.find((g) => g.id === selectBracket.groupId)?.members.length ?? 0
+    : 0;
+  const leftJudgment = leftId != null ? curatorJudgments.get(leftId) ?? null : null;
+  const rightJudgment = rightId != null ? curatorJudgments.get(rightId) ?? null : null;
 
   const { displayUrl: leftUrl } = useImageLoader(leftId);
   const { displayUrl: rightUrl } = useImageLoader(rightId);
@@ -249,6 +357,9 @@ export function ComparisonView() {
           url={leftUrl}
           scale={transform.scale}
           imgStyle={imgStyle}
+          judgment={leftJudgment}
+          clusterSize={clusterSize}
+          filenameFor={filenameFor}
         />
         <ComparePanel
           side="R"
@@ -256,6 +367,9 @@ export function ComparisonView() {
           url={rightUrl}
           scale={transform.scale}
           imgStyle={imgStyle}
+          judgment={rightJudgment}
+          clusterSize={clusterSize}
+          filenameFor={filenameFor}
         />
       </div>
 
