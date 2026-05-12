@@ -184,7 +184,7 @@ export function TriageShell() {
   const showFaces = useProjectStore((s) => s.showFaces);
 
   return (
-    <div className="flex-1 flex overflow-hidden">
+    <div data-testid="triage-shell" className="flex-1 flex overflow-hidden">
       {showAllStrip && <AllStrip />}
       <TriageGroupStrip />
       <div className="flex-1 flex flex-col min-w-0">

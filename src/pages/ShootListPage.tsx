@@ -293,6 +293,7 @@ export function ShootListPage() {
 
   return (
     <div
+      data-testid="shoot-list-page"
       className="h-screen w-screen flex flex-col overflow-hidden"
       style={{ background: "var(--color-bg)", color: "var(--color-fg)" }}
     >

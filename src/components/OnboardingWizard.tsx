@@ -73,6 +73,7 @@ export function OnboardingWizard({
 
   return (
     <div
+      data-testid="onboarding-wizard"
       className="fixed inset-0 z-[60] flex items-center justify-center p-6"
       style={{ background: "rgba(0,0,0,0.78)" }}
       role="dialog"

@@ -1,0 +1,91 @@
+name: Regenerate Screenshot Baselines
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  regenerate:
+    if: github.event.label.name == 'regenerate-screenshots'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PHOTOSIFT_HOME: ${{ github.workspace }}\.photosift-ci
+      PHOTOSIFT_E2E_FIXTURES: ${{ github.workspace }}\tests\e2e\fixtures\img
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The default checkout for `pull_request: labeled` lands on the
+          # merge SHA, which is detached HEAD. We need the PR's own
+          # branch to push baselines back to.
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      - name: Resolve msedgedriver
+        shell: pwsh
+        run: |
+          $edge = Get-Item "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+          $version = $edge.VersionInfo.FileVersion
+          $url = "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip"
+          $zip = "$env:RUNNER_TEMP\msedgedriver.zip"
+          $tools = "$PWD\.tools"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $tools -Force
+
+      - name: Build debug binary
+        run: npm run test:e2e:build
+
+      - name: Regenerate baselines
+        run: npm run test:e2e:screenshots:update
+
+      - name: Commit + push baselines
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/e2e/__snapshots__
+          if (git diff --staged --quiet) {
+            Write-Host "No baseline changes to commit."
+            exit 0
+          }
+          git commit -m "chore(screenshots): regenerate baselines [skip ci]"
+          git push
+
+      - name: Remove the trigger label
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: "regenerate-screenshots",
+              });
+            } catch (e) {
+              core.warning(`Label removal failed: ${e.message}`);
+            }

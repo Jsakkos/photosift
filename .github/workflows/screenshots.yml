@@ -1,0 +1,119 @@
+name: Screenshot CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  screenshots:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # Redirect every ~/.photosift/* path the app reads or writes to a
+      # workspace-local sandbox. The override lives in db/schema.rs
+      # `photosift_home()`. No interaction with the runner's user dir.
+      PHOTOSIFT_HOME: ${{ github.workspace }}\.photosift-ci
+      # Tells the testing commands seeder where the committed fixture
+      # JPEGs live (these get copied into the cache dir per fixture).
+      PHOTOSIFT_E2E_FIXTURES: ${{ github.workspace }}\tests\e2e\fixtures\img
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      - name: Resolve msedgedriver
+        shell: pwsh
+        run: |
+          $edge = Get-Item "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+          $version = $edge.VersionInfo.FileVersion
+          Write-Host "Edge version: $version"
+          $url = "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip"
+          $zip = "$env:RUNNER_TEMP\msedgedriver.zip"
+          $tools = "$PWD\.tools"
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $tools -Force
+          if (-not (Test-Path "$tools\msedgedriver.exe")) {
+            throw "msedgedriver.exe not found after extraction"
+          }
+
+      - name: Build debug binary
+        run: npm run test:e2e:build
+
+      - name: Run screenshot suite
+        run: npm run test:e2e:screenshots
+
+      - name: Upload screenshots + diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-diffs-${{ github.run_id }}
+          path: |
+            tests/e2e/__screenshots__/
+            tests/e2e/__diff__/
+            tests/e2e/__snapshots__/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Post diff summary comment
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const diffDir = 'tests/e2e/__diff__';
+            let diffs = [];
+            if (fs.existsSync(diffDir)) {
+              const walk = (dir) => {
+                for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                  const p = path.join(dir, entry.name);
+                  if (entry.isDirectory()) walk(p);
+                  else if (entry.name.endsWith('.png')) diffs.push(p);
+                }
+              };
+              walk(diffDir);
+            }
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const lines = [
+              '## 📸 Screenshot CI — diffs detected',
+              '',
+              `${diffs.length} screenshot(s) differ from baseline.`,
+              '',
+              `**[Download the diff artifact](${runUrl})** to inspect side-by-side.`,
+              '',
+              '<details><summary>Diff list</summary>',
+              '',
+              ...diffs.map((d) => `- \`${d}\``),
+              '',
+              '</details>',
+              '',
+              'To accept these as the new baseline, apply the **`regenerate-screenshots`** label to this PR.',
+            ];
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: lines.join('\n'),
+            });

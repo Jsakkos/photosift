@@ -228,6 +228,8 @@ export function CullPage() {
   return (
     <div
       ref={shellRef}
+      data-testid="cull-page"
+      data-view={currentView}
       tabIndex={-1}
       className="h-screen w-screen flex flex-col outline-none"
       style={{ background: "var(--color-bg)" }}

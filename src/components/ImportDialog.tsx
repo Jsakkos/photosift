@@ -361,7 +361,10 @@ export function ImportDialog({
   }, [selectedPaths.length, addMode]);
 
   return (
-    <div className="fixed inset-0 bg-black/55 flex items-center justify-center z-50">
+    <div
+      data-testid="import-dialog"
+      className="fixed inset-0 bg-black/55 flex items-center justify-center z-50"
+    >
       <div
         className={`rounded-md max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col p-5 ${dialogWidthClass}`}
         style={{

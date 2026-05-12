@@ -79,7 +79,7 @@ function App() {
         <Route path="/" element={<Navigate to="/shoots" replace />} />
         <Route path="/shoots" element={<ShootListPage />} />
         <Route path="/shoots/:id" element={<CullPage />} />
-        {import.meta.env.DEV && <Route path="/primitives" element={<PrimitivesPage />} />}
+        <Route path="/primitives" element={<PrimitivesPage />} />
       </Routes>
       <SettingsDialog />
       {showWizard && <OnboardingWizard replay={wizardReplay} onClose={closeWizardTour} />}

@@ -2008,8 +2008,15 @@ pub fn global_db_path() -> PathBuf {
     photosift_home().join("photosift.db")
 }
 
-/// ~/.photosift/
+/// ~/.photosift/ (or `$PHOTOSIFT_HOME` if set — used by screenshot CI and
+/// integration tests to redirect the entire app state directory at a
+/// throwaway location without touching the user's real home).
 pub fn photosift_home() -> PathBuf {
+    if let Ok(custom) = std::env::var("PHOTOSIFT_HOME") {
+        if !custom.is_empty() {
+            return PathBuf::from(custom);
+        }
+    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".photosift")

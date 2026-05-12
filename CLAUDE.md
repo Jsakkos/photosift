@@ -148,9 +148,25 @@ npm run test:coverage
 cd src-tauri && cargo test --lib
 
 # End-to-end (WebdriverIO + tauri-driver) — runs against a built debug binary
-npm run test:e2e:build   # produces target/debug/photosift.exe
-npm run test:e2e         # runs wdio.conf.mjs
+npm run test:e2e:build              # produces target/debug/photosift.exe
+npm run test:e2e                    # raf-import IPC regression
+npm run test:e2e:screenshots        # screenshot CI suite (issue #20)
+npm run test:e2e:screenshots:update # regenerate the committed baselines
 ```
+
+### Screenshot CI
+
+`.github/workflows/screenshots.yml` runs the screenshot suite on every PR on
+`windows-latest`. Failures upload `tests/e2e/__diff__/*.png` as artifacts and
+post a PR summary comment. To accept the new visuals as canonical, apply the
+**`regenerate-screenshots`** PR label — `.github/workflows/regenerate-screenshots.yml`
+commits fresh baselines back to the PR branch with `[skip ci]`.
+
+The harness lives in `tests/e2e/screenshots/*.spec.mjs` + `tests/e2e/helpers/`.
+DB state is seeded via the **debug-only** `seed_test_fixtures` Tauri command
+(`src-tauri/src/commands/testing.rs`), redirected at a throwaway `$PHOTOSIFT_HOME`
+that defaults to `<repo>/.photosift-ci-local/` for local runs. Release builds
+do not register these commands.
 
 E2E rig is documented in user memory `reference_tauri_driver.md`. Use it for regression coverage of hot paths; use the dev MCP bridge (below) for ad-hoc verification.
 
@@ -188,6 +204,8 @@ sqlite3 ~/.photosift/photosift.db
 - **`keyring 3.x`** defaults to a mock backend without `*-native` features → `set_password()` silently succeeds but `get_password()` returns `NoEntry`. The Cargo manifest enables native backends for all three desktop OSes; don't remove them.
 - **Two import paths** — any per-file feature added to `commands::import::start_import` must also be added to `commands::scan::scan_folder` and vice versa.
 - **Tauri MCP plugin is debug-only** — `#[cfg(debug_assertions)]` gate in `lib.rs`. Release builds don't ship the bridge.
+- **`PHOTOSIFT_HOME` env override** — `db::schema::photosift_home()` consults `PHOTOSIFT_HOME` first, falling back to `~/.photosift`. Used by screenshot CI and integration tests to redirect the whole state directory (DB, models, caches) without touching the user's real library. Empty string is treated as unset.
+- **Screenshot test commands are debug-only too** — `commands::testing::{seed_test_fixtures, set_screenshot_state}` register only under `#[cfg(debug_assertions)]` via two arms in `lib.rs`'s `invoke_handler`. Cannot ship in release.
 - **Conventional commits** — `feat:`, `fix:`, `refactor:`, etc.
 - **Rust**: `rustfmt`, `clippy` clean. `anyhow` in command handlers, `thiserror` in module-internal error types.
 - **TypeScript**: strict, no `any`. Functional components with hooks.

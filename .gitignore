@@ -30,7 +30,14 @@ target/tauri-mcp/
 
 # App data (never commit local database or caches)
 .photosift/
+.photosift-ci-local*/
 .tools/
+
+# Screenshot CI actuals + diffs (never commit — baselines under
+# tests/e2e/__snapshots__/ ARE committed, but these intermediates are
+# regenerated every run)
+tests/e2e/__screenshots__/
+tests/e2e/__diff__/
 
 # Claude Code runtime artifacts (per-session, never commit)
 .claude/*.lock
