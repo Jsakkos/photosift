@@ -11,7 +11,7 @@ A local-first photo culling pipeline. Import RAW photos from an SD card or folde
 - **Triage** — `P` keep · `X` reject. Perceptual-hash bursts collapse to a single cover so 12 near-identical shots reject in one keystroke.
 - **Select** — `1`–`5` star rate, `[` `]` narrow the pass floor. Multi-pass star workflow: ≥1 survives Pass 1, ≥5 is top shelf.
 - **Route** — `E` send to the edit folder (Capture One / DxO import), `D` publish direct (Immich ingest).
-- **Export** — XMP sidecars (Lightroom-compatible Rating/Label) written alongside the RAW; publish-direct copies the embedded JPEG preview into the configured Immich landing folder.
+- **Export** — XMP sidecars (Lightroom-compatible `xmp:Rating` plus a custom `photosift:destination` field) written alongside the RAW; publish-direct copies the embedded JPEG preview into the configured Immich landing folder. `xmp:Label` is deliberately not written — see `PhotoSift_Spec.md` for why.
 
 ## Shoot folder layout
 
@@ -65,6 +65,7 @@ npm run tauri build
 - **Preview cache**: `~/.photosift/cache/{shoot_id}/previews/` — full-res embedded JPEGs
 - **Thumbnail cache**: `~/.photosift/cache/{shoot_id}/thumbs/` — 512 px longest edge
 - **AI models** (optional): drop `eye_state.onnx`, `mouth_state.onnx`, `cat_detector.onnx` into `~/.photosift/models/` to swap the mocks for real classifiers. YuNet face detection is bundled.
+- **Curator** (optional, cloud): aesthetic / compositional culling via Anthropic, Gemini, or a local OpenAI-compatible endpoint. BYO API key — stored in the OS keychain, set under Settings → Curator. Suggestions are stored in `curator_judgments` and surfaced as overlays; nothing is auto-applied.
 
 ## Tech stack
 
