@@ -14,8 +14,9 @@ The design philosophy is speed-first, keyboard-driven, and non-destructive. All 
 | Backend | Rust | File I/O, RAW preview extraction, EXIF, hashing, ONNX inference |
 | Frontend | React | Keyboard-driven culling UI |
 | Database | SQLite | Single file, embedded, local |
-| AI (post-MVP) | ONNX Runtime | Sharpness scoring, face detection, scene classification |
-| Metadata interchange | XMP sidecars | Portable ratings/labels for Capture One and DxO |
+| AI (on-device) | ONNX Runtime | Sharpness (Laplacian variance), YuNet face detection, eye/mouth state, cat heuristic. Scene classification still future. |
+| AI (cloud) | Curator subsystem | Optional aesthetic/compositional culling via Anthropic, Gemini, or local OpenAI-compatible providers. Suggestion-only. |
+| Metadata interchange | XMP sidecars | `xmp:Rating` + custom `photosift:destination` written for Capture One / DxO. `xmp:Label` is **not** written — see XMP Export below. |
 
 ---
 
@@ -303,10 +304,11 @@ On `Cmd+E`, PhotoSift writes XMP sidecar files alongside each RAW file for the c
 | XMP Field | Source | Notes |
 |---|---|---|
 | `xmp:Rating` | `star_rating` | 0 during culling, meaningful post-edit |
-| `xmp:Label` | `flag` | Green = Pick, Red = Reject |
-| `photosift:destination` | `destination` | Custom namespace: edit / publish_direct |
+| `photosift:destination` | `destination` | Custom namespace; written as `edit` or `export` |
 
-Both Capture One and DxO read `xmp:Rating` and `xmp:Label` natively. The custom `photosift:destination` field is for PhotoSift's own use and is ignored by editors.
+`xmp:Rating` is read natively by Capture One and DxO. The custom `photosift:destination` field is for PhotoSift's own use and is ignored by editors.
+
+**`xmp:Label` is deliberately not written.** Capture One and DxO interpret `xmp:Label` as a user-chosen color tag — writing one from a pick/reject flag would pollute the user's color-tag palette with a value they never asked for. The pick/reject decision is fully carried by the file's physical location (`RAW/` vs `RAW/rejects/`, etc.) and by `photosift:destination`. User-set `xmp:Label` values in pre-existing sidecars are passed through untouched. Enforced in `src-tauri/src/metadata/xmp.rs` (see comment at line 107 and the regression test at line 418).
 
 ### Editor Handoff
 
@@ -407,79 +409,96 @@ DSLR/2026/2026-06_Greece/
 | `new_value` | TEXT | New value |
 | `timestamp` | TEXT | ISO timestamp |
 
+### Post-MVP tables
+
+The schema has grown beyond the original six. These tables are added by idempotent migrations in `src-tauri/src/db/schema.rs`:
+
+- **`settings`** — single-row key/value store for user-configurable settings: import path template, bucket folder names, per-view filter gates (`select_requires_pick`, `route_min_star`), first-run dismissal flags, curator-provider preference, etc.
+- **`file_moves`** — audit trail of layout-sync operations (which RAW moved from where to where, when). Used to reverse moves and to drive the `?` shortcuts overlay's recent-activity panel.
+- **`curator_judgments`** — append-only record of cloud-LLM verdicts: per photo, per provider, with confidence and reasoning. Powers `get_curator_agreement_stats` and the curator audit UI.
+- **`faces`** — face crop metadata produced by the on-device AI worker: bounding box, landmarks, eye state, mouth state, sharpness — keyed on `photo_id`.
+
+See `src-tauri/src/db/schema.rs` for the authoritative column list.
+
 ---
 
 ## Rust Backend Modules
 
-### `ingest`
+The backend has outgrown the original five single-file modules. Current layout in `src-tauri/src/`:
 
-File copy, EXIF extraction, preview extraction, thumbnail generation, pHash computation, clustering, database registration.
+### `ingest/`
 
-**Crates**:
-- `kamadak-exif` — EXIF parsing
-- `rawloader` or `libraw-rs` — RAW preview extraction (test D750/NEF support)
-- `image` — JPEG decode/resize for thumbnails
-- `img_hash` — Perceptual hashing (DCT-based)
-- `sha2` — Content hashing for dedup
-- Custom clustering (single-linkage agglomerative, small enough to inline)
+File copy, EXIF extraction, embedded JPEG preview extraction, thumbnail generation, pHash, single-linkage clustering, sibling-JPEG pairing, walker, progress tracking.
 
-### `database`
+**Crates**: `rawler` (NEF), `kamadak-exif`, `image` (JPEG decode/resize), custom pHash, `sha2` (content hash dedup).
 
-SQLite operations via `rusqlite`. CRUD for all tables. Exposes a typed API to the Tauri command layer.
+### `db/`
 
-### `preview`
+`schema.rs` is authoritative for the table list — idempotent additive migrations, typed CRUD via `rusqlite` (bundled).
 
-Preview cache management. Background thread pool decodes embedded JPEGs into pixel buffers. Ring buffer holds preloaded images. Manages the forward/backward preload window based on current cursor position and available memory.
+### `pipeline/`
 
-### `xmp`
+Preview cache, prefetch manager (N+1..N+5 forward, N-1..N-3 backward), decoder tiers, embedded-preview extraction, and the `photosift://` Tauri custom protocol handler that streams previews into the webview without IPC serialization.
 
-XMP sidecar writing. Template-based — XMP is XML, so a simple template with string substitution for rating, label, and custom fields. No heavy XML library needed.
+### `metadata/`
 
-### `ai` (Post-MVP)
+XMP read/write via `quick-xml`, EXIF parsing, orientation handling, and a write-coalescing `xmp_queue` that batches updates so rapid rating changes don't thrash the disk.
 
-ONNX Runtime integration for optional enrichment at import time:
-- Sharpness scoring (Laplacian variance or learned model)
-- Face detection (for filtering group/people shots)
-- Scene classification (landscape, architecture, portrait, etc.)
+### `ai/`
 
-Results stored in the photos table and surfaced as sortable/filterable attributes in culling views.
+ONNX Runtime (`ort` with `cuda` feature) wrappers behind provider traits:
+- `face` — YuNet, bundled
+- `eye_onnx` / `mouth_onnx` — drop-in ONNX classifiers in `~/.photosift/models/`, fall back to `mock.rs` if absent
+- `cat` — heuristic cat detector
+- `sharpness` — Laplacian variance
+- `worker` — background analysis thread with cancel/progress atomics
+
+Suggest-only by design — never auto-applies a verdict.
+
+### `curator/`
+
+Optional cloud LLM aesthetic culling. `CuratorProvider` trait with three implementations: Anthropic (Claude), Gemini, and local OpenAI-compatible (`api_anthropic.rs`, `api_gemini.rs`, `api_local.rs`). Cost estimation, prompts, worker, per-provider API keys in the OS keychain via `keyring`. Judgments stored in `curator_judgments` for audit and agreement stats.
+
+### `commands/`
+
+Thin Tauri command wrappers organized one-file-per-domain (`shoots`, `import`, `scan`, `drives`, `image`, `rating`, `culling`, `settings`, `export`, `ai`, `layout`, `curator`). 56 commands total.
+
+### `layout.rs` / `folder_template.rs`
+
+`sync_shoot_layout` is the layout-management heart. Maps `(flag, destination, star_rating)` → bucket folder (`RAW/`, `RAW/rejects/`, `RAW/selects/{0,1,2,3+}/`, `RAW/edit/`, top-level `Export/`) and moves RAWs + sibling JPEGs + their XMP sidecars on every transition. Idempotent and reversible. `folder_template.rs` holds the user-configurable path template + bucket names (the `selects/{0,1,2,3+}` star bins themselves are fixed).
+
+### `drives/`
+
+Removable-drive detection for SD-card import.
+
+### `state.rs`
+
+`AppState` carries shared atomics (AI cancel flag, AI/curator analyzed/failed/total counters) and the XMP write queue.
 
 ---
 
 ## Tauri IPC Commands
 
-```rust
-// --- Import ---
-start_import(source_path: String, slug: String) -> Stream<ImportProgress>
+**56 commands** are registered in the `invoke_handler` block of `src-tauri/src/lib.rs` — the authoritative list. Grouped by domain:
 
-// --- Shoots ---
-list_shoots() -> Vec<ShootSummary>
-get_shoot(shoot_id: i64) -> ShootDetail
+| Domain | Count | Examples |
+|---|---|---|
+| Shoots | 3 | `list_shoots`, `get_shoot`, `delete_shoot` |
+| Import | 2 | `start_import`, `cancel_import` |
+| Scan | 2 | `scan_folder`, `extract_thumbnails_for_paths` |
+| Drives | 1 | `list_removable_drives` |
+| Image | 2 | `get_image_list`, `get_image_metadata` |
+| Rating | 1 | `set_rating` |
+| Culling | 9 | `set_flag`, `set_destination`, `bulk_set_flag`, `undo_last`, view cursors, group CRUD |
+| Settings | 3 | `get_settings`, `update_settings`, `recluster_shoot` |
+| Export | 1 | `export_publish_direct` |
+| AI | 6 | `get_ai_status`, `cancel_ai_analysis`, `reanalyze_shoot`, `get_faces_for_photo`, `get_heatmap`, `get_shoot_sharpness_percentiles` |
+| Layout | 5 | `sync_layout_if_eligible`, `mark_photo_visited_in_select`, `bump_select_max_floor`, `get_shoot_bucket_path`, `open_shoot_folder` |
+| Curator | 17 | per-provider key management (Anthropic, Curator, Local), `test_*_connection`, `start_curator_for_shoot`, `cancel_curator`, `resume_curator_for_shoot`, `get_curator_status`, `get_curator_judgments_for_shoot`, `get_curator_summary`, `get_curator_agreement_stats`, `estimate_curator_cost_cents`, `accept_curator_suggestion`, `record_curator_override` |
 
-// --- Photos ---
-get_preview(photo_id: i64) -> Binary
-get_thumbnail(photo_id: i64) -> Binary
-preload_range(photo_ids: Vec<i64>) -> ()
+Import streams progress events via Tauri's event system (file count, current file, errors). Preview retrieval bypasses the JSON IPC entirely — it goes through a custom `photosift://` Tauri protocol handler registered in `src-tauri/src/pipeline/protocol.rs` so previews are streamed directly into the webview without serializing large pixel buffers.
 
-// --- Culling ---
-set_flag(photo_id: i64, flag: Flag) -> ()
-set_destination(photo_id: i64, dest: Destination) -> ()
-set_star_rating(photo_id: i64, rating: u8) -> ()
-bulk_set_flag(photo_ids: Vec<i64>, flag: Flag) -> ()
-set_group_cover(group_id: i64, photo_id: i64) -> ()
-
-// --- View State ---
-get_view_cursor(shoot_id: i64, view: ViewName) -> Option<i64>
-set_view_cursor(shoot_id: i64, view: ViewName, photo_id: i64) -> ()
-
-// --- Undo ---
-undo(shoot_id: i64) -> Option<UndoAction>
-
-// --- Export ---
-export_xmp(shoot_id: i64, filter: ExportFilter) -> ExportResult
-```
-
-Import streams progress events via Tauri's event system (file count, current file, errors). Preview retrieval is the hot path — consider Tauri's asset protocol or shared memory to avoid serializing large image buffers through IPC.
+Command handlers return typed structs, not raw JSON. Shared types are defined in Rust and mirrored in `src/types/` on the TypeScript side.
 
 ---
 
@@ -493,9 +512,26 @@ Syncthing to NAS landing zone, or Immich as phone ingest. PhotoSift watches the 
 
 PhotoSift watches the `Export/` folder for a shoot. When new exports are detected, a "Rate Exports" view shows finished images and lets you assign stars (1–5). Stars write back to XMP on both the export and the original RAW.
 
-### AI Enrichment
+### AI Enrichment — *shipped*
 
-Sharpness, face detection, and scene classification run at import as optional enrichment. Scores surface in culling views as sortable columns and filter criteria. AI suggests the "best" cover image for each group (sharpest + best exposed). The human always decides.
+On-device AI runs at import as optional enrichment, with results stored in the `faces` table and surfaced in culling views:
+
+- **Sharpness** — Laplacian variance via `ai/sharpness.rs`. Per-shoot percentiles computed for relative scoring.
+- **Face detection** — YuNet (bundled) via `ai/face.rs`. Returns boxes + landmarks. Heatmap overlay (`H` key) visualizes detections.
+- **Eye state, mouth state, cat heuristic** — drop-in ONNX classifiers. Place `eye_state.onnx`, `mouth_state.onnx`, `cat_detector.onnx` in `~/.photosift/models/` to enable; falls back to mocks if absent or if ORT init fails.
+- **CUDA** — optional via `ort`'s `cuda` feature. Provider DLL is bundled; cuBLAS / cuDNN must be supplied separately (extract from `nvidia-*-cu12` pip wheels).
+- **AI suggests, never decides.** Group cover suggestions, sort orders, and pick badges are surfaced in the UI but never auto-applied.
+
+**Scene classification** (landscape, architecture, portrait) is still future work — not implemented in the current AI module.
+
+### Curator (cloud LLM aesthetic culling) — *shipped*
+
+Optional cloud-LLM layer for compositional / aesthetic judgments, complementary to the on-device technical-quality AI. Implemented in `src-tauri/src/curator/`:
+
+- **Providers behind a trait** — `CuratorProvider` with Anthropic (Claude), Gemini, and local OpenAI-compatible (e.g. self-hosted Ollama / llama.cpp) implementations. Adding a provider means implementing one trait.
+- **API keys in OS keychain** — per-provider, via the `keyring` crate. Service name `photosift`; never returned to the frontend after write.
+- **Cost-aware** — `estimate_curator_cost_cents` runs before the worker so the user sees expected spend; the worker supports cancel and resume.
+- **Suggestion-only** — judgments are stored in `curator_judgments` for review. The user accepts (`accept_curator_suggestion`) or overrides (`record_curator_override`) explicitly; nothing is applied automatically. Agreement stats compare curator verdicts against the user's eventual decisions for calibration.
 
 ### Tag / Collection System
 
