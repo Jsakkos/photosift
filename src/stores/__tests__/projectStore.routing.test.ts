@@ -33,6 +33,7 @@ beforeEach(() => {
       onboardedTriage: true,
       onboardedSelect: true,
       onboardedRoute: true,
+      onboardedWizard: true,
     },
   });
 });

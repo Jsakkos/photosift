@@ -246,6 +246,10 @@ pub struct Settings {
     pub onboarded_triage: bool,
     pub onboarded_select: bool,
     pub onboarded_route: bool,
+    /// First-run onboarding wizard (#9): true once the user has completed
+    /// or skipped it. Migrated to true for pre-existing DBs (a library root
+    /// configured, or any shoots) so an upgrade doesn't re-trigger it.
+    pub onboarded_wizard: bool,
 }
 
 impl Default for Settings {
@@ -273,6 +277,7 @@ impl Default for Settings {
             onboarded_triage: false,
             onboarded_select: false,
             onboarded_route: false,
+            onboarded_wizard: false,
         }
     }
 }
@@ -597,6 +602,22 @@ impl Database {
         self.ensure_column("settings", "onboarded_triage", "INTEGER NOT NULL DEFAULT 0")?;
         self.ensure_column("settings", "onboarded_select", "INTEGER NOT NULL DEFAULT 0")?;
         self.ensure_column("settings", "onboarded_route", "INTEGER NOT NULL DEFAULT 0")?;
+        // First-run onboarding wizard (#9). New column: seed it true for
+        // pre-existing DBs (a library root configured, or any shoots) so an
+        // upgrade doesn't re-trigger first-run. Brand-new installs leave it
+        // 0 and get the wizard. Guarded on column absence so the UPDATE runs
+        // exactly once, at the moment the column is introduced.
+        if !self.column_exists("settings", "onboarded_wizard")? {
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN onboarded_wizard INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+            self.conn.execute(
+                "UPDATE settings SET onboarded_wizard = 1
+                 WHERE library_root IS NOT NULL OR EXISTS (SELECT 1 FROM shoots)",
+                [],
+            )?;
+        }
         // Destination enum consolidation (2026-04): the Route pass merged
         // `dxo` into `edit` (one "ready to edit" bucket) and renamed
         // `publish_direct` to `export`. Gate on `PRAGMA user_version` so we
@@ -1801,7 +1822,8 @@ impl Database {
                         curator_max_cost_per_shoot_cents,
                         curator_provider, curator_model_anthropic, curator_model_gemini,
                         curator_model_local, curator_local_base_url, folder_template,
-                        onboarded_triage, onboarded_select, onboarded_route
+                        onboarded_triage, onboarded_select, onboarded_route,
+                        onboarded_wizard
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
@@ -1833,6 +1855,7 @@ impl Database {
                         onboarded_triage: row.get::<_, i32>(19)? != 0,
                         onboarded_select: row.get::<_, i32>(20)? != 0,
                         onboarded_route: row.get::<_, i32>(21)? != 0,
+                        onboarded_wizard: row.get::<_, i32>(22)? != 0,
                     })
                 },
             )
@@ -1849,9 +1872,10 @@ impl Database {
                                    curator_max_cost_per_shoot_cents,
                                    curator_provider, curator_model_anthropic, curator_model_gemini,
                                    curator_model_local, curator_local_base_url, folder_template,
-                                   onboarded_triage, onboarded_select, onboarded_route)
+                                   onboarded_triage, onboarded_select, onboarded_route,
+                                   onboarded_wizard)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
@@ -1874,7 +1898,8 @@ impl Database {
                 folder_template = excluded.folder_template,
                 onboarded_triage = excluded.onboarded_triage,
                 onboarded_select = excluded.onboarded_select,
-                onboarded_route = excluded.onboarded_route",
+                onboarded_route = excluded.onboarded_route,
+                onboarded_wizard = excluded.onboarded_wizard",
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
@@ -1899,6 +1924,7 @@ impl Database {
                 s.onboarded_triage as i32,
                 s.onboarded_select as i32,
                 s.onboarded_route as i32,
+                s.onboarded_wizard as i32,
             ],
         )?;
         Ok(())

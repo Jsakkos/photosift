@@ -6,6 +6,7 @@ import { ShootListPage } from "./pages/ShootListPage";
 import { CullPage } from "./pages/CullPage";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { OnboardingWizard } from "./components/OnboardingWizard";
 import { Toast } from "./components/Toast";
 import { DriveDetectedToast } from "./components/DriveDetectedToast";
 import { useSettingsStore } from "./stores/settingsStore";
@@ -58,11 +59,19 @@ function useAiListener() {
 
 function App() {
   const loadSettings = useSettingsStore((s) => s.loadSettings);
+  const isLoaded = useSettingsStore((s) => s.isLoaded);
+  const onboardedWizard = useSettingsStore((s) => s.settings.onboardedWizard);
+  const wizardReplay = useSettingsStore((s) => s.wizardReplay);
+  const closeWizardTour = useSettingsStore((s) => s.closeWizardTour);
   useAiListener();
 
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  // First-run: show until `onboardedWizard` is written. Re-runs: while
+  // `wizardReplay` is set (cleared on close).
+  const showWizard = isLoaded && (!onboardedWizard || wizardReplay);
 
   return (
     <>
@@ -73,6 +82,7 @@ function App() {
         {import.meta.env.DEV && <Route path="/primitives" element={<PrimitivesPage />} />}
       </Routes>
       <SettingsDialog />
+      {showWizard && <OnboardingWizard replay={wizardReplay} onClose={closeWizardTour} />}
       <Toast />
       <DriveDetectedToast />
     </>
