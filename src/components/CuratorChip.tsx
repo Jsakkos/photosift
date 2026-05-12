@@ -1,4 +1,5 @@
 import { useProjectStore } from "../stores/projectStore";
+import { humanizeCuratorReason } from "../lib/curatorText";
 import { Kbd } from "./primitives";
 
 /// Inline Curator-suggestion panel rendered inside the FacesRail. Reads
@@ -14,6 +15,7 @@ export function CuratorChip() {
     if (pid == null) return null;
     return s.curatorJudgments.get(pid) ?? null;
   });
+  const images = useProjectStore((s) => s.images);
 
   if (!judgment) {
     return (
@@ -131,7 +133,10 @@ export function CuratorChip() {
         className="px-[10px] py-[8px] text-[11px] leading-[1.5]"
         style={{ color: "var(--color-fg)" }}
       >
-        {judgment.reason}
+        {humanizeCuratorReason(
+          judgment.reason,
+          (id) => images.find((i) => i.id === id)?.filename ?? null,
+        )}
       </p>
     </section>
   );
