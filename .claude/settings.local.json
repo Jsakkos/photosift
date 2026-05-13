@@ -100,7 +100,9 @@
       "Bash(tasklist //FI \"IMAGENAME eq cargo.exe\" //FI \"IMAGENAME eq photosift.exe\")",
       "Bash(tasklist //FI \"IMAGENAME eq rustc.exe\")",
       "Bash(taskkill //F //PID 32876)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(gh repo *)",
+      "Bash(gh issue *)"
     ]
   },
   "enableAllProjectMcpServers": true,
