@@ -1,4 +1,4 @@
-﻿import { thumbUrl } from "../hooks/useImageLoader";
+import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
 
 interface GroupStackProps {

@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
@@ -10,11 +10,11 @@ type DestinationId = "edit" | "export";
 
 const PASS_TIERS: { floor: number; label: string }[] = [
   { floor: 0, label: "all" },
-  { floor: 1, label: "â˜…â‰¥1" },
-  { floor: 2, label: "â˜…â‰¥2" },
-  { floor: 3, label: "â˜…â‰¥3" },
-  { floor: 4, label: "â˜…â‰¥4" },
-  { floor: 5, label: "â˜…â‰¥5" },
+  { floor: 1, label: "★≥1" },
+  { floor: 2, label: "★≥2" },
+  { floor: 3, label: "★≥3" },
+  { floor: 4, label: "★≥4" },
+  { floor: 5, label: "★≥5" },
 ];
 
 function PickCell({
@@ -57,7 +57,7 @@ function PickCell({
           lineHeight: 1,
         }}
       >
-        â¤¢
+        ⤢
       </button>
     </Photo>
   );
@@ -187,9 +187,9 @@ export function RouteShell() {
 
   const clearSelection = () => setSelectedIds(new Set());
 
-  // â¤¢ on a pick tile opens a Route-local lightbox (embedded preview at
+  // ⤢ on a pick tile opens a Route-local lightbox (embedded preview at
   // fit-screen). Route doesn't have a sequential/loupe view of its own
-  // â€” that's Triage/Select â€” so we render a contained modal here
+  // — that's Triage/Select — so we render a contained modal here
   // instead of trying to jam Route into the sequential mode shape.
   const openInLightbox = (id: number) => {
     setLightboxPhotoId(id);
@@ -214,7 +214,7 @@ export function RouteShell() {
       setToast(`Unrouted ${ids.length}`);
     } else {
       const label = dest === "edit" ? "Capture One" : "Export";
-      setToast(`Routed ${ids.length} â†’ ${label}`);
+      setToast(`Routed ${ids.length} → ${label}`);
     }
     clearSelection();
   };
@@ -270,7 +270,7 @@ export function RouteShell() {
               <span className="font-mono" style={{ color: "var(--color-accent)" }}>
                 {selectedFloorLabel}
               </span>
-              <span>Â· {picks.length} picks ready</span>
+              <span>· {picks.length} picks ready</span>
             </div>
           </div>
           <div
@@ -330,7 +330,7 @@ export function RouteShell() {
             Clear
           </button>
           <span className="text-2xs opacity-70">
-            Â· Click to toggle Â· â¤¢ to open in loupe
+            · Click to toggle · ⤢ to open in loupe
           </span>
         </div>
 
@@ -362,7 +362,7 @@ export function RouteShell() {
           style={{ borderColor: "var(--color-border)", color: "var(--color-fg-dim)" }}
         >
           <span className="font-mono text-[11px]">
-            {counts.captureOne} â†’ C1 Â· {counts.export} â†’ Export Â· {counts.pending} pending
+            {counts.captureOne} → C1 · {counts.export} → Export · {counts.pending} pending
           </span>
         </div>
       </div>
@@ -427,7 +427,7 @@ export function RouteShell() {
         {counts.captureOne > 0 && (
           <ShipStrip
             title="Ship to Capture One"
-            subtitle="Drag the folder onto Capture One, or use File â†’ Import Images â†’ Choose Folder."
+            subtitle="Drag the folder onto Capture One, or use File → Import Images → Choose Folder."
             count={counts.captureOne}
             accentTone="var(--color-accent-2)"
             onOpenFolder={() => void handleOpenFolder("edit")}

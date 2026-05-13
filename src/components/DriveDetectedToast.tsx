@@ -1,4 +1,4 @@
-﻿import { useEffect } from "react";
+import { useEffect } from "react";
 import { useDriveDetection } from "../hooks/useDriveDetection";
 import { useImportIntentStore } from "../stores/importIntentStore";
 
@@ -63,7 +63,7 @@ export function DriveDetectedToast() {
             className="text-[11px] font-mono"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            {formatBytes(newlyDetected.totalBytes)} Â·{" "}
+            {formatBytes(newlyDetected.totalBytes)} ·{" "}
             {formatBytes(newlyDetected.availableBytes)} free
           </div>
         </div>
@@ -93,7 +93,7 @@ export function DriveDetectedToast() {
             border: "none",
           }}
         >
-          Ã—
+          ×
         </button>
       </div>
     </div>

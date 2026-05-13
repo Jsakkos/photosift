@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore, isRouteEligible, selectMaxFloor } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -17,14 +17,14 @@ function HeatmapHost() {
 
 const PASS_TIERS: { floor: number; label: string }[] = [
   { floor: 0, label: "all" },
-  { floor: 1, label: "â˜…â‰¥1" },
-  { floor: 2, label: "â˜…â‰¥2" },
-  { floor: 3, label: "â˜…â‰¥3" },
-  { floor: 4, label: "â˜…â‰¥4" },
-  { floor: 5, label: "â˜…â‰¥5" },
+  { floor: 1, label: "★≥1" },
+  { floor: 2, label: "★≥2" },
+  { floor: 3, label: "★≥3" },
+  { floor: 4, label: "★≥4" },
+  { floor: 5, label: "★≥5" },
 ];
 
-// Tiers at or above routeMinStar belong to the Route view, not Select â€” a pick
+// Tiers at or above routeMinStar belong to the Route view, not Select — a pick
 // graded that high graduates out, so those pills would always read 0 and clicking
 // one would dead-end. Keep only the reachable floors.
 function reachableTiers(routeMinStarGate: number): { floor: number; label: string }[] {
@@ -39,8 +39,8 @@ function PassPills() {
   const selectRequiresPick = useSettingsStore((s) => s.settings.selectRequiresPick ?? false);
   const routeMinStarGate = useSettingsStore((s) => s.settings.routeMinStar ?? 0);
 
-  // Pill counts must agree with what's actually shown in displayItems â€”
-  // exclude routed-eligible picks (#16) so the user doesn't see "â˜…â‰¥3 5"
+  // Pill counts must agree with what's actually shown in displayItems —
+  // exclude routed-eligible picks (#16) so the user doesn't see "★≥3 5"
   // and then find an empty Select pool because all five are already
   // routed-ready.
   const counts = useMemo(() => {
@@ -96,7 +96,7 @@ function VisitedProgress() {
       className="font-mono text-2xs tabular-nums"
       style={{ color: "var(--color-fg-mute)" }}
     >
-      Â· visited {visited}/{total}
+      · visited {visited}/{total}
     </span>
   );
 }
@@ -122,7 +122,7 @@ function TopBar() {
         style={{ color: "var(--color-fg)" }}
         title={image?.filepath ?? ""}
       >
-        {image?.filename ?? "â€”"}
+        {image?.filename ?? "—"}
       </span>
       <div className="flex-1" />
       <PassPills />
@@ -142,7 +142,7 @@ function TopBar() {
         className="font-mono text-2xs tabular-nums pl-3 ml-1 border-l"
         style={{ color: "var(--color-fg-dim)", borderColor: "var(--color-border)" }}
       >
-        Pass {passNumber} Â· {total === 0 ? "0 / 0" : `${index + 1} / ${total}`}
+        Pass {passNumber} · {total === 0 ? "0 / 0" : `${index + 1} / ${total}`}
       </span>
       <VisitedProgress />
     </div>
@@ -257,7 +257,7 @@ function ImmersiveHints() {
           color: "var(--color-fg-dim)",
         }}
       >
-        <Kbd>â†’</Kbd>
+        <Kbd>→</Kbd>
         <span className="font-mono text-2xs uppercase tracking-[0.6px]">skip</span>
       </div>
       <div
@@ -288,8 +288,8 @@ function BottomBar() {
       ]
     : [
         { kbd: "Space", label: "pick" },
-        { kbd: "â†’", label: "skip" },
-        { kbd: "1â€“5", label: "rate" },
+        { kbd: "→", label: "skip" },
+        { kbd: "1–5", label: "rate" },
         { kbd: "Tab", label: "2-up" },
         { kbd: "[", label: "narrow" },
         { kbd: "]", label: "widen" },
@@ -318,7 +318,7 @@ function BottomBar() {
 /// Stamp `photos.select_visited_at` the first time each photo is the
 /// focused frame in Select. Rust-side `WHERE select_visited_at IS NULL`
 /// makes repeats a no-op, so the effect fires freely without needing
-/// local dedup. The visit bit gates the Selectâ†’Route layout-sync trigger.
+/// local dedup. The visit bit gates the Select→Route layout-sync trigger.
 function SelectVisitTracker() {
   const currentPhotoId = useProjectStore(
     (s) => s.displayItems[s.currentIndex]?.image.id ?? null,
@@ -338,7 +338,7 @@ function SelectVisitTracker() {
   return null;
 }
 
-/// Auto-enter 2-up when the cursor lands on a group cover with â‰¥2
+/// Auto-enter 2-up when the cursor lands on a group cover with ≥2
 /// reviewable members, unless the user has manually toggled 2-up off
 /// for that specific group (via Tab).
 function BracketAutoEnter() {

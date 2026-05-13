@@ -1,4 +1,4 @@
-﻿import { useRef } from "react";
+import { useRef } from "react";
 import type { ScanDateEntry } from "../../types";
 
 interface DayRowProps {
@@ -40,13 +40,13 @@ function timeRange(entries: ScanDateEntry[]): string | null {
   const lo = formatHM(new Date(stamps[0]).toISOString().replace("T", " "));
   const hi = formatHM(new Date(stamps[stamps.length - 1]).toISOString().replace("T", " "));
   if (!lo || !hi || lo === hi) return lo;
-  return `${lo}â€“${hi}`;
+  return `${lo}–${hi}`;
 }
 
 function aspectFor(entry: ScanDateEntry): string {
   const portraitOrientations = new Set([5, 6, 7, 8]);
   // Without explicit orientation we default to 3/2 landscape (D750 native).
-  // The UI tolerates the 50/50 mix gracefully â€” strips wrap.
+  // The UI tolerates the 50/50 mix gracefully — strips wrap.
   const isPortrait = portraitOrientations.has(entry.orientation ?? 0);
   return isPortrait ? "2 / 3" : "3 / 2";
 }
@@ -89,7 +89,7 @@ export function DayRow({
             className="text-xs"
             style={{ color: "var(--color-fg-dim)", width: "1ch" }}
           >
-            {expanded ? "â–¼" : "â–¶"}
+            {expanded ? "▼" : "▶"}
           </span>
           <span
             className="text-sm font-semibold"
@@ -106,10 +106,10 @@ export function DayRow({
             {visibleEntries.length}{" "}
             {visibleEntries.length === 1 ? "photo" : "photos"}
           </span>
-          {range && <span>Â·  {range}</span>}
+          {range && <span>·  {range}</span>}
           {hiddenImportedCount > 0 && (
             <span style={{ color: "var(--color-fg-mute)" }}>
-              Â· {hiddenImportedCount} already imported
+              · {hiddenImportedCount} already imported
             </span>
           )}
         </div>
@@ -127,7 +127,7 @@ export function DayRow({
               className="flex items-baseline gap-1 cursor-pointer"
               style={{ color: "var(--color-fg)" }}
             >
-              <span>{allSelected ? "â˜‘" : "â˜"}</span>
+              <span>{allSelected ? "☑" : "☐"}</span>
               <span>All</span>
             </button>
             <span>
@@ -135,7 +135,7 @@ export function DayRow({
             </span>
             {thumbsLoading && (
               <span style={{ color: "var(--color-fg-mute)" }}>
-                Â· loading thumbnails {thumbsLoaded} / {visibleEntries.length}
+                · loading thumbnails {thumbsLoaded} / {visibleEntries.length}
               </span>
             )}
           </div>
@@ -168,7 +168,7 @@ export function DayRow({
                     outlineOffset: isSelected ? "-2px" : "-1px",
                     opacity: isSelected ? 1 : 0.65,
                   }}
-                  title={`${entry.filename}${entry.capturedAt ? ` Â· ${entry.capturedAt}` : ""}`}
+                  title={`${entry.filename}${entry.capturedAt ? ` · ${entry.capturedAt}` : ""}`}
                 >
                   {thumb ? (
                     <img

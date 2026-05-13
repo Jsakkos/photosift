@@ -1,4 +1,4 @@
-﻿import { useProjectStore } from "../stores/projectStore";
+import { useProjectStore } from "../stores/projectStore";
 import { humanizeCuratorReason } from "../lib/curatorText";
 import { Kbd } from "./primitives";
 
@@ -7,7 +7,7 @@ import { Kbd } from "./primitives";
 /// kept in sync via patchCuratorJudgment after accept/override). When
 /// no judgment exists for the current photo, renders a slim empty-state
 /// hint pointing the user back to the Library (where Curator runs are
-/// kicked off) â€” this is the "empty state names the right subsystem"
+/// kicked off) — this is the "empty state names the right subsystem"
 /// requirement from #17. Press `.` in Triage to accept.
 export function CuratorChip() {
   const judgment = useProjectStore((s) => {
@@ -20,7 +20,7 @@ export function CuratorChip() {
   if (!judgment) {
     return (
       <section
-        aria-label="Curator â€” no judgment yet"
+        aria-label="Curator — no judgment yet"
         className="rounded-sm px-2.5 py-2 text-[11px] leading-snug"
         style={{
           background: "var(--color-bg2)",
@@ -34,7 +34,7 @@ export function CuratorChip() {
         >
           Curator
         </span>
-        No judgment yet â€” run from the Library card.
+        No judgment yet — run from the Library card.
       </section>
     );
   }
@@ -84,12 +84,12 @@ export function CuratorChip() {
           <span
             className="font-mono text-2xs uppercase tracking-[1px]"
             style={{ color: tone.accent }}
-            title={`Curator (${providerLabel(judgment.provider)} Â· ${judgment.model})`}
+            title={`Curator (${providerLabel(judgment.provider)} · ${judgment.model})`}
           >
-            Curator Â· {tone.label}
+            Curator · {tone.label}
           </span>
           <span
-            title={`${providerLabel(judgment.provider)} Â· ${judgment.model}`}
+            title={`${providerLabel(judgment.provider)} · ${judgment.model}`}
             className="font-mono text-3xs uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs"
             style={{
               color: "var(--color-fg-dim)",
@@ -122,10 +122,10 @@ export function CuratorChip() {
           <span
             className="font-mono text-2xs tabular-nums"
             style={{ color: "var(--color-fg-dim)" }}
-            title="composition / aesthetic (0-10) Â· cluster rank"
+            title="composition / aesthetic (0-10) · cluster rank"
           >
             {judgment.composition}/{judgment.aesthetic}
-            {judgment.clusterRank != null && ` Â· #${judgment.clusterRank}`}
+            {judgment.clusterRank != null && ` · #${judgment.clusterRank}`}
           </span>
         </div>
       </header>

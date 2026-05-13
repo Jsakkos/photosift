@@ -1,4 +1,4 @@
-﻿import { FaceThumb } from "./FaceThumb";
+import { FaceThumb } from "./FaceThumb";
 import { verdictFor, verdictMeta } from "../lib/faceVerdict";
 import type { Face } from "../types";
 

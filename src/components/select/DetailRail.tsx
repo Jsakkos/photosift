@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAiStore, sharpnessBadgeScore } from "../../stores/aiStore";

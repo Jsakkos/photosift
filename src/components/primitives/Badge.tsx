@@ -1,4 +1,4 @@
-﻿import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 /// Shared chip / icon-tile primitive. Every small status marker in the app â€”
 /// AI verdicts, sharpness pills, destination tags, star overlays, EXIF â€” should

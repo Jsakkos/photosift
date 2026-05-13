@@ -1,4 +1,4 @@
-﻿import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { FixedSizeGrid as Grid, GridChildComponentProps } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
@@ -295,7 +295,7 @@ export function GridView() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Grid chrome â€” stage-aware title + thumb size + count */}
+      {/* Grid chrome — stage-aware title + thumb size + count */}
       <div
         className="flex items-center justify-between gap-3 px-4 py-2.5 border-b text-[11px]"
         style={{
@@ -316,7 +316,7 @@ export function GridView() {
             className="font-mono text-2xs tabular-nums"
             style={{ color: "var(--color-fg-mute)" }}
           >
-            Â· grid Â· {displayItems.length} photo{displayItems.length === 1 ? "" : "s"}
+            · grid · {displayItems.length} photo{displayItems.length === 1 ? "" : "s"}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -335,7 +335,7 @@ export function GridView() {
               color: "var(--color-fg-dim)",
             }}
           >
-            âˆ’
+            −
           </button>
           <span className="font-mono text-2xs min-w-[50px] text-center">
             {colWidth === 100 ? "Small" : colWidth === 160 ? "Medium" : "Large"}
@@ -442,7 +442,7 @@ export function GridView() {
               title="Open first selection in sequential view (Enter)"
               className="px-3 py-1 rounded border border-white/20 text-fg-dim text-xs hover:bg-white/5"
             >
-              Enter â†’ Loupe
+              Enter → Loupe
             </button>
           </div>
         </div>
@@ -513,7 +513,7 @@ function GridThumb({
         loading="lazy"
         draggable={false}
       />
-      {/* Expanded-group affiliation bar â€” left-edge accent visible inside
+      {/* Expanded-group affiliation bar — left-edge accent visible inside
           the rounded clip. Matches the Filmstrip treatment so switching
           views preserves the visual cue. */}
       {showGroupBar && (
@@ -523,13 +523,13 @@ function GridThumb({
         />
       )}
       {/* Flag state is now shown via the card outline + subtle inner
-          glow above. Dots removed â€” the outline is subtle but clear
+          glow above. Dots removed — the outline is subtle but clear
           (per spec feedback) and avoids stealing from the face/AI
           badges that share the tile corners. */}
-      {/* AI pick badge â€” suppressed in Select (every photo is already a
-          pick, so the â˜… AI stamp is pure noise there). */}
+      {/* AI pick badge — suppressed in Select (every photo is already a
+          pick, so the ★ AI stamp is pure noise there). */}
       {item.isAiPick && currentView !== "select" && <AiPickBadge />}
-      {/* Destination badge â€” same treatment as the Route grid (glass chip,
+      {/* Destination badge — same treatment as the Route grid (glass chip,
           accent-2 for Capture One, accent for Export). Stacks below the AI
           badge when both are present in the top-right corner. */}
       {image.destination === "edit" && (
@@ -540,7 +540,7 @@ function GridThumb({
           title={"Route: Capture One\nReady to drag into Capture One (or DxO)."}
           aria-label="Route: Capture One"
         >
-          â†’ C1
+          → C1
         </Badge>
       )}
       {image.destination === "export" && (
@@ -551,7 +551,7 @@ function GridThumb({
           title={"Route: Export\nCached JPEG copied to Immich ingest folder by the Publish button."}
           aria-label="Route: Export"
         >
-          â†’ Exp
+          → Exp
         </Badge>
       )}
       {/* Group stack indicator */}
@@ -560,7 +560,7 @@ function GridThumb({
           tone="neutral"
           variant="glass"
           className="absolute bottom-1 right-1 font-semibold pointer-events-none"
-          title={`Group cover Â· ${item.groupMemberCount} photos total\n${item.groupMemberCount - 1} similar photos hidden.\nDouble-click or press Enter to drill in.`}
+          title={`Group cover · ${item.groupMemberCount} photos total\n${item.groupMemberCount - 1} similar photos hidden.\nDouble-click or press Enter to drill in.`}
           aria-label={`Group cover, ${item.groupMemberCount} photos total`}
         >
           +{item.groupMemberCount - 1}

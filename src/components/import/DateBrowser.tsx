@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   extractThumbnailsForPaths,
@@ -49,7 +49,7 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
   // scan. The auto-expand fires as soon as the newest day key is known
   // (well before scanComplete) so thumbnails for today's shoot start
   // streaming within seconds of mounting the dialog. After it fires once
-  // the user owns the UI â€” never auto-expand again.
+  // the user owns the UI — never auto-expand again.
   const autoExpandedRef = useRef(false);
   // Once the user manually toggles selection (clicks a tile, All, or None),
   // we stop maintaining the auto pre-selection. Without this, late-arriving
@@ -136,7 +136,7 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
 
   // Pre-select all non-deduped entries in the newest day. This re-runs as
   // more entries stream in (so a current shoot with 50 frames ends up fully
-  // selected even though the first effect ran with only 1â€“2 entries known)
+  // selected even though the first effect ran with only 1–2 entries known)
   // and stops the moment the user touches selection.
   useEffect(() => {
     if (userTouchedSelectionRef.current) return;
@@ -217,7 +217,7 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
           next.delete(key);
         } else {
           next.add(key);
-          // Manual expand is also the user's "retry" gesture â€” clear
+          // Manual expand is also the user's "retry" gesture — clear
           // failed entries for this day so requestThumbsForDay will
           // re-attempt them.
           setFailedThumbs((prevFailed) => {
@@ -237,7 +237,7 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
   );
 
   // Once the newest day is auto-expanded, fetch thumbnails for its visible
-  // entries â€” and keep doing so as more entries arrive so freshly-discovered
+  // entries — and keep doing so as more entries arrive so freshly-discovered
   // frames populate alongside the rest. `requestThumbsForDay` already
   // dedups against `loadedThumbs`, so re-running with a superset is cheap.
   useEffect(() => {
@@ -303,15 +303,15 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
           {totalSeen} photos
           {scanComplete && (
             <>
-              {"  Â·  "}
+              {"  ·  "}
               <span style={{ color: "var(--color-fg)" }}>{totalNew} new</span>
-              {"  Â·  "}
+              {"  ·  "}
               {totalImported} already
             </>
           )}
           {!scanComplete && scanProgress && (
             <span style={{ color: "var(--color-fg-mute)" }}>
-              {"  Â· scanning "}
+              {"  · scanning "}
               {scanProgress.done}/{scanProgress.total}
             </span>
           )}
