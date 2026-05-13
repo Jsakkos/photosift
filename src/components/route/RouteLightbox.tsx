@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useRef } from "react";
 import { imageUrl } from "../../hooks/useImageLoader";
+import { useModalA11y } from "../../hooks/useModalA11y";
 
 interface Props {
   photoId: number | null;
@@ -13,22 +14,14 @@ interface Props {
 /// the backdrop dismisses. Zoom/pan stay scoped to LoupeView (Triage/
 /// Select); this is a quick-look overlay, not a second loupe.
 export function RouteLightbox({ photoId, filename, onClose }: Props) {
-  useEffect(() => {
-    if (photoId === null) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [photoId, onClose]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(dialogRef, onClose, photoId !== null);
 
   if (photoId === null) return null;
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label={filename ?? "Photo preview"}

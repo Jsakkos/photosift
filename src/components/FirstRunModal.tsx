@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useRef } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useModalA11y } from "../hooks/useModalA11y";
 import type { Settings } from "../stores/settingsStore";
 import type { CullView } from "../types";
 import { Kbd } from "./primitives";
@@ -81,19 +82,8 @@ export function FirstRunModal({ view }: { view: CullView }) {
     void updateSettings({ [guide.flag]: true } as Partial<Settings>);
   };
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        dismiss();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, view]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(dialogRef, dismiss, open);
 
   if (!open) return null;
 
@@ -109,6 +99,7 @@ export function FirstRunModal({ view }: { view: CullView }) {
       aria-label={`About the ${view} view`}
     >
       <div
+        ref={dialogRef}
         className="w-[460px] max-w-[92vw] rounded-md overflow-hidden"
         style={{
           background: "var(--color-bg2)",

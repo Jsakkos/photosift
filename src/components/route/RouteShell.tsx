@@ -48,6 +48,7 @@ function PickCell({
           onOpen();
         }}
         title="Open in sequential view"
+        aria-label="Open in loupe"
         className="absolute top-1 right-1 rounded-xs w-[18px] h-[18px] flex items-center justify-center cursor-pointer border-0"
         style={{
           background: "rgba(0,0,0,0.55)",
