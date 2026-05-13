@@ -6,6 +6,7 @@ import {
   getCuratorJudgmentForPhoto,
   recordCuratorOverride,
 } from "../lib/curatorApi";
+import { formatError } from "../lib/errorMessages";
 
 /// After a manual P/X, check whether the resulting flag conflicts with
 /// the curator's suggestion and record an override if so. Fire-and-
@@ -279,7 +280,10 @@ export function useKeyboardNav() {
               } catch (err) {
                 useProjectStore
                   .getState()
-                  .setToast(`AI accept failed: ${err}`, "error");
+                  .setToast(
+                    `Couldn't apply AI suggestion — ${formatError(err)}`,
+                    "error",
+                  );
               }
             })();
           }

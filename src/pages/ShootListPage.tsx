@@ -7,6 +7,7 @@ import { useImportIntentStore } from "../stores/importIntentStore";
 import { ImportDialog } from "../components/ImportDialog";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { LogoB } from "../components/primitives";
+import { formatError } from "../lib/errorMessages";
 import type { ShootSummary } from "../types";
 
 interface ImportPhotoReady {
@@ -173,7 +174,7 @@ function ShootCard({
           {shoot.cameraModel ? (
             <>
               <span className="font-mono text-2xs">{shoot.cameraModel}</span>
-              <span aria-hidden="true"> Â· </span>
+              <span aria-hidden="true"> · </span>
             </>
           ) : null}
           {shoot.photoCount} photos
@@ -294,7 +295,7 @@ export function ShootListPage() {
     try {
       await deleteShoot(shoot.id);
     } catch (err) {
-      window.alert(`Delete failed: ${err}`);
+      window.alert(`Couldn't delete shoot — ${formatError(err)}`);
     }
   };
 
@@ -378,13 +379,13 @@ export function ShootListPage() {
         {!isLoading && loadError && shoots.length === 0 && (
           <div className="flex flex-col items-center justify-center mt-24 gap-3">
             <p className="text-[13px] font-medium" style={{ color: "var(--color-danger)" }}>
-              Couldn’t load your shoots.
+              Couldn't load your shoots
             </p>
             <p
               className="font-mono text-[11px] max-w-[480px] text-center break-words"
               style={{ color: "var(--color-fg-mute)" }}
             >
-              {loadError}
+              {formatError(loadError)}
             </p>
             <button
               type="button"

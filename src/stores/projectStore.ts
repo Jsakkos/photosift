@@ -11,6 +11,7 @@ import type {
   CuratorJudgment,
 } from "../types";
 import { getCuratorJudgmentsForShoot } from "../lib/curatorApi";
+import { formatError } from "../lib/errorMessages";
 import { useSettingsStore } from "./settingsStore";
 import { useAiStore } from "./aiStore";
 import {
@@ -1072,7 +1073,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("set_rating", { imageId: image.id, rating });
     } catch (e) {
       console.error("Failed to set rating:", e);
-      get().setToast(`Rating save failed: ${e}`, "error");
+      get().setToast(`Couldn't save rating — ${formatError(e)}`, "error");
       const revertImages = [...get().images];
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
@@ -1147,7 +1148,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         if (siblingIds.length > 0) {
           invoke("bulk_set_flag", { photoIds: siblingIds, flag: "reject" }).catch(
             (err) => {
-              get().setToast(`Group reject failed: ${err}`, "error");
+              get().setToast(`Couldn't reject group — ${formatError(err)}`, "error");
             },
           );
         }
@@ -1215,7 +1216,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         await invoke("set_flag", { photoId: image.id, flag });
       } catch (e) {
         console.error("Failed to set flag:", e);
-        get().setToast(`Flag save failed: ${e}`, "error");
+        get().setToast(`Couldn't save flag — ${formatError(e)}`, "error");
       }
       return;
     }
@@ -1258,7 +1259,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("set_flag", { photoId: image.id, flag });
     } catch (e) {
       console.error("Failed to set flag:", e);
-      get().setToast(`Flag save failed: ${e}`, "error");
+      get().setToast(`Couldn't save flag — ${formatError(e)}`, "error");
       const revertImages = [...get().images];
       for (const a of affectedIds) {
         const idx = revertImages.findIndex((img) => img.id === a.id);
@@ -1330,7 +1331,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
     } catch (e) {
       console.error("Failed to set destination:", e);
-      get().setToast(`Destination save failed: ${e}`, "error");
+      get().setToast(`Couldn't save destination — ${formatError(e)}`, "error");
       const revertImages = [...get().images];
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
@@ -1410,7 +1411,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch (e) {
       console.error("Bulk destination failed:", e);
-      get().setToast(`Some destinations failed: ${e}`, "error");
+      get().setToast(`Couldn't route some photos — ${formatError(e)}`, "error");
     }
   },
 
@@ -1464,8 +1465,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentIndex: displayIdx >= 0 ? displayIdx : 0,
     });
 
-    try {
-      for (const t of targets) {
+    // Each target is an independent IPC call. Aggregate per-photo failures
+    // so a single permission glitch on one file doesn't drop the whole
+    // undo: the user gets a summary toast and the rest of the photos still
+    // get restored. The optimistic store update has already run above —
+    // these IPCs are persisting the change.
+    let failed = 0;
+    let lastErr: unknown = null;
+    for (const t of targets) {
+      try {
         if (t.field === "flag") {
           await invoke("set_flag", { photoId: t.imageId, flag: t.value });
         } else if (t.field === "destination") {
@@ -1473,11 +1481,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         } else if (t.field === "starRating") {
           await invoke("set_rating", { imageId: t.imageId, rating: t.value });
         }
+      } catch (e) {
+        failed += 1;
+        lastErr = e;
+        console.error("Undo step failed:", e);
       }
+    }
+    if (failed === 0) {
       get().setToast(describeUndoRedoEntry("Undo", entry));
-    } catch (e) {
-      console.error("Undo failed:", e);
-      get().setToast(`Undo failed: ${e}`, "error");
+    } else if (failed === targets.length) {
+      get().setToast(`Couldn't undo — ${formatError(lastErr)}`, "error");
+    } else {
+      get().setToast(
+        `Undo partial — ${failed} photo${failed === 1 ? "" : "s"} couldn't be restored`,
+        "error",
+      );
     }
   },
 
@@ -1531,8 +1549,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       currentIndex: displayIdx >= 0 ? displayIdx : 0,
     });
 
-    try {
-      for (const t of targets) {
+    let failed = 0;
+    let lastErr: unknown = null;
+    for (const t of targets) {
+      try {
         if (t.field === "flag") {
           await invoke("set_flag", { photoId: t.imageId, flag: t.value });
         } else if (t.field === "destination") {
@@ -1540,11 +1560,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         } else if (t.field === "starRating") {
           await invoke("set_rating", { imageId: t.imageId, rating: t.value });
         }
+      } catch (e) {
+        failed += 1;
+        lastErr = e;
+        console.error("Redo step failed:", e);
       }
+    }
+    if (failed === 0) {
       get().setToast(describeUndoRedoEntry("Redo", entry));
-    } catch (e) {
-      console.error("Redo failed:", e);
-      get().setToast(`Redo failed: ${e}`, "error");
+    } else if (failed === targets.length) {
+      get().setToast(`Couldn't redo — ${formatError(lastErr)}`, "error");
+    } else {
+      get().setToast(
+        `Redo partial — ${failed} photo${failed === 1 ? "" : "s"} couldn't be re-applied`,
+        "error",
+      );
     }
   },
 
@@ -1734,7 +1764,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         flag: "pick",
       });
     } catch (err) {
-      get().setToast(`Keep-group failed: ${err}`, "error");
+      get().setToast(`Couldn't keep group — ${formatError(err)}`, "error");
       return;
     }
 
@@ -1923,7 +1953,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         await invoke("set_flag", { photoId: image.id, flag });
       } catch (e) {
         console.error("Failed to set flag:", e);
-        get().setToast(`Flag save failed: ${e}`, "error");
+        get().setToast(`Couldn't save flag — ${formatError(e)}`, "error");
       }
       return;
     }
@@ -1956,7 +1986,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("set_flag", { photoId: image.id, flag });
     } catch (e) {
       console.error("Failed to set flag:", e);
-      get().setToast(`Flag save failed: ${e}`, "error");
+      get().setToast(`Couldn't save flag — ${formatError(e)}`, "error");
       const revertImages = [...get().images];
       const idx = revertImages.findIndex((img) => img.id === image.id);
       if (idx >= 0) {
@@ -1993,7 +2023,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("set_group_cover", { groupId, photoId });
     } catch (e) {
       console.error("Failed to set group cover:", e);
-      get().setToast(`Set cover failed: ${e}`, "error");
+      get().setToast(`Couldn't set group cover — ${formatError(e)}`, "error");
       set({ groups });
     }
   },
@@ -2179,7 +2209,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
     } catch (e) {
       console.error("Failed bracket decision:", e);
-      get().setToast(`Bracket save failed: ${e}`, "error");
+      get().setToast(`Couldn't save bracket pick — ${formatError(e)}`, "error");
     }
 
     // After the bracket completed and we advance out of the group,
@@ -2266,7 +2296,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
     } catch (e) {
       console.error("Create group failed:", e);
-      get().setToast(`Group failed: ${e}`, "error");
+      get().setToast(`Couldn't create group — ${formatError(e)}`, "error");
     }
   },
 
@@ -2387,7 +2417,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
     } catch (e) {
       console.error("Ungroup failed:", e);
-      get().setToast(`Ungroup failed: ${e}`, "error");
+      get().setToast(`Couldn't ungroup — ${formatError(e)}`, "error");
     }
   },
 }));

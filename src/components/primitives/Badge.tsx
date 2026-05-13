@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 
-/// Shared chip / icon-tile primitive. Every small status marker in the app â€”
-/// AI verdicts, sharpness pills, destination tags, star overlays, EXIF â€” should
+/// Shared chip / icon-tile primitive. Every small status marker in the app —
+/// AI verdicts, sharpness pills, destination tags, star overlays, EXIF — should
 /// route through here so radius / padding / font / corner-offset stay uniform.
 /// Geometry follows the design handoff: 2px radius for chips, 1px hairline
 /// borders, JetBrains Mono, fixed corner offset (4px) for overlay badges.
@@ -15,9 +15,9 @@ export type BadgeTone =
   | "star"
   | "neutral";
 
-/// `solid` â€” filled tone, near-black text. `soft` â€” tinted tone + hairline,
-/// tone text. `glass` â€” translucent black for over-photo overlays, tone text.
-/// `surface` â€” neutral elevated chip (bg3 + hairline), ignores `tone`.
+/// `solid` — filled tone, near-black text. `soft` — tinted tone + hairline,
+/// tone text. `glass` — translucent black for over-photo overlays, tone text.
+/// `surface` — neutral elevated chip (bg3 + hairline), ignores `tone`.
 export type BadgeVariant = "solid" | "soft" | "glass" | "surface";
 
 export type BadgePos = "tl" | "tr" | "bl" | "br";

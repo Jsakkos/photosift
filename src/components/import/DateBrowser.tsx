@@ -11,6 +11,7 @@ import {
   relativeDayLabel,
 } from "../../lib/dateBrowser";
 import type { DriveInfo, ScanDateEntry, ScanThumbReady } from "../../types";
+import { formatError } from "../../lib/errorMessages";
 import { DayRow } from "./DayRow";
 
 interface DateBrowserProps {
@@ -279,7 +280,7 @@ export function DateBrowser({ drive, onSelectionChange }: DateBrowserProps) {
           border: "1px solid var(--color-border)",
         }}
       >
-        Scan failed: {scanError}
+        Couldn't scan folder — {formatError(scanError)}
       </div>
     );
   }

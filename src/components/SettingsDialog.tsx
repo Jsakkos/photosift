@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Spinner } from "./primitives";
+import { formatError } from "../lib/errorMessages";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { FolderTemplate } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
@@ -23,11 +24,12 @@ import {
 
 /// One-liner feedback for an operation (recluster / reanalyze / connection
 /// test / curator run). Errors render in danger red; everything else (in
-/// progress, done) in a calm dim. The error heuristic keys off the wording
-/// the handlers already use ("Error: …", "… failed: …").
+/// progress, done) in a calm dim. The error heuristic keys off our canonical
+/// "Couldn't …" failure prefix plus the legacy "error/failed" wording in case
+/// any handler still uses it.
 function StatusLine({ msg }: { msg: string | null }) {
   if (!msg) return null;
-  const isError = /error|failed/i.test(msg);
+  const isError = /couldn['’]t|error|failed/i.test(msg);
   return (
     <p className={`text-xs mt-2 break-words ${isError ? "text-danger" : "text-fg-dim"}`}>
       {msg}
@@ -179,7 +181,7 @@ export function SettingsDialog() {
   }, [isOpen, settings]);
 
   // Clear any prior key-action message when the user flips providers so
-  // a stale "Connection failed" doesn't bleed across providers.
+  // a stale "Couldn't reach the provider" doesn't bleed across providers.
   useEffect(() => {
     setKeyMsg(null);
     setNewKey("");
@@ -274,9 +276,11 @@ export function SettingsDialog() {
       });
       const groupCount = await reclusterShoot(currentShoot.id);
       await loadShoot(currentShoot.id);
-      setReclusterMsg(`Re-clustered: ${groupCount} group${groupCount === 1 ? "" : "s"}`);
+      setReclusterMsg(
+        `Re-clustered into ${groupCount} group${groupCount === 1 ? "" : "s"}`,
+      );
     } catch (e) {
-      setReclusterMsg(`Error: ${e}`);
+      setReclusterMsg(`Couldn't re-cluster — ${formatError(e)}`);
     } finally {
       setReclustering(false);
     }
@@ -310,7 +314,7 @@ export function SettingsDialog() {
       setNewKey("");
       setKeyMsg("Key saved.");
     } catch (e) {
-      setKeyMsg(`Save failed: ${e}`);
+      setKeyMsg(`Couldn't save key — ${formatError(e)}`);
     } finally {
       setKeyBusy(false);
     }
@@ -327,7 +331,7 @@ export function SettingsDialog() {
       setActiveKeyStatus({ configured: false, suffix: "" });
       setKeyMsg("Key cleared.");
     } catch (e) {
-      setKeyMsg(`Clear failed: ${e}`);
+      setKeyMsg(`Couldn't clear key — ${formatError(e)}`);
     } finally {
       setKeyBusy(false);
     }
@@ -351,7 +355,7 @@ export function SettingsDialog() {
       await testCuratorConnection();
       setKeyMsg("Connection OK.");
     } catch (e) {
-      setKeyMsg(`Connection failed: ${e}`);
+      setKeyMsg(`Couldn't reach the provider — ${formatError(e)}`);
     } finally {
       setKeyBusy(false);
     }
@@ -371,7 +375,7 @@ export function SettingsDialog() {
         "Started. Watch the Triage chip / 'Curator rejects' filter populate as clusters complete.",
       );
     } catch (e) {
-      setCuratorMsg(`Start failed: ${e}`);
+      setCuratorMsg(`Couldn't start the Curator — ${formatError(e)}`);
     } finally {
       setCuratorRunning(false);
     }
@@ -392,7 +396,7 @@ export function SettingsDialog() {
       await startCuratorForShoot(currentShoot.id);
       setCuratorMsg("Cleared and re-running.");
     } catch (e) {
-      setCuratorMsg(`Re-run failed: ${e}`);
+      setCuratorMsg(`Couldn't re-run the Curator — ${formatError(e)}`);
     } finally {
       setCuratorRunning(false);
     }
@@ -407,7 +411,7 @@ export function SettingsDialog() {
       await invoke("reanalyze_shoot", { shootId: currentShoot.id });
       setReanalyzeMsg("Re-analysis queued.");
     } catch (e) {
-      setReanalyzeMsg(`Error: ${e}`);
+      setReanalyzeMsg(`Couldn't re-analyze — ${formatError(e)}`);
     } finally {
       setReanalyzing(false);
     }

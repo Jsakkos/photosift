@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
 import { currentPair as bracketCurrentPair } from "../lib/bracket";
@@ -123,6 +123,15 @@ function ComparePanel({
   clusterSize,
   filenameFor,
 }: PanelProps) {
+  // Track each panel's image-load lifecycle independently so the spinner /
+  // error chip sit per-side, not split between L and R.
+  const [loadState, setLoadState] = useState<"loading" | "loaded" | "error">(
+    "loading",
+  );
+  useEffect(() => {
+    setLoadState("loading");
+  }, [image?.id]);
+
   if (!image) {
     return (
       <div
@@ -169,15 +178,40 @@ function ComparePanel({
           </div>
         )}
         {url ? (
-          <div className="absolute inset-0 p-5 flex items-center justify-center">
-            <img
-              src={url}
-              alt={image.filename}
-              className="max-w-full max-h-full object-contain"
-              style={imgStyle}
-              draggable={false}
-            />
-          </div>
+          <>
+            <div className="absolute inset-0 p-5 flex items-center justify-center">
+              <img
+                src={url}
+                alt={image.filename}
+                className="max-w-full max-h-full object-contain"
+                style={imgStyle}
+                draggable={false}
+                onLoad={() => setLoadState("loaded")}
+                onError={() => setLoadState("error")}
+              />
+            </div>
+            {loadState === "loading" && (
+              <div
+                className="absolute inset-0 flex items-center justify-center pointer-events-none"
+                style={{ color: "var(--color-fg-mute)" }}
+              >
+                <Spinner size={20} thickness={2} aria-label="Loading preview" />
+              </div>
+            )}
+            {loadState === "error" && (
+              <div
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 px-2 py-1 rounded text-[11px] font-medium pointer-events-none"
+                role="status"
+                style={{
+                  background: "var(--color-bg2)",
+                  color: "var(--color-danger)",
+                  border: "1px solid var(--color-danger)",
+                }}
+              >
+                Couldn't load preview
+              </div>
+            )}
+          </>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center" style={{ color: "var(--color-fg-mute)" }}>
             <Spinner size={20} thickness={2} aria-label="Loading preview" />

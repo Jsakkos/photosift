@@ -13,6 +13,11 @@ import { RouteShell } from "../components/route/RouteShell";
 import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 import { FirstRunModal } from "../components/FirstRunModal";
 import { logFocus } from "../lib/debugFocus";
+import { classifyError, formatError } from "../lib/errorMessages";
+import {
+  resumeCuratorForShoot,
+  startCuratorForShoot,
+} from "../lib/curatorApi";
 
 export function CullPage() {
   const { id } = useParams<{ id: string }>();
@@ -187,12 +192,61 @@ export function CullPage() {
       "curator:failed",
       (event) => {
         if (event.payload.shootId !== shootId) return;
-        const where = event.payload.groupId != null
-          ? `cluster ${event.payload.groupId}`
-          : "stage 1";
-        const reason = event.payload.reason ?? "unknown error";
-        console.error(`[curator] ${where} failed: ${reason}`);
-        setToast(`Curator ${where} failed: ${reason}`, "error");
+        const isStage1 = event.payload.groupId == null;
+        const rawReason = event.payload.reason ?? "unknown error";
+        const category = classifyError(rawReason);
+        const friendly = formatError(rawReason);
+        // Stage-1 failures take the whole run down; stage-2 is one cluster
+        // out of many. Phrase accordingly. Per-cluster failures are noisy
+        // enough already that we don't bother offering a retry — the
+        // worker keeps going with the next cluster.
+        const scope = isStage1 ? "Curator couldn't start" : "Curator skipped a cluster";
+        // Category-specific suffix when we can say something useful that
+        // the generic friendly message doesn't already cover.
+        const detail = (() => {
+          switch (category) {
+            case "auth":
+              return "Check your API key in Settings.";
+            case "rate_limit":
+            case "server":
+              return null; // friendly message already says it; offer retry below
+            case "schema":
+              return "The provider returned an unexpected response.";
+            case "network":
+            case "timeout":
+              return null; // friendly already says "check your network"
+            default:
+              return null;
+          }
+        })();
+        const message = detail
+          ? `${scope} — ${friendly} ${detail}`
+          : `${scope} — ${friendly}`;
+        console.error(`[curator] ${isStage1 ? "stage 1" : `cluster ${event.payload.groupId}`} failed: ${rawReason}`);
+        // Offer a retry button for transient stage-1 failures (network /
+        // timeout / rate limit / server). Auth + schema need user action,
+        // so don't offer a one-click retry there.
+        const transient =
+          isStage1 &&
+          (category === "network" ||
+            category === "timeout" ||
+            category === "rate_limit" ||
+            category === "server");
+        if (transient) {
+          setToast(message, "error", {
+            label: "Retry",
+            onClick: () => {
+              // Prefer resume so judgments already in the DB aren't redone.
+              resumeCuratorForShoot(shootId).catch(() =>
+                startCuratorForShoot(shootId).catch((e) =>
+                  console.error("Curator retry failed:", e),
+                ),
+              );
+            },
+          });
+        } else {
+          setToast(message, "error");
+        }
       },
     ).then((fn) => { unlistenCuratorFailed = fn; });
 
@@ -224,13 +278,13 @@ export function CullPage() {
         style={{ background: "var(--color-bg)" }}
       >
         <p className="font-medium" style={{ color: "var(--color-danger)" }}>
-          Could not load shoot
+          Couldn't load this shoot
         </p>
         <p
           className="text-sm max-w-md text-center"
           style={{ color: "var(--color-fg-dim)" }}
         >
-          {loadError}
+          {formatError(loadError)}
         </p>
         <button
           type="button"
