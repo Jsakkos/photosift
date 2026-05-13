@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useModalA11y } from "../hooks/useModalA11y";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Spinner } from "./primitives";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { FolderTemplate } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
@@ -19,6 +20,32 @@ import {
   startCuratorForShoot,
   testCuratorConnection,
 } from "../lib/curatorApi";
+
+/// One-liner feedback for an operation (recluster / reanalyze / connection
+/// test / curator run). Errors render in danger red; everything else (in
+/// progress, done) in a calm dim. The error heuristic keys off the wording
+/// the handlers already use ("Error: …", "… failed: …").
+function StatusLine({ msg }: { msg: string | null }) {
+  if (!msg) return null;
+  const isError = /error|failed/i.test(msg);
+  return (
+    <p className={`text-xs mt-2 break-words ${isError ? "text-danger" : "text-fg-dim"}`}>
+      {msg}
+    </p>
+  );
+}
+
+/// Button content for an action that may be running: shows a spinner +
+/// the busy label while `busy`, else the idle label.
+function BusyLabel({ busy, busyText, children }: { busy: boolean; busyText: string; children: ReactNode }) {
+  if (!busy) return <>{children}</>;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Spinner size={11} />
+      {busyText}
+    </span>
+  );
+}
 
 function providerLabel(p: AiProviderStatus): { text: string; color: string } {
   switch (p) {
@@ -580,11 +607,11 @@ export function SettingsDialog() {
                 disabled={reclustering || !valid}
                 className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors disabled:opacity-50"
               >
-                {reclustering ? "Re-clustering..." : "Re-cluster"}
+                <BusyLabel busy={reclustering} busyText="Re-clustering…">Re-cluster</BusyLabel>
               </button>
             </div>
             {reclusterMsg && (
-              <p className="text-xs text-accent-blue mt-2">{reclusterMsg}</p>
+              <StatusLine msg={reclusterMsg} />
             )}
           </div>
         )}
@@ -644,11 +671,11 @@ export function SettingsDialog() {
                   disabled={reanalyzing}
                   className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors disabled:opacity-50"
                 >
-                  {reanalyzing ? "Queuing..." : "Re-analyze"}
+                  <BusyLabel busy={reanalyzing} busyText="Queuing…">Re-analyze</BusyLabel>
                 </button>
               </div>
               {reanalyzeMsg && (
-                <p className="text-xs text-accent-blue mt-2">{reanalyzeMsg}</p>
+                <StatusLine msg={reanalyzeMsg} />
               )}
             </div>
           )}
@@ -717,7 +744,7 @@ export function SettingsDialog() {
                       disabled={keyBusy}
                       className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
                     >
-                      Test
+                      <BusyLabel busy={keyBusy} busyText="Testing…">Test</BusyLabel>
                     </button>
                     <button
                       onClick={handleClearKey}
@@ -784,7 +811,7 @@ export function SettingsDialog() {
                       disabled={keyBusy}
                       className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
                     >
-                      Test
+                      <BusyLabel busy={keyBusy} busyText="Testing…">Test</BusyLabel>
                     </button>
                     <button
                       onClick={handleClearKey}
@@ -839,7 +866,7 @@ export function SettingsDialog() {
                   disabled={keyBusy || !modelLocal.trim() || !localBaseUrl.trim()}
                   className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
                 >
-                  Test
+                  <BusyLabel busy={keyBusy} busyText="Testing…">Test</BusyLabel>
                 </button>
               </div>
               <p className="text-xs text-fg-dim -mt-2 mb-3">
@@ -861,7 +888,7 @@ export function SettingsDialog() {
             </>
           )}
 
-          {keyMsg && <p className="text-xs text-accent-blue mb-3 mt-2">{keyMsg}</p>}
+          <StatusLine msg={keyMsg} />
 
           <label className="flex items-center gap-2 text-sm text-fg cursor-pointer mt-3 mb-1">
             <input
@@ -933,7 +960,7 @@ export function SettingsDialog() {
                 </div>
               </div>
               {curatorMsg && (
-                <p className="text-xs text-accent-blue mt-2">{curatorMsg}</p>
+                <StatusLine msg={curatorMsg} />
               )}
               {curatorProvider !== "local" && !activeKeyStatus?.configured && (
                 <p className="text-xs text-fg-dim mt-2">
