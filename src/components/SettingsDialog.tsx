@@ -383,7 +383,7 @@ export function SettingsDialog() {
       data-testid="settings-dialog"
       className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
     >
-      <div className="bg-[var(--bg-secondary)] rounded-xl border border-white/10 p-6 w-[480px] max-w-[90vw] max-h-[90vh] overflow-y-auto">
+      <div className="bg-[var(--bg-secondary)] rounded-xl border border-white/10 p-6 w-[640px] max-w-[90vw] max-h-[90vh] overflow-y-auto">
         <h2 className="text-xl font-medium text-[var(--text-primary)] mb-4">Settings</h2>
 
         <div className="mb-4">
