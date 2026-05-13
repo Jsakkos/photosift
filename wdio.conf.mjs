@@ -9,8 +9,9 @@
 //
 // Prereqs:
 //   - cargo install tauri-driver
-//   - msedgedriver.exe matching the system Microsoft Edge version
-//     (we keep one at .tools/msedgedriver.exe — see scripts in package.json)
+//   - msedgedriver.exe matching the *WebView2 Runtime* version — NOT the
+//     standalone Edge browser, which can be a different release. Kept at
+//     .tools/msedgedriver.exe; CI resolves it in .github/workflows/screenshots.yml.
 //   - The built debug binary at src-tauri/target/debug/photosift.exe.
 //     Build with: npm run test:e2e:build
 

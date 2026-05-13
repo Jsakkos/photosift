@@ -45,18 +45,52 @@ jobs:
       - name: Resolve msedgedriver
         shell: pwsh
         run: |
-          $edge = Get-Item "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-          $version = $edge.VersionInfo.FileVersion
-          Write-Host "Edge version: $version"
-          $url = "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip"
+          # tauri-driver drives the WebView2 Runtime (the Tauri app is a
+          # WebView2 host), so msedgedriver must match the *WebView2* version —
+          # not the standalone Edge browser, which on the runner can be a
+          # different release. Matching the browser instead is what produced
+          # "session not created: only supports Microsoft Edge version N".
+          $wvRoot = "C:\Program Files (x86)\Microsoft\EdgeWebView\Application"
+          $wv = Get-ChildItem -LiteralPath $wvRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+                Sort-Object { [version]$_.Name } -Descending |
+                Select-Object -First 1
+          if ($wv) {
+            $full = $wv.Name
+            Write-Host "WebView2 Runtime version: $full"
+          } else {
+            # Fallback: stable Edge browser (older runner images / odd layouts).
+            $edge = Get-Item "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+            $full = $edge.VersionInfo.FileVersion
+            Write-Host "WebView2 runtime dir not found; falling back to Edge browser version: $full"
+          }
+          $major = $full.Split('.')[0]
+          # Pin to the latest msedgedriver for that major so a minor drift on
+          # the runner doesn't break us. The LATEST_RELEASE_* files are tiny
+          # text blobs (often UTF-16 + BOM) — strip everything but digits/dots.
+          # If that lookup fails, fall back to the exact runtime version.
+          $driverVersion = $null
+          try {
+            $resp = Invoke-WebRequest -UseBasicParsing -Uri "https://msedgedriver.microsoft.com/LATEST_RELEASE_${major}_WINDOWS"
+            $driverVersion = ($resp.Content -replace '[^\d\.]', '')
+          } catch {
+            Write-Host "LATEST_RELEASE_${major}_WINDOWS lookup failed: $_"
+          }
+          if (-not $driverVersion) {
+            $driverVersion = $full
+            Write-Host "Falling back to exact version $full"
+          }
+          Write-Host "Using msedgedriver $driverVersion"
+          $url = "https://msedgedriver.microsoft.com/$driverVersion/edgedriver_win64.zip"
           $zip = "$env:RUNNER_TEMP\msedgedriver.zip"
           $tools = "$PWD\.tools"
           New-Item -ItemType Directory -Force -Path $tools | Out-Null
-          Invoke-WebRequest -Uri $url -OutFile $zip
+          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $tools -Force
           if (-not (Test-Path "$tools\msedgedriver.exe")) {
             throw "msedgedriver.exe not found after extraction"
           }
+          & "$tools\msedgedriver.exe" --version
 
       - name: Build debug binary
         run: npm run test:e2e:build
