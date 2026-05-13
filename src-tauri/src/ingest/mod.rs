@@ -72,6 +72,12 @@ pub fn run_import(
     cancel: Arc<AtomicBool>,
     selected_paths: Option<Vec<PathBuf>>,
     existing_shoot_id: Option<i64>,
+    // When true (the default), photos whose SHA-256 matches one already in
+    // any shoot are silently skipped — preserving the previous global-dedup
+    // behaviour. When false, the cross-shoot check is bypassed; only the
+    // per-shoot UNIQUE(content_hash, shoot_id) constraint catches the
+    // trivial same-shoot duplicate. See #4.
+    skip_duplicates: bool,
 ) -> Result<i64, String> {
     let db = Database::open_global().map_err(|e| e.to_string())?;
     let db = Mutex::new(db);
@@ -179,6 +185,7 @@ pub fn run_import(
 
             let result = process_one_file(
                 item,
+                shoot_id,
                 &shoot_dir,
                 &raw_bucket,
                 &previews_dir,
@@ -186,6 +193,7 @@ pub fn run_import(
                 &db,
                 import_mode,
                 &cancel,
+                skip_duplicates,
             );
 
             let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
@@ -367,6 +375,7 @@ pub fn run_import(
 
 fn process_one_file(
     item: &ImportItem,
+    shoot_id: i64,
     shoot_dir: &Path,
     raw_bucket: &str,
     previews_dir: &Path,
@@ -374,6 +383,7 @@ fn process_one_file(
     db: &Mutex<Database>,
     import_mode: ImportMode,
     cancel: &Arc<AtomicBool>,
+    skip_duplicates: bool,
 ) -> ProcessedFile {
     let t_start = Instant::now();
 
@@ -450,8 +460,21 @@ fn process_one_file(
 
     // 3. Dedup check on the just-computed hash. If a duplicate slipped past
     // the heuristic dedup at scan time, undo the copy we just made.
+    //
+    // When `skip_duplicates` is on (the default), check the hash against
+    // every shoot — the historical behaviour. When off, only the destination
+    // shoot is checked: cross-shoot duplicates flow through to insert, but
+    // the same RAW landing twice in the *same* shoot is still a no-op (it
+    // would also be caught by the per-shoot UNIQUE constraint at insert
+    // time, but bailing early avoids killing the surrounding batch
+    // transaction). See #4.
     if let Ok(guard) = db.lock() {
-        if let Ok(Some(_)) = guard.photo_exists_by_hash(&content_hash) {
+        let exists = if skip_duplicates {
+            guard.photo_exists_by_hash(&content_hash)
+        } else {
+            guard.photo_exists_in_shoot_by_hash(shoot_id, &content_hash)
+        };
+        if let Ok(Some(_)) = exists {
             if copy_made {
                 let _ = std::fs::remove_file(&raw_path);
             }
@@ -737,6 +760,7 @@ mod tests {
         for item in &items {
             match process_one_file(
                 item,
+                shoot_id,
                 &shoot_root,
                 "RAW",
                 &previews_dir,
@@ -744,6 +768,7 @@ mod tests {
                 &db_mutex,
                 ImportMode::Copy,
                 &cancel,
+                true,
             ) {
                 ProcessedFile::Ingested(f) => inserts.push(f.insert),
                 ProcessedFile::Skipped => panic!("process_one_file skipped {:?}", item),

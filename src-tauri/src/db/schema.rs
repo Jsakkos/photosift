@@ -441,7 +441,7 @@ impl Database {
                 star_rating INTEGER NOT NULL DEFAULT 0,
                 sharpness_score REAL,
                 quality_score REAL,
-                UNIQUE(content_hash)
+                UNIQUE(content_hash, shoot_id)
             );
             CREATE INDEX IF NOT EXISTS idx_photos_shoot ON photos(shoot_id);
             CREATE INDEX IF NOT EXISTS idx_photos_flag ON photos(shoot_id, flag);
@@ -653,6 +653,60 @@ impl Database {
             )?;
             self.conn.execute_batch("PRAGMA user_version = 2")?;
         }
+        if version < 3 {
+            // Cross-shoot reimport (#4): relax UNIQUE(content_hash) to
+            // UNIQUE(content_hash, shoot_id) so the same RAW can land in
+            // multiple shoots when the user explicitly opts into it via
+            // the "Skip duplicates" import toggle. Within a shoot the
+            // constraint still bites — re-importing the same file into
+            // the same shoot is a no-op.
+            //
+            // Use the standard SQLite table-rebuild dance to swap the
+            // constraint (you can't drop an inline UNIQUE on an existing
+            // table). Enumerate columns from pragma_table_info so any
+            // additive migrations that have already landed survive the
+            // rebuild verbatim.
+            let old_sql: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'photos'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let old_sql = old_sql.unwrap_or_default();
+            let needs_rebuild = old_sql.contains("UNIQUE(content_hash)")
+                && !old_sql.contains("UNIQUE(content_hash, shoot_id)");
+            if needs_rebuild {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT name FROM pragma_table_info('photos') ORDER BY cid")?;
+                let cols: Vec<String> = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<Result<_>>()?;
+                drop(stmt);
+                let cols_csv = cols.join(", ");
+                let new_create = old_sql
+                    .replacen("CREATE TABLE photos", "CREATE TABLE photos_v3", 1)
+                    .replace("UNIQUE(content_hash)", "UNIQUE(content_hash, shoot_id)");
+                // PRAGMA foreign_keys must toggle OUTSIDE a transaction; the
+                // dance is documented at https://www.sqlite.org/lang_altertable.html
+                self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+                let script = format!(
+                    "BEGIN;
+                     {new_create};
+                     INSERT INTO photos_v3 ({cols_csv}) SELECT {cols_csv} FROM photos;
+                     DROP TABLE photos;
+                     ALTER TABLE photos_v3 RENAME TO photos;
+                     CREATE INDEX IF NOT EXISTS idx_photos_shoot ON photos(shoot_id);
+                     CREATE INDEX IF NOT EXISTS idx_photos_flag ON photos(shoot_id, flag);
+                     COMMIT;"
+                );
+                self.conn.execute_batch(&script)?;
+                self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            }
+            self.conn.execute_batch("PRAGMA user_version = 3")?;
+        }
         Ok(())
     }
 
@@ -857,6 +911,24 @@ impl Database {
             .query_row(
                 "SELECT id FROM photos WHERE content_hash = ?1",
                 params![&content_hash[..]],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+    }
+
+    /// Per-shoot variant used by the import pipeline when "Skip duplicates"
+    /// is off: with the v3 schema we still don't want the same hash to land
+    /// twice in the same shoot, but cross-shoot duplicates are explicitly
+    /// allowed.
+    pub fn photo_exists_in_shoot_by_hash(
+        &self,
+        shoot_id: i64,
+        content_hash: &[u8; 32],
+    ) -> Result<Option<i64>> {
+        self.conn
+            .query_row(
+                "SELECT id FROM photos WHERE content_hash = ?1 AND shoot_id = ?2",
+                params![&content_hash[..], shoot_id],
                 |row| row.get::<_, i64>(0),
             )
             .optional()
@@ -2335,6 +2407,187 @@ pub(crate) mod tests {
         assert!(existing.is_some());
         let missing = db.photo_exists_by_hash(&[99u8; 32]).unwrap();
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn same_hash_can_be_inserted_across_shoots() {
+        // #4: with the v3 schema, the same content_hash may appear in
+        // multiple shoots when the caller opts into cross-shoot duplicates.
+        let (mut db, _dir) = test_db();
+        let shoot_a = db.insert_shoot("A", "2026-05-01", "/sa", "/da", "copy").unwrap();
+        let shoot_b = db.insert_shoot("B", "2026-05-02", "/sb", "/db", "copy").unwrap();
+
+        let ids_a = db
+            .insert_photos_batch(shoot_a, &[sample_insert(42, "x.nef")])
+            .expect("insert into A");
+        let ids_b = db
+            .insert_photos_batch(shoot_b, &[sample_insert(42, "x.nef")])
+            .expect("insert into B");
+
+        assert_eq!(ids_a.len(), 1);
+        assert_eq!(ids_b.len(), 1);
+        assert_ne!(ids_a[0], ids_b[0]);
+
+        // Per-shoot lookups resolve to the right rows.
+        assert_eq!(
+            db.photo_exists_in_shoot_by_hash(shoot_a, &[42u8; 32]).unwrap(),
+            Some(ids_a[0])
+        );
+        assert_eq!(
+            db.photo_exists_in_shoot_by_hash(shoot_b, &[42u8; 32]).unwrap(),
+            Some(ids_b[0])
+        );
+    }
+
+    #[test]
+    fn same_hash_in_same_shoot_still_fails() {
+        // The per-shoot UNIQUE constraint still prevents the trivial
+        // duplicate within one shoot. The application-level dedup check
+        // in `process_one_file` is the primary gate; this is the backstop.
+        let (mut db, _dir) = test_db();
+        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
+        db.insert_photos_batch(shoot_id, &[sample_insert(8, "x.nef")])
+            .unwrap();
+
+        let err = db
+            .insert_photos_batch(shoot_id, &[sample_insert(8, "y.nef")])
+            .expect_err("expected UNIQUE constraint failure");
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("unique"),
+            "expected UNIQUE constraint error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn v3_migration_is_idempotent_on_fresh_db() {
+        // Brand-new DBs are already on user_version=3 after open(); calling
+        // run_migrations a second time must be a no-op (no panic, no row loss).
+        let (mut db, _dir) = test_db();
+        let shoot_id = db.insert_shoot("T", "2026-04-15", "/s", "/d", "copy").unwrap();
+        db.insert_photos_batch(shoot_id, &[sample_insert(9, "z.nef")])
+            .unwrap();
+
+        let count_before: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM photos", [], |r| r.get(0))
+            .unwrap();
+        db.run_migrations().expect("run_migrations should be idempotent");
+        let count_after: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM photos", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_before, count_after);
+
+        // Verify the schema is on the v3 constraint.
+        let sql: String = db
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'photos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            sql.contains("UNIQUE(content_hash, shoot_id)"),
+            "photos table missing the v3 UNIQUE clause; got: {sql}"
+        );
+    }
+
+    #[test]
+    fn v3_migration_rebuilds_legacy_table() {
+        // Simulate a pre-v3 DB by hand-crafting a photos table with the old
+        // UNIQUE(content_hash) constraint and a few rows that should survive
+        // the rebuild. Then call run_migrations and confirm:
+        //   1. The constraint is now (content_hash, shoot_id).
+        //   2. All row data is preserved (id, hash, filename, etc.).
+        //   3. The indexes are recreated.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE shoots (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 slug TEXT NOT NULL,
+                 date TEXT NOT NULL,
+                 source_path TEXT NOT NULL,
+                 dest_path TEXT NOT NULL,
+                 photo_count INTEGER NOT NULL DEFAULT 0,
+                 imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+                 import_mode TEXT NOT NULL DEFAULT 'copy',
+                 cover_photo_id INTEGER
+             );
+             CREATE TABLE photos (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE,
+                 filename TEXT NOT NULL,
+                 raw_path TEXT NOT NULL,
+                 preview_path TEXT NOT NULL,
+                 thumb_path TEXT NOT NULL,
+                 content_hash BLOB NOT NULL,
+                 phash BLOB,
+                 exif_date TEXT,
+                 camera TEXT,
+                 lens TEXT,
+                 focal_length REAL,
+                 aperture REAL,
+                 shutter_speed TEXT,
+                 iso INTEGER,
+                 orientation INTEGER,
+                 flag TEXT NOT NULL DEFAULT 'unreviewed',
+                 destination TEXT NOT NULL DEFAULT 'unrouted',
+                 star_rating INTEGER NOT NULL DEFAULT 0,
+                 sharpness_score REAL,
+                 quality_score REAL,
+                 UNIQUE(content_hash)
+             );
+             INSERT INTO shoots (slug, date, source_path, dest_path) VALUES ('legacy', '2026-01-01', '/s', '/d');
+             INSERT INTO photos
+                 (shoot_id, filename, raw_path, preview_path, thumb_path, content_hash)
+                 VALUES (1, 'a.nef', '/r/a', '/p/a', '/t/a', x'01010101010101010101010101010101010101010101010101010101010101');
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut db = Database::open(&path).expect("open should run v3 migration");
+
+        let sql: String = db
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'photos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            sql.contains("UNIQUE(content_hash, shoot_id)")
+                && !sql.contains("UNIQUE(content_hash)\n"),
+            "expected v3 constraint, got: {sql}"
+        );
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM photos", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "legacy row was lost in the rebuild");
+
+        let version: i32 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+
+        // And the new behaviour works: we can now insert the same hash into a
+        // second shoot.
+        let shoot_b = db
+            .insert_shoot("B", "2026-01-02", "/s2", "/d2", "copy")
+            .unwrap();
+        let mut p = sample_insert(1, "a.nef");
+        // Match the legacy row's hash exactly.
+        p.content_hash = [1u8; 32];
+        db.insert_photos_batch(shoot_b, &[p])
+            .expect("cross-shoot duplicate should succeed under v3");
     }
 
     #[test]
