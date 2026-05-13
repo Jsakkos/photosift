@@ -30,7 +30,9 @@ const SHOOT_SUMMARY_SQL_LIST: &str =
        COALESCE(SUM(CASE WHEN p.select_visited_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS select_visited, \
        (SELECT view_name FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_view, \
        (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at, \
-       s.cover_photo_id AS cover_photo_id \
+       s.cover_photo_id AS cover_photo_id, \
+       (SELECT camera FROM photos WHERE shoot_id = s.id AND camera IS NOT NULL AND camera != '' \
+          GROUP BY camera ORDER BY COUNT(*) DESC, camera ASC LIMIT 1) AS camera_model \
      FROM shoots s LEFT JOIN photos p ON p.shoot_id = s.id \
      GROUP BY s.id ORDER BY s.date DESC, s.id DESC";
 
@@ -43,7 +45,9 @@ const SHOOT_SUMMARY_SQL_ONE: &str =
        COALESCE(SUM(CASE WHEN p.select_visited_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS select_visited, \
        (SELECT view_name FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_view, \
        (SELECT updated_at FROM view_cursors WHERE shoot_id = s.id ORDER BY updated_at DESC LIMIT 1) AS last_opened_at, \
-       s.cover_photo_id AS cover_photo_id \
+       s.cover_photo_id AS cover_photo_id, \
+       (SELECT camera FROM photos WHERE shoot_id = s.id AND camera IS NOT NULL AND camera != '' \
+          GROUP BY camera ORDER BY COUNT(*) DESC, camera ASC LIMIT 1) AS camera_model \
      FROM shoots s LEFT JOIN photos p ON p.shoot_id = s.id \
      WHERE s.id = ?1 GROUP BY s.id";
 
@@ -65,6 +69,7 @@ fn row_to_shoot(row: &Row<'_>) -> Result<ShootRow> {
         last_view: row.get(13)?,
         last_opened_at: row.get(14)?,
         cover_photo_id: row.get(15)?,
+        camera_model: row.get(16)?,
     })
 }
 
@@ -108,6 +113,12 @@ pub struct ShootRow {
     /// preferred pick later. `None` for legacy shoots imported before
     /// this field existed.
     pub cover_photo_id: Option<i64>,
+    /// Modal camera body across the shoot's photos. Picks the most-common
+    /// non-null `photos.camera` value (ties broken alphabetically for
+    /// determinism); first-photo would be misleading since a shoot often
+    /// opens with a stray cover frame from a different body. `None` when
+    /// no photo has a camera tag.
+    pub camera_model: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2326,6 +2337,39 @@ pub(crate) mod tests {
         let one = db.get_shoot(shoot_id).unwrap().unwrap();
         assert_eq!(one.picks, 2);
         assert_eq!(one.last_view.as_deref(), Some("select"));
+    }
+
+    #[test]
+    fn test_list_shoots_modal_camera_model() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("Mixed", "2026-06-02", "/s", "/d", "copy")
+            .unwrap();
+
+        // Three photos: two D750, one X100VI. Modal pick is the D750. A
+        // separate row with NULL camera must not poison the count.
+        let mut a = sample_insert(1, "a.nef");
+        let mut b = sample_insert(2, "b.nef");
+        let mut c = sample_insert(3, "c.jpg");
+        let mut d = sample_insert(4, "d.jpg");
+        a.camera = Some("NIKON D750".into());
+        b.camera = Some("NIKON D750".into());
+        c.camera = Some("FUJIFILM X100VI".into());
+        d.camera = None;
+        db.insert_photos_batch(shoot_id, &[a, b, c, d]).unwrap();
+
+        let listed = &db.list_shoots().unwrap()[0];
+        assert_eq!(listed.camera_model.as_deref(), Some("NIKON D750"));
+
+        let one = db.get_shoot(shoot_id).unwrap().unwrap();
+        assert_eq!(one.camera_model.as_deref(), Some("NIKON D750"));
+
+        // Empty shoot has no camera tag.
+        let empty_id = db
+            .insert_shoot("Empty", "2026-06-03", "/s", "/d", "copy")
+            .unwrap();
+        let empty = db.get_shoot(empty_id).unwrap().unwrap();
+        assert_eq!(empty.camera_model, None);
     }
 
     #[test]
