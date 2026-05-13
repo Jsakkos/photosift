@@ -1,4 +1,4 @@
-﻿import { useRef } from "react";
+import { useRef } from "react";
 import type { FolderTemplate } from "../stores/settingsStore";
 import { DEFAULT_FOLDER_TEMPLATE } from "../stores/settingsStore";
 import {

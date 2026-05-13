@@ -1,4 +1,4 @@
-﻿import { useMemo } from "react";
+import { useMemo } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { LoupeView } from "../LoupeView";
 import { HeatmapOverlay } from "../HeatmapOverlay";
@@ -41,7 +41,7 @@ function TopBar() {
         style={{ color: "var(--color-fg)" }}
         title={image?.filepath ?? ""}
       >
-        {image?.filename ?? "â€”"}
+        {image?.filename ?? "—"}
       </span>
       <div className="flex-1" />
       <button
@@ -146,21 +146,21 @@ function BottomBar() {
       <ShortcutChip kbd="P" label="keep" />
       <ShortcutChip kbd="X" label="toss" />
       <ShortcutChip kbd="Space" label="skip" />
-      <ShortcutChip kbd="â‡§ P" label="keep group" />
+      <ShortcutChip kbd="⇧ P" label="keep group" />
       <ShortcutChip kbd="Z" label="undo" />
       <ShortcutChip kbd="Tab" label="2-up" />
       <div className="flex-1" />
       <span className="font-mono text-2xs tabular-nums" style={{ color: "var(--color-success)" }}>
-        âœ“ {counts.kept}
+        ✓ {counts.kept}
       </span>
       <span className="font-mono text-2xs tabular-nums" style={{ color: "var(--color-danger)" }}>
-        âœ• {counts.tossed}
+        ✕ {counts.tossed}
       </span>
       <span
         className="font-mono text-2xs tabular-nums"
         style={{ color: "var(--color-fg-dim)" }}
       >
-        Â· {counts.remaining} left
+        · {counts.remaining} left
       </span>
     </div>
   );

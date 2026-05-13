@@ -1,4 +1,4 @@
-﻿import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { DriveInfo } from "../../types";
 
 interface DriveSourceBarProps {
@@ -82,7 +82,7 @@ export function DriveSourceBar({
               style={{ color: "var(--color-fg-dim)" }}
             >
               {letter}{"  "}
-              {formatBytes(drive.totalBytes)}{" Â· "}
+              {formatBytes(drive.totalBytes)}{" · "}
               {formatBytes(drive.availableBytes)} free
             </div>
           </button>
@@ -112,7 +112,7 @@ export function DriveSourceBar({
             className="text-[11px] font-mono truncate"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            Folder Â· click to change
+            Folder · click to change
           </div>
         </button>
       ) : (
@@ -126,7 +126,7 @@ export function DriveSourceBar({
             color: "var(--color-fg-dim)",
           }}
         >
-          Browse folderâ€¦
+          Browse folder…
         </button>
       )}
     </div>

@@ -1,4 +1,4 @@
-﻿import { useMemo, useCallback, useEffect, useRef } from "react";
+import { useMemo, useCallback, useEffect, useRef } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
 import { Photo, type Verdict } from "../primitives";
@@ -10,7 +10,7 @@ import type { ImageEntry } from "../../types";
 const STRIP_WIDTH = 200;
 
 // Orientation-aware thumb aspect. EXIF 5-8 means the image was rotated
-// 90Â°/270Â° at ingest so its displayed aspect is flipped.
+// 90°/270° at ingest so its displayed aspect is flipped.
 function aspectFor(img: ImageEntry): string {
   const o = img.orientation ?? 1;
   return o >= 5 && o <= 8 ? "2 / 3" : "3 / 2";
@@ -43,7 +43,7 @@ export function TriageGroupStrip() {
   }, [current, groups]);
 
   // Sort group members by quality score (best first), matching the
-  // store's in-group ordering from computeDisplayItems â€” so clicking
+  // store's in-group ordering from computeDisplayItems — so clicking
   // right arrow in the loupe lands on the next thumb down the strip.
   const members = useMemo(() => {
     if (!group) return [] as ImageEntry[];
@@ -74,7 +74,7 @@ export function TriageGroupStrip() {
       // member. Drill into this group, then snap focus to the clicked
       // member. The previous code called setActiveInnerGroup(null)
       // unconditionally and then setCurrentIndex(idx) using an `idx`
-      // computed against the pre-collapse displayItems â€” which after
+      // computed against the pre-collapse displayItems — which after
       // the collapse pointed at a totally unrelated photo. This path
       // expands instead and re-resolves the index against the
       // post-expand list.

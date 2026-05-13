@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -146,7 +146,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
             Select subset
           </div>
           <div className="text-2xs" style={{ color: "var(--color-fg-dim)" }}>
-            Load thumbnails so you can deselect unwanted photos. Off by default â€”
+            Load thumbnails so you can deselect unwanted photos. Off by default —
             embedded previews take a while on RAW folders.
           </div>
         </div>
@@ -163,9 +163,9 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
         >
           {progress
             ? selectSubset
-              ? `Loading thumbnailsâ€¦ ${progress.done} of ${progress.total}`
-              : `Scanning folderâ€¦ ${progress.done} of ${progress.total}`
-            : "Scanning folderâ€¦"}
+              ? `Loading thumbnails… ${progress.done} of ${progress.total}`
+              : `Scanning folder… ${progress.done} of ${progress.total}`
+            : "Scanning folder…"}
         </div>
       )}
 
@@ -181,7 +181,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
             className="text-[11px] mt-0.5 font-mono"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            {formatBytes(totalBytes)} Â· everything under the source folder will be imported
+            {formatBytes(totalBytes)} · everything under the source folder will be imported
           </div>
         </div>
       )}
@@ -238,7 +238,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
                       ? "var(--color-accent-blue)"
                       : "transparent",
                   }}
-                  title={`${entry.filename} Â· ${formatBytes(entry.fileSizeBytes)}${entry.capturedAt ? ` Â· ${entry.capturedAt}` : ""}`}
+                  title={`${entry.filename} · ${formatBytes(entry.fileSizeBytes)}${entry.capturedAt ? ` · ${entry.capturedAt}` : ""}`}
                 >
                   {entry.thumbDataUrl ? (
                     <img
@@ -264,7 +264,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
                       className="absolute top-1 right-1 w-4 h-4 rounded-full text-white text-2xs flex items-center justify-center font-bold"
                       style={{ background: "var(--color-accent-blue)" }}
                     >
-                      âœ“
+                      ✓
                     </div>
                   )}
                 </div>

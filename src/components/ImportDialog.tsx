@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -66,7 +66,7 @@ const PIPELINE_STAGES: { label: string; phases: string[] }[] = [
   { label: "read EXIF", phases: ["processing"] },
   { label: "p-hash group", phases: ["clustering"] },
   { label: "sharpness", phases: ["finalizing"] },
-  { label: "face Â· eye Â· smile", phases: ["finalizing"] },
+  { label: "face · eye · smile", phases: ["finalizing"] },
 ];
 
 function PipelineRow({
@@ -125,7 +125,7 @@ export function ImportDialog({
   const [importMode, setImportMode] = useState<ImportMode>("copy");
   // #4: a single user-controlled toggle for "skip duplicates", applied
   // identically to drive (DateBrowser) and folder (FolderSubsetGrid)
-  // sources. Default ON â€” matches the pre-#4 implicit behaviour. When OFF,
+  // sources. Default ON — matches the pre-#4 implicit behaviour. When OFF,
   // the backend bypasses the cross-shoot hash check; the per-shoot
   // UNIQUE constraint still blocks same-shoot duplicates.
   const [skipDuplicates, setSkipDuplicates] = useState(true);
@@ -136,7 +136,7 @@ export function ImportDialog({
   const initialDriveAppliedRef = useRef(false);
 
   // Escape / focus-trap / focus-restore for the dialog. Disabled while an
-  // import is running â€” closing mid-run has its own Cancel control.
+  // import is running — closing mid-run has its own Cancel control.
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalA11y(dialogRef, onClose, !importing);
 
@@ -180,7 +180,7 @@ export function ImportDialog({
       .catch(() => setCuratorReady(false));
   }, [curatorProvider, settings.curatorModelLocal]);
   // When prerequisites aren't met, force the checkbox off regardless of
-  // the saved default â€” we can't run the curator without them.
+  // the saved default — we can't run the curator without them.
   useEffect(() => {
     if (!curatorReady && curatorEnabled) setCuratorEnabled(false);
   }, [curatorReady, curatorEnabled]);
@@ -242,12 +242,12 @@ export function ImportDialog({
       const shootId = event.payload.shootId;
       if (addMode) {
         // Adding a batch can change cluster membership and stale any cached
-        // Curator judgments â€” offer a one-click re-run if there are any.
+        // Curator judgments — offer a one-click re-run if there are any.
         getCuratorJudgmentsForShoot(shootId)
           .then((judgments) => {
             if (judgments.length === 0) return;
             setToast(
-              `Added ${event.payload.photoCount} photo${event.payload.photoCount === 1 ? "" : "s"} â€” Curator judgments may be stale.`,
+              `Added ${event.payload.photoCount} photo${event.payload.photoCount === 1 ? "" : "s"} — Curator judgments may be stale.`,
               "info",
               {
                 label: "Re-run Curator",
@@ -264,7 +264,7 @@ export function ImportDialog({
         // Auto-start the curator on the new shoot if the user opted in
         // for this import. Read the ref so we don't capture stale state.
         startCuratorForShoot(shootId).catch((e) => {
-          // Don't block import success on curator start failure â€”
+          // Don't block import success on curator start failure —
           // surface the error but let the import flow proceed.
           console.error("Failed to start curator:", e);
         });
@@ -434,7 +434,7 @@ export function ImportDialog({
                 style={{ color: "var(--color-fg-dim)" }}
               >
                 Pick a source above to begin. PhotoSift detects SD cards and
-                external drives automatically â€” they'll appear here within a few
+                external drives automatically — they'll appear here within a few
                 seconds of plugging in.
               </div>
             )}
@@ -515,7 +515,7 @@ export function ImportDialog({
                   >
                     {skipDuplicates
                       ? "Files already imported in any shoot are skipped."
-                      : "Duplicates can land in this shoot too â€” the same RAW will live in both shoots."}
+                      : "Duplicates can land in this shoot too — the same RAW will live in both shoots."}
                   </div>
                 </div>
               </label>
@@ -614,7 +614,7 @@ export function ImportDialog({
               >
                 {selectedPaths.length > 0 && (
                   <>
-                    {selectedPaths.length} Â· {formatBytes(totalBytes)}
+                    {selectedPaths.length} · {formatBytes(totalBytes)}
                   </>
                 )}
               </div>
@@ -656,8 +656,8 @@ export function ImportDialog({
               }}
             >
               {cancelling
-                ? "Cancellingâ€¦ waiting for in-flight files to finish."
-                : "Processing filesâ€¦"}
+                ? "Cancelling… waiting for in-flight files to finish."
+                : "Processing files…"}
             </div>
             <div
               className="h-1 mt-2.5 rounded-sm overflow-hidden"
@@ -681,9 +681,9 @@ export function ImportDialog({
               <span className="truncate">
                 {progress
                   ? `${progress.current} / ${progress.total}${
-                      progress.currentFilename ? ` Â· ${progress.currentFilename}` : ""
+                      progress.currentFilename ? ` · ${progress.currentFilename}` : ""
                     }`
-                  : "startingâ€¦"}
+                  : "starting…"}
               </span>
               <button
                 type="button"
@@ -699,7 +699,7 @@ export function ImportDialog({
                 className="text-[11px] cursor-pointer bg-transparent border-0 disabled:opacity-50 disabled:cursor-default"
                 style={{ color: "var(--color-danger)" }}
               >
-                {cancelling ? "Cancellingâ€¦" : "Cancel import"}
+                {cancelling ? "Cancelling…" : "Cancel import"}
               </button>
             </div>
             <div

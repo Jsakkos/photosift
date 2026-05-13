@@ -1,4 +1,4 @@
-﻿type ExifChipProps = {
+type ExifChipProps = {
   shutter?: string | null;
   fstop?: number | string | null;
   iso?: number | null;
@@ -7,7 +7,7 @@
 };
 
 function Sep() {
-  return <span className="opacity-40">Â·</span>;
+  return <span className="opacity-40">·</span>;
 }
 
 export function ExifChip({ shutter, fstop, iso, focal, className }: ExifChipProps) {
