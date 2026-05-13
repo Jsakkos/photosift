@@ -237,8 +237,8 @@ export function GridView() {
           item.groupId !== undefined && !item.isGroupCover;
         const tintClass = isGroupMember
           ? item.groupId! % 2 === 0
-            ? "bg-[var(--accent)]/[0.06]"
-            : "bg-[var(--accent)]/[0.12]"
+            ? "bg-accent/[0.06]"
+            : "bg-accent/[0.12]"
           : "";
         return (
           <div
@@ -397,21 +397,21 @@ export function GridView() {
             <button
               onClick={() => handleBulkAction("pick")}
               title="Pick selected (P)"
-              className="px-3 py-1 rounded border border-green-500/40 text-green-500 text-xs hover:bg-green-500/10"
+              className="px-3 py-1 rounded border border-success/40 text-success text-xs hover:bg-success/10"
             >
               P Pick
             </button>
             <button
               onClick={() => handleBulkAction("reject")}
               title="Reject selected (X)"
-              className="px-3 py-1 rounded border border-red-500/40 text-red-500 text-xs hover:bg-red-500/10"
+              className="px-3 py-1 rounded border border-danger/40 text-danger text-xs hover:bg-danger/10"
             >
               X Reject
             </button>
             <button
               onClick={() => handleBulkAction("unreviewed")}
               title="Reset to unreviewed (U)"
-              className="px-3 py-1 rounded border border-white/20 text-[var(--text-secondary)] text-xs hover:bg-white/5"
+              className="px-3 py-1 rounded border border-white/20 text-fg-dim text-xs hover:bg-white/5"
             >
               U Reset
             </button>
@@ -419,7 +419,7 @@ export function GridView() {
               <button
                 onClick={handleGroup}
                 title="Group selected (Ctrl+G)"
-                className="px-3 py-1 rounded border border-[var(--accent)]/40 text-[var(--accent)] text-xs hover:bg-[var(--accent)]/10"
+                className="px-3 py-1 rounded border border-accent/40 text-accent text-xs hover:bg-accent/10"
               >
                 Group
               </button>
@@ -428,7 +428,7 @@ export function GridView() {
               <button
                 onClick={handleUngroup}
                 title="Ungroup selected (Ctrl+Shift+G)"
-                className="px-3 py-1 rounded border border-orange-400/40 text-orange-400 text-xs hover:bg-orange-400/10"
+                className="px-3 py-1 rounded border border-warning/40 text-warning text-xs hover:bg-warning/10"
               >
                 Ungroup
               </button>
@@ -440,7 +440,7 @@ export function GridView() {
                 setViewMode("sequential");
               }}
               title="Open first selection in sequential view (Enter)"
-              className="px-3 py-1 rounded border border-white/20 text-[var(--text-secondary)] text-xs hover:bg-white/5"
+              className="px-3 py-1 rounded border border-white/20 text-fg-dim text-xs hover:bg-white/5"
             >
               Enter → Loupe
             </button>
@@ -518,7 +518,7 @@ function GridThumb({
           views preserves the visual cue. */}
       {showGroupBar && (
         <div
-          className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--accent)] pointer-events-none"
+          className="absolute left-0 top-0 bottom-0 w-[3px] bg-accent pointer-events-none"
           aria-hidden="true"
         />
       )}

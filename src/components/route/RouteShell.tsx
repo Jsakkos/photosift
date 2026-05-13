@@ -322,7 +322,7 @@ export function RouteShell() {
                   className="px-[10px] py-[4px] rounded-xs font-mono text-[10px] border-0 cursor-pointer"
                   style={{
                     background: active ? "var(--color-accent)" : "transparent",
-                    color: active ? "#1a1a1a" : "var(--color-fg-dim)",
+                    color: active ? "var(--color-on-accent)" : "var(--color-fg-dim)",
                     fontWeight: active ? 600 : 400,
                   }}
                   aria-pressed={active}
@@ -405,7 +405,7 @@ export function RouteShell() {
         className="flex flex-col gap-[10px] p-4 border-l overflow-auto"
         style={{
           borderColor: "var(--color-border)",
-          background: "#111",
+          background: "var(--color-stage)",
         }}
       >
         <div
@@ -442,7 +442,7 @@ export function RouteShell() {
           className="px-[14px] py-[8px] rounded-md text-[12px] font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border-0"
           style={{
             background: "var(--color-accent)",
-            color: "#1a1a1a",
+            color: "var(--color-on-accent)",
           }}
         >
           Route {actionScopeCount} {actionScopeCount === 1 ? "photo" : "photos"}

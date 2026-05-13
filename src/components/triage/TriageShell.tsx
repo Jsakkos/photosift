@@ -189,7 +189,7 @@ export function TriageShell() {
       <TriageGroupStrip />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar />
-        <div className="flex-1 relative overflow-hidden" style={{ background: "#0c0c0c" }}>
+        <div className="flex-1 relative overflow-hidden" style={{ background: "var(--color-stage)" }}>
           <LoupeView />
           <HeatmapHost />
           <VerdictHint side="left" label="keep" kbd="P" tone="var(--color-success)" />
