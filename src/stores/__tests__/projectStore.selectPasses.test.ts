@@ -82,14 +82,49 @@ describe("Select multi-pass star-rating filter", () => {
     expect(items.map((i) => i.image.id)).toEqual([2, 3]);
   });
 
-  test("setSelectMinStar clamps to [0, 5]", () => {
+  test("setSelectMinStar clamps the top at routeMinStar - 1 (graduation boundary)", () => {
+    setupMockIpc();
+    // Default routeMinStar = 3 → Select tiers 0, 1, 2 are reachable; 3+ belong
+    // to Route (a pick graded that high graduates out, so the tier is empty).
+    useSettingsStore.setState((s) => ({
+      settings: { ...s.settings, routeMinStar: 3 },
+    }));
     useProjectStore.setState({ selectMinStar: 0 });
     useProjectStore.getState().setSelectMinStar(-1);
     expect(useProjectStore.getState().selectMinStar).toBe(0);
     useProjectStore.getState().setSelectMinStar(7);
-    expect(useProjectStore.getState().selectMinStar).toBe(5);
+    expect(useProjectStore.getState().selectMinStar).toBe(2);
     useProjectStore.getState().setSelectMinStar(3);
-    expect(useProjectStore.getState().selectMinStar).toBe(3);
+    expect(useProjectStore.getState().selectMinStar).toBe(2);
+    useProjectStore.getState().setSelectMinStar(1);
+    expect(useProjectStore.getState().selectMinStar).toBe(1);
+  });
+
+  test("setSelectMinStar allows tiers 0-5 when routeMinStar is 0 (gate disabled)", () => {
+    setupMockIpc();
+    useSettingsStore.setState((s) => ({
+      settings: { ...s.settings, routeMinStar: 0 },
+    }));
+    useProjectStore.setState({ selectMinStar: 0 });
+    useProjectStore.getState().setSelectMinStar(9);
+    expect(useProjectStore.getState().selectMinStar).toBe(5);
+  });
+
+  test("lowering routeMinStar re-clamps an out-of-range floor", () => {
+    setupMockIpc();
+    useSettingsStore.setState((s) => ({
+      settings: { ...s.settings, routeMinStar: 0 },
+    }));
+    useProjectStore.setState({ selectMinStar: 0 });
+    useProjectStore.getState().setSelectMinStar(4);
+    expect(useProjectStore.getState().selectMinStar).toBe(4);
+    // Settings now shrink the reachable range; SettingsDialog re-applies the
+    // current floor through setSelectMinStar to pull it back in bounds.
+    useSettingsStore.setState((s) => ({
+      settings: { ...s.settings, routeMinStar: 3 },
+    }));
+    useProjectStore.getState().setSelectMinStar(useProjectStore.getState().selectMinStar);
+    expect(useProjectStore.getState().selectMinStar).toBe(2);
   });
 
   test("pass complete: bumps floor and resets cursor when every visible photo is visited", async () => {
@@ -286,5 +321,48 @@ describe("Select view — routed-skip gate (#16)", () => {
     );
     // Both excluded — reject by flag filter, pick by routed-skip
     expect(items.map((i) => i.image.id)).toEqual([]);
+  });
+
+  test("Show all is a true escape hatch — surfaces routed-eligible picks AND rejects", () => {
+    // Without Show all, a 3★ pick is routed-eligible (excluded) and a reject is
+    // flag-filtered (excluded), so an over-eager rating leaves nothing to fix.
+    const images = [
+      makeImage({ id: 1, flag: "pick", starRating: 1 }),
+      makeImage({ id: 2, flag: "pick", starRating: 4 }), // routed-eligible
+      makeImage({ id: 3, flag: "reject", starRating: 2 }),
+    ];
+    expect(
+      computeDisplayItems(images, "select", [], new Set(), true, 3, undefined, false, 0)
+        .map((i) => i.image.id),
+    ).toEqual([1]);
+    // Show all (8th arg) ignores the flag filter, the pass floor, AND the
+    // routed-eligible exclusion so every photo is reachable for re-rating.
+    expect(
+      computeDisplayItems(images, "select", [], new Set(), true, 3, undefined, true, 2)
+        .map((i) => i.image.id),
+    ).toEqual([1, 2, 3]);
+  });
+});
+
+describe("Select view — maybeBumpFloor respects the graduation cap", () => {
+  test("does not bump past routeMinStar - 1", async () => {
+    setupMockIpc();
+    useSettingsStore.setState((s) => ({
+      settings: { ...s.settings, selectRequiresPick: true, routeMinStar: 3 },
+    }));
+    // Floor 2 (the top reachable tier when routeMinStar = 3), one pick at 2★.
+    const images = [makeImage({ id: 1, flag: "pick", starRating: 2 })];
+    seedSelect(images, 2);
+
+    // Visiting the only photo at this tier would normally bump the floor; the
+    // cap (2) holds because the next tier belongs to Route.
+    useProjectStore.getState().markVisitedAtFloor(1);
+    expect(useProjectStore.getState().selectMinStar).toBe(2);
+
+    // Rating it to 3★ graduates it out of Select entirely (now routed-eligible)
+    // — the strip empties and the floor still doesn't move.
+    await useProjectStore.getState().setRating(3);
+    expect(useProjectStore.getState().selectMinStar).toBe(2);
+    expect(useProjectStore.getState().displayItems).toHaveLength(0);
   });
 });

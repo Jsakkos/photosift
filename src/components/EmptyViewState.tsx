@@ -26,6 +26,8 @@ interface EmptyCopy {
 export function EmptyViewState({ view }: Props) {
   const images = useProjectStore((s) => s.images);
   const selectMinStar = useProjectStore((s) => s.selectMinStar);
+  const showReviewed = useProjectStore((s) => s.showReviewed);
+  const toggleShowReviewed = useProjectStore((s) => s.toggleShowReviewed);
   const setView = useProjectStore((s) => s.setView);
   const routeMinStar = useSettingsStore(
     (s) => s.settings.routeMinStar ?? 0,
@@ -36,6 +38,7 @@ export function EmptyViewState({ view }: Props) {
     routeMinStar,
     selectMinStar,
     () => void setView("route"),
+    showReviewed ? undefined : toggleShowReviewed,
   );
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-2 bg-bg px-8">
@@ -66,6 +69,7 @@ function copy(
   routeMinStar: number,
   selectMinStar: number,
   switchToRoute: () => void,
+  showAll: (() => void) | undefined,
 ): EmptyCopy {
   switch (view) {
     case "triage":
@@ -106,14 +110,16 @@ function copy(
       if (picks > 0 && selectMinStar > 0) {
         return {
           title: `No photos at ${selectMinStar}★+`,
-          body: `You have ${picks} pick${picks === 1 ? "" : "s"}, but none have been rated ${selectMinStar}★ or higher. Rate a photo up to ${selectMinStar}★ to promote it into this pass, or press [ to step back to a lower tier.`,
+          body: `You have ${picks} pick${picks === 1 ? "" : "s"}, but none have been rated ${selectMinStar}★ or higher. Press [ to step back to a lower tier, or show all picks to re-rate from here.`,
           hint: "Use the pass chips above the filmstrip to jump between tiers.",
+          action: showAll ? { label: "Show all picks", onClick: showAll } : undefined,
         };
       }
       if (picks > 0) {
         return {
           title: "No picks shown",
-          body: `You have ${picks} pick${picks === 1 ? "" : "s"} but none match the current filter. Flip "Select view requires pick" off in Settings to include unreviewed photos, or check the Show-all toggle.`,
+          body: `You have ${picks} pick${picks === 1 ? "" : "s"} but none match the current filter. Show all picks to bring them back, or flip "Select view requires pick" off in Settings.`,
+          action: showAll ? { label: "Show all picks", onClick: showAll } : undefined,
         };
       }
       return {

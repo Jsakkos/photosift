@@ -85,6 +85,14 @@ export function isRouteEligible(
   );
 }
 
+/// Highest reachable Select pass floor. Reaching `routeMinStar` graduates a
+/// pick to the Route view, so it is not itself a Select tier — the `★≥N`
+/// pass pills, the `[`/`]` clamp, and `maybeBumpFloor` all stop one below it.
+/// A gate of 0 (routing threshold disabled) means every tier 0-5 is reachable.
+export function selectMaxFloor(routeMinStarGate: number): number {
+  return routeMinStarGate > 0 ? routeMinStarGate - 1 : 5;
+}
+
 /// Session-scoped "pass floor" for Select. Read lazily so every
 /// computeDisplayItemsFiltered call picks up the current tier without
 /// threading the value through 18+ internal callers. Defaults to 0 on
@@ -540,16 +548,15 @@ export function computeDisplayItems(
   } else if (currentView === "select") {
     const seenGroups = new Set<number>();
     const passesSelectGate = (img: ImageEntry): boolean => {
-      // showReviewed bypasses the flag filter (so picked/rejected become
-      // visible again) but NOT the pass floor or the routed-eligible
-      // exclusion — both are workflow-stage decisions chosen by the user,
-      // not review filters, so leaving them enforced here keeps "Show all"
-      // from silently dragging already-graded keepers back into Select.
-      const passesFlag = showReviewed
-        ? true
-        : selectRequiresPickFilter
-          ? img.flag === "pick"
-          : img.flag !== "reject";
+      // "Show all" is the recovery hatch: it surfaces every photo regardless
+      // of flag, pass floor, or route-eligibility so an accidental rating or
+      // a premature route can always be found and undone. Without it the
+      // strip can dead-end (every pick graded ≥ routeMinStar drops out and
+      // there is no way back to re-rate). Group de-dup still applies below.
+      if (showReviewed) return true;
+      const passesFlag = selectRequiresPickFilter
+        ? img.flag === "pick"
+        : img.flag !== "reject";
       return (
         passesFlag &&
         img.starRating >= selectMinStar &&
@@ -1770,7 +1777,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setSelectMinStar: (n: number) => {
-    const clamped = Math.max(0, Math.min(5, n));
+    const clamped = Math.max(0, Math.min(selectMaxFloor(routeMinStar()), n));
     if (get().selectMinStar === clamped) return;
     // Moving between tiers (manual `[` / `]` or auto-bump) resets the
     // visited-at-floor tracking so each pass starts fresh. Also drop
@@ -2224,7 +2231,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   maybeBumpFloor: () => {
     const { currentView, displayItems, selectMinStar, selectVisitedAtFloor } = get();
     if (currentView !== "select") return;
-    if (selectMinStar >= 5) return;
+    if (selectMinStar >= selectMaxFloor(routeMinStar())) return;
     if (displayItems.length === 0) return;
     const allVisited = displayItems.every((d) => selectVisitedAtFloor.has(d.image.id));
     if (!allVisited) return;
