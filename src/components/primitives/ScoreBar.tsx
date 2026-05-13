@@ -1,4 +1,4 @@
-﻿type ScoreTone = "accent" | "accent-2" | "success" | "warning" | "danger";
+type ScoreTone = "accent" | "accent-2" | "success" | "warning" | "danger";
 
 const toneToColor: Record<ScoreTone, string> = {
   accent: "var(--color-accent)",

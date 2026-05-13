@@ -1,4 +1,4 @@
-﻿export type ColorLabelValue = "red" | "yellow" | "green" | "blue" | "purple";
+export type ColorLabelValue = "red" | "yellow" | "green" | "blue" | "purple";
 
 const COLOR_VAR: Record<ColorLabelValue, string> = {
   red: "var(--color-label-red)",

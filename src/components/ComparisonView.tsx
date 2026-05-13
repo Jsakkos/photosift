@@ -1,4 +1,4 @@
-﻿import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
 import { currentPair as bracketCurrentPair } from "../lib/bracket";
@@ -46,7 +46,7 @@ function providerLabel(provider: string): string {
 }
 
 /// Dim footer strip under the image showing the Curator's per-photo take.
-/// Collapses to nothing when there's no judgment â€” the filename still lives
+/// Collapses to nothing when there's no judgment — the filename still lives
 /// in the row above, so an unjudged side just shows filename + stars + pills.
 function CuratorRow({
   judgment,
@@ -69,7 +69,7 @@ function CuratorRow({
       style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
     >
       <span
-        title={`${providerLabel(judgment.provider)} Â· ${judgment.model}`}
+        title={`${providerLabel(judgment.provider)} · ${judgment.model}`}
         className="font-mono text-3xs uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs shrink-0"
         style={{ color: "var(--color-fg-dim)", background: "var(--color-bg3)" }}
       >
@@ -88,7 +88,7 @@ function CuratorRow({
           style={{ color: "var(--color-fg-mute)" }}
         >
           {rank}
-          {rank && judgment.isKeeper ? " Â· " : ""}
+          {rank && judgment.isKeeper ? " · " : ""}
           {judgment.isKeeper ? "keeper" : ""}
         </span>
       )}
@@ -308,14 +308,14 @@ export function ComparisonView() {
             className="font-mono text-2xs"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            Â· Group G{groupOrdinal} Â· Round {round} Â· Pair {pairIdx}/{totalRealPairs}
+            · Group G{groupOrdinal} · Round {round} · Pair {pairIdx}/{totalRealPairs}
           </span>
         )}
         <span
           className="font-mono text-2xs"
           style={{ color: "var(--color-fg-mute)" }}
         >
-          Â· locked zoom {Math.round(transform.scale * 100)}%
+          · locked zoom {Math.round(transform.scale * 100)}%
         </span>
         <div className="flex-1" />
         <div className="flex items-center gap-2">
@@ -396,7 +396,7 @@ export function ComparisonView() {
         style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
       >
         <span className="font-mono text-2xs" style={{ color: "var(--color-fg-dim)" }}>
-          Winner(s) promoted Â· pan + zoom synchronised
+          Winner(s) promoted · pan + zoom synchronised
         </span>
         <div className="flex-1" />
       </div>

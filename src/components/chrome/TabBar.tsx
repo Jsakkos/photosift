@@ -1,4 +1,4 @@
-﻿import type { CullView } from "../../types";
+import type { CullView } from "../../types";
 
 export type TabId = "library" | CullView;
 

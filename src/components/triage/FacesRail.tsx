@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAiStore, sharpnessBadgeScore } from "../../stores/aiStore";
@@ -22,7 +22,7 @@ function noteFor(image: ImageEntry, faces: Face[] | null): string {
   else if (sharp > 0) bits.push(`Sharpness ${Math.round(sharp)}/100`);
   if (blinks > 0) bits.push(`${blinks} blink${blinks === 1 ? "" : "s"} detected`);
   if (blurs > 0) bits.push(`${blurs} soft face${blurs === 1 ? "" : "s"}`);
-  return bits.join(" Â· ");
+  return bits.join(" · ");
 }
 
 export function FacesRail() {
@@ -108,7 +108,7 @@ export function FacesRail() {
               className="font-mono text-2xs"
               style={{ color: "var(--color-fg-mute)" }}
             >
-              Â· {faces.length} detected
+              · {faces.length} detected
             </span>
           )}
         </div>
@@ -117,7 +117,7 @@ export function FacesRail() {
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
         {disabled && (
           <div className="text-[11px] py-8 text-center" style={{ color: "var(--color-fg-mute)" }}>
-            On-device AI disabled â€” enable it in Settings to score this frame.
+            On-device AI disabled — enable it in Settings to score this frame.
           </div>
         )}
         {!disabled && !analyzedAt && (

@@ -1,4 +1,4 @@
-﻿import { useMemo, useCallback, useEffect, useRef } from "react";
+import { useMemo, useCallback, useEffect, useRef } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
 import { Photo, Stars } from "../primitives";
