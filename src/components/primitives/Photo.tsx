@@ -3,8 +3,7 @@ import type { ColorLabelValue } from "./ColorLabel";
 import { ColorLabelChip } from "./ColorLabel";
 import type { StarCount } from "./Stars";
 import { Badge } from "./Badge";
-
-export type Verdict = "keep" | "toss" | null;
+import { VerdictBadge, type Verdict } from "./VerdictBadge";
 
 /// The routing destinations that get a corner tag on a thumbnail.
 /// `"publish_direct"` is the DB value; both it and `"export"` render as
@@ -47,27 +46,6 @@ function placeholderBackground(seed: string): string {
   const c2 = `oklch(${0.48 + (seed.length % 3) * 0.04} 0.03 ${hue + 40})`;
   const c3 = `oklch(0.22 0.015 ${hue - 20})`;
   return `linear-gradient(135deg, ${c1} 0%, ${c2} 60%, ${c3} 100%)`;
-}
-
-function VerdictBadge({ verdict }: { verdict: Exclude<Verdict, null> }) {
-  const bg = verdict === "keep" ? "var(--color-success)" : "var(--color-danger)";
-  return (
-    <div
-      className="absolute top-1 right-1 w-3 h-3 flex items-center justify-center rounded-xs"
-      style={{ background: bg }}
-      aria-label={verdict === "keep" ? "keep" : "toss"}
-    >
-      {verdict === "keep" ? (
-        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-          <path d="M1.5 4.2l1.7 1.6L6.5 2.2" stroke="white" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      ) : (
-        <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-          <path d="M1.8 1.8l4.4 4.4M6.2 1.8L1.8 6.2" stroke="white" strokeWidth="1.3" strokeLinecap="round" />
-        </svg>
-      )}
-    </div>
-  );
 }
 
 function PhotoInner({
@@ -135,7 +113,7 @@ function PhotoInner({
         <div className="absolute left-0 top-0 bottom-0 w-[2px]" style={{ background: "var(--color-accent)" }} />
       )}
 
-      {verdict !== null && <VerdictBadge verdict={verdict} />}
+      <VerdictBadge verdict={verdict} />
 
       {stars > 0 && (
         <Badge

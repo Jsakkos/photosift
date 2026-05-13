@@ -64,6 +64,10 @@ export interface ShootSummary {
   /// Photo id chosen as the shoot's cover thumbnail; shows up on the
   /// shoot list. Null on shoots imported before this field existed.
   coverPhotoId?: number | null;
+  /// Modal camera body across the shoot's photos. Most-common non-null
+  /// `photos.camera` (alphabetical tie-break); null when no photo carries
+  /// a camera tag. Surfaced in the Library card metadata row.
+  cameraModel?: string | null;
 }
 
 export type CullView = "triage" | "select" | "route";

@@ -3,7 +3,7 @@ import { FixedSizeGrid as Grid, GridChildComponentProps } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
-import { Badge } from "./primitives";
+import { Badge, VerdictBadge, type Verdict } from "./primitives";
 
 const SIZES = [100, 160, 240] as const;
 const CELL_GAP = 8;
@@ -472,6 +472,8 @@ function GridThumb({
 }) {
   const image = item.image;
   const isRejected = image.flag === "reject";
+  const verdict: Verdict =
+    image.flag === "pick" ? "keep" : image.flag === "reject" ? "toss" : null;
 
   const ariaLabel = [
     image.filename,
@@ -485,23 +487,27 @@ function GridThumb({
     .filter(Boolean)
     .join(", ");
 
+  // Focus/selection styling lives on `outline` (no layout shift) instead
+  // of `border` (which used to push the image around when focus moved).
+  // Focused: 2px outline + 3px offset; range-selected: 1px outline + a
+  // subtle accent-blue wash so multi-select reads at a glance.
+  const outline = isFocused
+    ? "2px solid var(--color-accent-blue)"
+    : isSelected
+      ? "1px solid var(--color-accent-blue)"
+      : undefined;
+  const outlineOffset = isFocused ? 3 : isSelected ? 1 : undefined;
+
   return (
     <div
       role="button"
       tabIndex={isFocused ? 0 : -1}
       aria-label={ariaLabel}
       aria-pressed={isSelected}
-      className={`relative w-full h-full rounded-xs overflow-hidden cursor-pointer border-2 transition-all duration-base ${
-        isSelected
-          ? "border-[var(--color-accent-blue)] shadow-[0_0_0_1px_var(--color-accent-blue)]"
-          : isFocused
-            ? "border-[var(--color-accent-blue)]/60"
-            : currentView === "triage" && image.flag === "pick"
-              ? "border-[var(--color-success)]/70 shadow-[inset_0_0_12px_rgba(111,187,123,0.18)]"
-              : currentView === "triage" && image.flag === "reject"
-                ? "border-[var(--color-danger)]/60"
-                : "border-transparent hover:border-white/15"
+      className={`relative w-full h-full rounded-xs overflow-hidden cursor-pointer transition-[background,opacity] ${
+        isSelected ? "bg-accent-blue/[0.12]" : ""
       } ${isRejected ? "opacity-35" : ""}`}
+      style={{ outline, outlineOffset }}
       onClick={(e) => onClick(index, e)}
       onDoubleClick={onDoubleClick}
     >
@@ -513,6 +519,7 @@ function GridThumb({
         loading="lazy"
         draggable={false}
       />
+      <VerdictBadge verdict={verdict} />
       {/* Expanded-group affiliation bar — left-edge accent visible inside
           the rounded clip. Matches the Filmstrip treatment so switching
           views preserves the visual cue. */}
@@ -522,36 +529,38 @@ function GridThumb({
           aria-hidden="true"
         />
       )}
-      {/* Flag state is now shown via the card outline + subtle inner
-          glow above. Dots removed — the outline is subtle but clear
-          (per spec feedback) and avoids stealing from the face/AI
-          badges that share the tile corners. */}
-      {/* AI pick badge — suppressed in Select (every photo is already a
-          pick, so the ★ AI stamp is pure noise there). */}
-      {item.isAiPick && currentView !== "select" && <AiPickBadge />}
-      {/* Destination badge — same treatment as the Route grid (glass chip,
-          accent-2 for Capture One, accent for Export). Stacks below the AI
-          badge when both are present in the top-right corner. */}
-      {image.destination === "edit" && (
-        <Badge
-          tone="accent-2"
-          variant="glass"
-          className={`absolute right-1 ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1"} font-semibold pointer-events-none`}
-          title={"Route: Capture One\nReady to drag into Capture One (or DxO)."}
-          aria-label="Route: Capture One"
-        >
-          → C1
-        </Badge>
+      {/* Top-right stack: verdict → AI pick → destination. Verdict owns
+          top-1 (its 12px square clears the 4px corner). AI pick (suppressed
+          in Select since every photo there is already a pick) drops below
+          it when verdict is shown. Destination chip drops below whichever
+          predecessors are present. */}
+      {item.isAiPick && currentView !== "select" && (
+        <AiPickBadge
+          pos={undefined}
+          className={`absolute right-1 ${verdict !== null ? "top-6" : "top-1"}`}
+        />
       )}
-      {image.destination === "export" && (
+      {(image.destination === "edit" || image.destination === "export") && (
         <Badge
-          tone="accent"
+          tone={image.destination === "edit" ? "accent-2" : "accent"}
           variant="glass"
-          className={`absolute right-1 ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1"} font-semibold pointer-events-none`}
-          title={"Route: Export\nCached JPEG copied to Immich ingest folder by the Publish button."}
-          aria-label="Route: Export"
+          className={`absolute right-1 ${
+            verdict !== null && item.isAiPick && currentView !== "select"
+              ? "top-12"
+              : verdict !== null || (item.isAiPick && currentView !== "select")
+                ? "top-7"
+                : "top-1"
+          } font-semibold pointer-events-none`}
+          title={
+            image.destination === "edit"
+              ? "Route: Capture One\nReady to drag into Capture One (or DxO)."
+              : "Route: Export\nCached JPEG copied to Immich ingest folder by the Publish button."
+          }
+          aria-label={
+            image.destination === "edit" ? "Route: Capture One" : "Route: Export"
+          }
         >
-          → Exp
+          {image.destination === "edit" ? "→ C1" : "→ Exp"}
         </Badge>
       )}
       {/* Group stack indicator */}

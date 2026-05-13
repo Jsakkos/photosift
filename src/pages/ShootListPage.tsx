@@ -166,9 +166,16 @@ function ShootCard({
           </div>
         </div>
         <div
-          className="text-[11px] mb-2.5"
+          className="text-[11px] mb-2.5 truncate"
           style={{ color: "var(--color-fg-dim)" }}
+          title={shoot.cameraModel ?? undefined}
         >
+          {shoot.cameraModel ? (
+            <>
+              <span className="font-mono text-2xs">{shoot.cameraModel}</span>
+              <span aria-hidden="true"> Â· </span>
+            </>
+          ) : null}
           {shoot.photoCount} photos
         </div>
         <div className="flex gap-2.5 font-mono text-2xs">

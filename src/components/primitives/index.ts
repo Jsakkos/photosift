@@ -1,4 +1,5 @@
-export { Photo, type Verdict, type PhotoDestination } from "./Photo";
+export { Photo, type PhotoDestination } from "./Photo";
+export { VerdictBadge, type Verdict } from "./VerdictBadge";
 export { Stars, type StarCount } from "./Stars";
 export { Kbd } from "./Kbd";
 export { ScoreBar } from "./ScoreBar";
