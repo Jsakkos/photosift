@@ -41,7 +41,6 @@ export function ColorLabelRow({ value, onChange, size = 12, className }: ColorLa
           <button
             key={c}
             type="button"
-            tabIndex={-1}
             aria-label={`Color label ${c}`}
             aria-pressed={selected}
             onClick={() => onChange?.(selected ? null : c)}

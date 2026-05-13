@@ -157,7 +157,7 @@ export function DayRow({
                     }
                     lastClickedIdxRef.current = idx;
                   }}
-                  className="relative cursor-pointer overflow-hidden rounded-xs transition-opacity"
+                  className="relative cursor-pointer overflow-hidden rounded-xs transition-opacity duration-fast"
                   style={{
                     height: "80px",
                     aspectRatio: aspectFor(entry),

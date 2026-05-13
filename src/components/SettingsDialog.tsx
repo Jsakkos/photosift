@@ -442,7 +442,7 @@ export function SettingsDialog() {
             <button
               onClick={handleBrowseLibraryRoot}
               title="Pick a library root directory"
-              className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm"
+              className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors duration-fast text-sm"
             >
               Browse
             </button>
@@ -450,7 +450,7 @@ export function SettingsDialog() {
               <button
                 onClick={handleResetLibraryRoot}
                 title="Reset to system default"
-                className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors text-sm"
+                className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors duration-fast text-sm"
               >
                 Reset
               </button>
@@ -479,7 +479,7 @@ export function SettingsDialog() {
             <button
               onClick={handleBrowseImmichPath}
               title="Pick the Immich ingest directory"
-              className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm"
+              className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors duration-fast text-sm"
             >
               Browse
             </button>
@@ -487,7 +487,7 @@ export function SettingsDialog() {
               <button
                 onClick={handleResetImmichPath}
                 title="Clear (disables Publish Direct)"
-                className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors text-sm"
+                className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors duration-fast text-sm"
               >
                 Reset
               </button>
@@ -609,7 +609,7 @@ export function SettingsDialog() {
               <button
                 onClick={handleRecluster}
                 disabled={reclustering || !valid}
-                className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors duration-fast disabled:opacity-50"
               >
                 <BusyLabel busy={reclustering} busyText="Re-clustering…">Re-cluster</BusyLabel>
               </button>
@@ -673,7 +673,7 @@ export function SettingsDialog() {
                 <button
                   onClick={handleReanalyze}
                   disabled={reanalyzing}
-                  className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors duration-fast disabled:opacity-50"
                 >
                   <BusyLabel busy={reanalyzing} busyText="Queuing…">Re-analyze</BusyLabel>
                 </button>
@@ -706,7 +706,7 @@ export function SettingsDialog() {
               <button
                 key={p}
                 onClick={() => setCuratorProvider(p)}
-                className={`flex-1 px-3 py-1.5 rounded text-sm transition-colors ${
+                className={`flex-1 px-3 py-1.5 rounded text-sm transition-colors duration-base ${
                   curatorProvider === p
                     ? "bg-accent-blue text-white"
                     : "text-fg-dim hover:bg-white/5"
@@ -746,14 +746,14 @@ export function SettingsDialog() {
                     <button
                       onClick={handleTestConnection}
                       disabled={keyBusy}
-                      className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                      className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors duration-fast text-sm disabled:opacity-50"
                     >
                       <BusyLabel busy={keyBusy} busyText="Testing…">Test</BusyLabel>
                     </button>
                     <button
                       onClick={handleClearKey}
                       disabled={keyBusy}
-                      className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                      className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors duration-fast text-sm disabled:opacity-50"
                     >
                       Replace
                     </button>
@@ -762,7 +762,7 @@ export function SettingsDialog() {
                   <button
                     onClick={handleSaveKey}
                     disabled={keyBusy || !newKey.trim()}
-                    className="px-3 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white text-sm transition-colors disabled:opacity-50"
+                    className="px-3 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white text-sm transition-colors duration-fast disabled:opacity-50"
                   >
                     Save
                   </button>
@@ -813,14 +813,14 @@ export function SettingsDialog() {
                     <button
                       onClick={handleTestConnection}
                       disabled={keyBusy}
-                      className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                      className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors duration-fast text-sm disabled:opacity-50"
                     >
                       <BusyLabel busy={keyBusy} busyText="Testing…">Test</BusyLabel>
                     </button>
                     <button
                       onClick={handleClearKey}
                       disabled={keyBusy}
-                      className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                      className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors duration-fast text-sm disabled:opacity-50"
                     >
                       Replace
                     </button>
@@ -829,7 +829,7 @@ export function SettingsDialog() {
                   <button
                     onClick={handleSaveKey}
                     disabled={keyBusy || !newKey.trim()}
-                    className="px-3 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white text-sm transition-colors disabled:opacity-50"
+                    className="px-3 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white text-sm transition-colors duration-fast disabled:opacity-50"
                   >
                     Save
                   </button>
@@ -868,7 +868,7 @@ export function SettingsDialog() {
                 <button
                   onClick={handleTestConnection}
                   disabled={keyBusy || !modelLocal.trim() || !localBaseUrl.trim()}
-                  className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                  className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors duration-fast text-sm disabled:opacity-50"
                 >
                   <BusyLabel busy={keyBusy} busyText="Testing…">Test</BusyLabel>
                 </button>
@@ -949,14 +949,14 @@ export function SettingsDialog() {
                   <button
                     onClick={handleRunCurator}
                     disabled={curatorRunning || !activeKeyStatus?.configured || (curatorProvider === "local" && !modelLocal.trim())}
-                    className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors duration-fast disabled:opacity-50"
                   >
                     {curatorRunning ? "Starting…" : "Run"}
                   </button>
                   <button
                     onClick={handleRerunCurator}
                     disabled={curatorRunning || !activeKeyStatus?.configured || (curatorProvider === "local" && !modelLocal.trim())}
-                    className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg-dim hover:text-fg text-xs transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg-dim hover:text-fg text-xs transition-colors duration-fast disabled:opacity-50"
                     title="Discard existing judgments and re-run"
                   >
                     Re-run
@@ -983,14 +983,14 @@ export function SettingsDialog() {
         <div className="flex justify-end gap-2">
           <button
             onClick={closeDialog}
-            className="px-4 py-2 rounded-lg text-fg-dim hover:text-fg transition-colors"
+            className="px-4 py-2 rounded-lg text-fg-dim hover:text-fg transition-colors duration-fast"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={!valid}
-            className="px-4 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white font-medium transition-colors disabled:opacity-50"
+            className="px-4 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white font-medium transition-colors duration-fast disabled:opacity-50"
           >
             Save
           </button>

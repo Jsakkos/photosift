@@ -52,7 +52,7 @@ export function DriveSourceBar({
             key={drive.mountPoint}
             type="button"
             onClick={() => onSelectDrive(drive)}
-            className="relative flex flex-col justify-center text-left rounded-md px-3 py-2 cursor-pointer transition-colors"
+            className="relative flex flex-col justify-center text-left rounded-md px-3 py-2 cursor-pointer transition-colors duration-base"
             style={{
               minWidth: "200px",
               minHeight: "60px",
@@ -93,7 +93,7 @@ export function DriveSourceBar({
         <button
           type="button"
           onClick={handleBrowse}
-          className="relative flex flex-col justify-center text-left rounded-md px-3 py-2 cursor-pointer transition-colors"
+          className="relative flex flex-col justify-center text-left rounded-md px-3 py-2 cursor-pointer transition-colors duration-base"
           style={{
             minWidth: "200px",
             minHeight: "60px",

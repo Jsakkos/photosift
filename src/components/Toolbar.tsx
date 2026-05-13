@@ -14,7 +14,7 @@ export function Toolbar() {
   if (!currentShoot) return null;
 
   return (
-    <div className="flex flex-col">
+    <header aria-label="Shoot toolbar" className="flex flex-col">
       {/* Row 1: Shoot info + controls */}
       <div className="flex items-center justify-between px-4 py-2 bg-bg2 border-b border-white/5 text-sm">
         <div className="flex items-center gap-4">
@@ -22,7 +22,7 @@ export function Toolbar() {
             onClick={() => navigate("/shoots")}
             title="Back to shoots"
             aria-label="Back to shoot list"
-            className="text-fg-dim hover:text-fg transition-colors"
+            className="text-fg-dim hover:text-fg transition-colors duration-fast"
           >
             &larr; Shoots
           </button>
@@ -43,14 +43,14 @@ export function Toolbar() {
           <button
             onClick={toggleShortcutHints}
             title="Keyboard shortcuts (?)"
-            className="text-xs text-fg-dim/60 hover:text-fg transition-colors"
+            className="text-xs text-fg-dim/60 hover:text-fg transition-colors duration-fast"
           >
             Press ? for shortcuts
           </button>
           <button
             onClick={toggleAutoAdvance}
             title="Toggle auto-advance on pick/reject"
-            className={`px-2 py-1 rounded text-xs transition-colors ${
+            className={`px-2 py-1 rounded text-xs transition-colors duration-base ${
               autoAdvance
                 ? "bg-accent-blue text-white"
                 : "bg-bg3 text-fg-dim"
@@ -62,7 +62,7 @@ export function Toolbar() {
             onClick={openSettings}
             title="Settings (,)"
             aria-label="Settings"
-            className="w-7 h-7 flex items-center justify-center rounded bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors"
+            className="w-7 h-7 flex items-center justify-center rounded bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors duration-fast"
           >
             <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3"/>
@@ -75,6 +75,6 @@ export function Toolbar() {
       <ViewSelector />
       {/* Progress bar */}
       <ProgressBar />
-    </div>
+    </header>
   );
 }

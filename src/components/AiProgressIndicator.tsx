@@ -15,6 +15,11 @@ export function AiProgressIndicator() {
       role="status"
       aria-live="polite"
     >
+      {/* Pulse is decorative — the numeric readout and aria-live below carry
+          the state. Under prefers-reduced-motion the global rule in
+          globals.css freezes this to a static dot; that's fine because the
+          numeric `{analyzed+failed}/{total}` and the sr-only percent below
+          keep conveying progress. */}
       <span
         className="inline-block w-2.5 h-2.5 rounded-full bg-accent-blue animate-pulse"
         aria-hidden="true"

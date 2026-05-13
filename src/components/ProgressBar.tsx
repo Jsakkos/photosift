@@ -22,11 +22,11 @@ export function ProgressBar() {
   return (
     <div className="h-[3px] bg-bg3 flex">
       <div
-        className="bg-green-500 transition-all duration-300"
+        className="bg-green-500 transition-all duration-slow"
         style={{ width: `${pickPct}%` }}
       />
       <div
-        className="bg-red-500 transition-all duration-300"
+        className="bg-red-500 transition-all duration-slow"
         style={{ width: `${rejectPct}%` }}
       />
     </div>

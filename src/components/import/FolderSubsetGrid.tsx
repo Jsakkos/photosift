@@ -230,7 +230,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
                 <div
                   key={entry.path}
                   onClick={(e) => toggleOne(idx, e)}
-                  className={`relative aspect-[3/2] rounded-xs overflow-hidden cursor-pointer border-2 transition-all ${
+                  className={`relative aspect-[3/2] rounded-xs overflow-hidden cursor-pointer border-2 transition-all duration-base ${
                     isSelected ? "" : "opacity-40 hover:opacity-70"
                   }`}
                   style={{
