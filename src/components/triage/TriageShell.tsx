@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+﻿import { useMemo } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { LoupeView } from "../LoupeView";
 import { HeatmapOverlay } from "../HeatmapOverlay";
@@ -41,7 +41,7 @@ function TopBar() {
         style={{ color: "var(--color-fg)" }}
         title={image?.filepath ?? ""}
       >
-        {image?.filename ?? "—"}
+        {image?.filename ?? "â€”"}
       </span>
       <div className="flex-1" />
       <button
@@ -50,7 +50,7 @@ function TopBar() {
         onClick={toggleAllStrip}
         aria-pressed={showAllStrip}
         aria-label="Toggle filmstrip"
-        className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
+        className="inline-flex items-center gap-1.5 font-mono text-2xs uppercase tracking-[0.6px] px-1.5 py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
         style={{ color: showAllStrip ? "var(--color-fg-dim)" : "var(--color-fg-mute)" }}
       >
         <Kbd>T</Kbd>
@@ -62,7 +62,7 @@ function TopBar() {
         onClick={toggleFaces}
         aria-pressed={showFaces}
         aria-label="Toggle faces panel"
-        className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
+        className="inline-flex items-center gap-1.5 font-mono text-2xs uppercase tracking-[0.6px] px-1.5 py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
         style={{ color: showFaces ? "var(--color-fg-dim)" : "var(--color-fg-mute)" }}
       >
         <Kbd>F</Kbd>
@@ -74,7 +74,7 @@ function TopBar() {
         onClick={toggleHeatmap}
         aria-pressed={heatmapOn}
         aria-label="Toggle face/eye heatmap overlay"
-        className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
+        className="inline-flex items-center gap-1.5 font-mono text-2xs uppercase tracking-[0.6px] px-1.5 py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
         style={{ color: heatmapOn ? "var(--color-fg-dim)" : "var(--color-fg-mute)" }}
       >
         <Kbd>H</Kbd>
@@ -91,7 +91,7 @@ function TopBar() {
               ? "Showing only photos the AI suggests rejecting. Click to show all unreviewed."
               : "Filter to photos the AI suggests rejecting."
           }
-          className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
+          className="inline-flex items-center gap-1.5 font-mono text-2xs uppercase tracking-[0.6px] px-1.5 py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
           style={{
             color: triageOnlyAiRejects
               ? "var(--color-danger)"
@@ -102,7 +102,7 @@ function TopBar() {
         </button>
       )}
       <span
-        className="font-mono text-[10px] tabular-nums pl-3 ml-1 border-l"
+        className="font-mono text-2xs tabular-nums pl-3 ml-1 border-l"
         style={{ color: "var(--color-fg-dim)", borderColor: "var(--color-border)" }}
       >
         {total === 0 ? "0 / 0" : `${index + 1} / ${total}`}
@@ -127,10 +127,10 @@ function BottomBar() {
   }, [images]);
 
   const ShortcutChip = ({ kbd, label }: { kbd: string; label: string }) => (
-    <span className="inline-flex items-center gap-[6px]">
+    <span className="inline-flex items-center gap-1.5">
       <Kbd>{kbd}</Kbd>
       <span
-        className="font-mono text-[10px] uppercase tracking-[0.6px]"
+        className="font-mono text-2xs uppercase tracking-[0.6px]"
         style={{ color: "var(--color-fg-dim)" }}
       >
         {label}
@@ -146,21 +146,21 @@ function BottomBar() {
       <ShortcutChip kbd="P" label="keep" />
       <ShortcutChip kbd="X" label="toss" />
       <ShortcutChip kbd="Space" label="skip" />
-      <ShortcutChip kbd="⇧ P" label="keep group" />
+      <ShortcutChip kbd="â‡§ P" label="keep group" />
       <ShortcutChip kbd="Z" label="undo" />
       <ShortcutChip kbd="Tab" label="2-up" />
       <div className="flex-1" />
-      <span className="font-mono text-[10px] tabular-nums" style={{ color: "var(--color-success)" }}>
-        ✓ {counts.kept}
+      <span className="font-mono text-2xs tabular-nums" style={{ color: "var(--color-success)" }}>
+        âœ“ {counts.kept}
       </span>
-      <span className="font-mono text-[10px] tabular-nums" style={{ color: "var(--color-danger)" }}>
-        ✕ {counts.tossed}
+      <span className="font-mono text-2xs tabular-nums" style={{ color: "var(--color-danger)" }}>
+        âœ• {counts.tossed}
       </span>
       <span
-        className="font-mono text-[10px] tabular-nums"
+        className="font-mono text-2xs tabular-nums"
         style={{ color: "var(--color-fg-dim)" }}
       >
-        · {counts.remaining} left
+        Â· {counts.remaining} left
       </span>
     </div>
   );
@@ -169,7 +169,7 @@ function BottomBar() {
 function VerdictHint({ side, label, kbd, tone }: { side: "left" | "right"; label: string; kbd: string; tone: string }) {
   return (
     <div
-      className="pointer-events-none absolute top-1/2 -translate-y-1/2 flex items-center gap-[10px]"
+      className="pointer-events-none absolute top-1/2 -translate-y-1/2 flex items-center gap-2.5"
       style={{
         [side]: 16,
         padding: "10px 14px",
@@ -181,7 +181,7 @@ function VerdictHint({ side, label, kbd, tone }: { side: "left" | "right"; label
       } as React.CSSProperties}
     >
       <Kbd>{kbd}</Kbd>
-      <span className="font-mono text-[10px] uppercase tracking-[1px]">{label}</span>
+      <span className="font-mono text-2xs uppercase tracking-[1px]">{label}</span>
     </div>
   );
 }

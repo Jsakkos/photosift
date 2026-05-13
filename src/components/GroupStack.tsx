@@ -1,4 +1,4 @@
-import { thumbUrl } from "../hooks/useImageLoader";
+﻿import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
 
 interface GroupStackProps {
@@ -11,7 +11,7 @@ interface GroupStackProps {
   isAiPick?: boolean;
   /// Cover image dimensions; shadow layers render behind at the same
   /// size with small offsets. Defaults match the previous hard-coded
-  /// 84×60 if the caller doesn't override.
+  /// 84Ã—60 if the caller doesn't override.
   coverW?: number;
   coverH?: number;
 }
@@ -70,7 +70,7 @@ export function GroupStack({
       </div>
       {/* Count badge */}
       <div
-        className="absolute -top-1 -right-1 bg-accent-blue text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full z-10 min-w-[20px] text-center"
+        className="absolute -top-1 -right-1 bg-accent-blue text-white text-2xs font-semibold px-1.5 py-0.5 rounded-full z-10 min-w-[20px] text-center"
         title={`${count} photos in this group`}
         aria-hidden="true"
       >

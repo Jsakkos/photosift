@@ -1,4 +1,4 @@
-import { FaceThumb } from "./FaceThumb";
+﻿import { FaceThumb } from "./FaceThumb";
 import { verdictFor, verdictMeta } from "../lib/faceVerdict";
 import type { Face } from "../types";
 
@@ -19,7 +19,7 @@ function EyeMark({
     <span className="inline-flex items-center gap-[3px]">
       <span style={{ color: "var(--color-fg-mute)" }}>{label}</span>
       <span style={{ color: open ? "var(--color-success)" : "var(--color-danger)" }}>
-        {open ? "●" : "○"}
+        {open ? "â—" : "â—‹"}
       </span>
       <span style={{ opacity: 0.7 }}>{formatted}</span>
     </span>
@@ -51,9 +51,9 @@ export function FaceChip({
   return (
     <div className="flex flex-col gap-[5px]">
       <FaceThumb face={face} photoId={photoId} sizePx={sizePx} />
-      <div className="flex items-center gap-[6px] font-mono text-[9px] leading-tight flex-wrap">
+      <div className="flex items-center gap-1.5 font-mono text-3xs leading-tight flex-wrap">
         <span
-          className="inline-flex items-center gap-[3px] px-[5px] py-[2px] rounded-xs"
+          className="inline-flex items-center gap-[3px] px-[5px] py-0.5 rounded-xs"
           style={{
             color: meta.tone,
             background: "rgba(255,255,255,0.04)",
@@ -66,13 +66,13 @@ export function FaceChip({
         <span style={{ color: "var(--color-fg-dim)" }}>{conf}%</span>
         {isCat && (
           <span style={{ color: "var(--color-fg-mute)" }} aria-label="cat">
-            🐾
+            ðŸ¾
           </span>
         )}
       </div>
       {showEyes && (
         <div
-          className="flex items-center gap-[10px] font-mono text-[9px] leading-tight"
+          className="flex items-center gap-2.5 font-mono text-3xs leading-tight"
           style={{ color: "var(--color-fg-dim)" }}
         >
           <EyeMark
@@ -89,7 +89,7 @@ export function FaceChip({
       )}
       {showSmile && smile !== null && (
         <div
-          className="font-mono text-[9px] leading-tight"
+          className="font-mono text-3xs leading-tight"
           style={{ color: "var(--color-fg-dim)" }}
         >
           smile {smile}%

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+﻿import { useRef } from "react";
 import type { FolderTemplate } from "../stores/settingsStore";
 import { DEFAULT_FOLDER_TEMPLATE } from "../stores/settingsStore";
 import {
@@ -68,7 +68,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
       </div>
       <p className="text-xs text-fg-dim mb-3">
         Where shoots are created and what the cull buckets are named. The path
-        template applies to new imports only — existing shoots stay where they
+        template applies to new imports only â€” existing shoots stay where they
         are. Renaming a bucket relocates that bucket's files on the next layout
         sync (the old, now-empty folder is left behind).
       </p>
@@ -121,7 +121,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
               }`}
             />
             {v.bucketErrors[key] && (
-              <p className="text-[10px] text-red-400 mt-0.5">
+              <p className="text-2xs text-red-400 mt-0.5">
                 {v.bucketErrors[key]}
               </p>
             )}
@@ -131,7 +131,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
 
       {/* Live preview */}
       <div className="mt-4 p-3 rounded-lg bg-bg border border-white/5">
-        <div className="text-[10px] uppercase tracking-wide text-fg-dim mb-2">
+        <div className="text-2xs uppercase tracking-wide text-fg-dim mb-2">
           Preview (sample shoot)
         </div>
         <div className="font-mono text-[11px] leading-relaxed text-fg-dim space-y-0.5">

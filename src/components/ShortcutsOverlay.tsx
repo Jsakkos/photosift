@@ -1,4 +1,4 @@
-import { useRef } from "react";
+﻿import { useRef } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useModalA11y } from "../hooks/useModalA11y";
@@ -13,8 +13,8 @@ const SECTIONS: Section[] = [
   {
     heading: "Navigation",
     rows: [
-      { keys: ["←", "→"], label: "Previous / next photo" },
-      { keys: ["↑", "↓"], label: "Previous / next group" },
+      { keys: ["â†", "â†’"], label: "Previous / next photo" },
+      { keys: ["â†‘", "â†“"], label: "Previous / next group" },
       { keys: ["Home"], label: "Jump to first" },
       { keys: ["End"], label: "Jump to last" },
       { keys: ["Space"], label: "Advance to next unreviewed" },
@@ -36,7 +36,7 @@ const SECTIONS: Section[] = [
   {
     heading: "Select",
     rows: [
-      { keys: ["1"], label: "Rate ★1 (through 5)" },
+      { keys: ["1"], label: "Rate â˜…1 (through 5)" },
       { keys: ["0"], label: "Clear rating" },
       { keys: ["["], label: "Lower pass floor" },
       { keys: ["]"], label: "Raise pass floor" },
@@ -50,7 +50,7 @@ const SECTIONS: Section[] = [
   {
     heading: "Comparison (Tab)",
     rows: [
-      { keys: ["←", "→"], label: "Cycle opposite member" },
+      { keys: ["â†", "â†’"], label: "Cycle opposite member" },
       { keys: ["1"], label: "Pick left" },
       { keys: ["2"], label: "Pick right" },
       { keys: ["Z"], label: "Toggle zoom" },
@@ -83,7 +83,7 @@ export function ShortcutsOverlay() {
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const openWizardTour = useSettingsStore((s) => s.openWizardTour);
 
-  // "Replay tour" — re-arm the per-view first-run modals (#13) and
+  // "Replay tour" â€” re-arm the per-view first-run modals (#13) and
   // close this overlay so the user lands back on the cull view.
   const replayTour = () => {
     void updateSettings({
@@ -94,7 +94,7 @@ export function ShortcutsOverlay() {
     toggle();
   };
 
-  // "Take the tour" — re-open the onboarding wizard at its three-pass step.
+  // "Take the tour" â€” re-open the onboarding wizard at its three-pass step.
   const takeTheTour = () => {
     openWizardTour();
     toggle();
@@ -132,12 +132,12 @@ export function ShortcutsOverlay() {
         >
           <div>
             <div
-              className="text-[9px] uppercase tracking-[1.4px]"
+              className="text-3xs uppercase tracking-[1.4px]"
               style={{ color: "var(--color-fg-dim)" }}
             >
               Keyboard
             </div>
-            <div className="text-[16px] font-semibold mt-[1px]">
+            <div className="text-base font-semibold mt-[1px]">
               Shortcuts
             </div>
           </div>
@@ -167,7 +167,7 @@ export function ShortcutsOverlay() {
               style={{ color: "var(--color-fg-dim)" }}
               aria-label="Close shortcuts"
             >
-              Close · <Kbd>Esc</Kbd>
+              Close Â· <Kbd>Esc</Kbd>
             </button>
           </div>
         </div>
@@ -179,16 +179,16 @@ export function ShortcutsOverlay() {
           {SECTIONS.map((section) => (
             <div key={section.heading}>
               <div
-                className="text-[9px] uppercase tracking-[1.2px] mb-2"
+                className="text-3xs uppercase tracking-[1.2px] mb-2"
                 style={{ color: "var(--color-fg-dim)" }}
               >
                 {section.heading}
               </div>
-              <div className="flex flex-col gap-[6px]">
+              <div className="flex flex-col gap-1.5">
                 {section.rows.map((row, i) => (
                   <div
                     key={i}
-                    className="flex items-center justify-between gap-3 text-[12px]"
+                    className="flex items-center justify-between gap-3 text-xs"
                   >
                     <span style={{ color: "var(--color-fg)" }}>
                       {row.label}

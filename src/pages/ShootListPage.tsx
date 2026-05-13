@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { useShootListStore } from "../stores/shootListStore";
@@ -40,7 +40,7 @@ function ShootCard({
   const pickPct = (picks / total) * 100;
   const rejectPct = (rejects / total) * 100;
   // Three-state status. "Triage done" (unreviewed === 0) is necessary
-  // but not sufficient for "routed" — every pick also needs a
+  // but not sufficient for "routed" â€” every pick also needs a
   // destination. Shoots with zero picks skip straight to a neutral
   // state since there's nothing to route.
   type Status = "in_progress" | "triaged" | "routed";
@@ -79,7 +79,7 @@ function ShootCard({
           />
         ) : (
           <div
-            className="w-full h-full flex items-center justify-center font-mono text-[10px] uppercase tracking-[0.8px]"
+            className="w-full h-full flex items-center justify-center font-mono text-2xs uppercase tracking-[0.8px]"
             style={{
               background: "var(--color-bg3)",
               color: "var(--color-fg-mute)",
@@ -89,9 +89,9 @@ function ShootCard({
           </div>
         )}
         {progress && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-[10px] bg-black/50">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-black/50">
             <div className="font-mono text-[11px]" style={{ color: "var(--color-fg)" }}>
-              importing · {progress.imported} / {progress.total}
+              importing Â· {progress.imported} / {progress.total}
             </div>
             <div
               className="w-[140px] h-[3px] rounded-sm overflow-hidden"
@@ -109,7 +109,7 @@ function ShootCard({
         )}
         {status !== "in_progress" && !progress && (
           <div
-            className="absolute top-2 right-2 font-mono text-[9px] uppercase tracking-[1px] px-[6px] py-[2px] rounded-xs"
+            className="absolute top-2 right-2 font-mono text-3xs uppercase tracking-[1px] px-1.5 py-0.5 rounded-xs"
             style={{
               color:
                 status === "routed"
@@ -118,7 +118,7 @@ function ShootCard({
               background: "rgba(0,0,0,0.55)",
             }}
           >
-            {status === "routed" ? "✓ routed" : "triaged"}
+            {status === "routed" ? "âœ“ routed" : "triaged"}
           </div>
         )}
         <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -133,7 +133,7 @@ function ShootCard({
               color: "var(--color-fg-dim)",
             }}
           >
-            ＋
+            ï¼‹
           </button>
           <button
             type="button"
@@ -146,41 +146,41 @@ function ShootCard({
               color: "var(--color-fg-dim)",
             }}
           >
-            ×
+            Ã—
           </button>
         </div>
       </div>
-      <div className="px-[14px] py-3">
+      <div className="px-3.5 py-3">
         <div className="flex items-baseline justify-between mb-1 gap-3">
           <div
-            className="text-[14px] font-semibold truncate"
+            className="text-sm font-semibold truncate"
             style={{ color: "var(--color-fg)" }}
           >
             {shoot.slug}
           </div>
           <div
-            className="font-mono text-[10px] shrink-0"
+            className="font-mono text-2xs shrink-0"
             style={{ color: "var(--color-fg-dim)" }}
           >
             {shoot.date}
           </div>
         </div>
         <div
-          className="text-[11px] mb-[10px]"
+          className="text-[11px] mb-2.5"
           style={{ color: "var(--color-fg-dim)" }}
         >
           {shoot.photoCount} photos
         </div>
-        <div className="flex gap-[10px] font-mono text-[10px]">
-          <span style={{ color: "var(--color-success)" }}>● {picks} kept</span>
-          <span style={{ color: "var(--color-danger)" }}>● {rejects} tossed</span>
+        <div className="flex gap-2.5 font-mono text-2xs">
+          <span style={{ color: "var(--color-success)" }}>â— {picks} kept</span>
+          <span style={{ color: "var(--color-danger)" }}>â— {rejects} tossed</span>
           <span style={{ color: "var(--color-warning)" }}>
-            ★ {unreviewed} left
+            â˜… {unreviewed} left
           </span>
         </div>
         {!progress && (
           <div
-            className="mt-[10px] h-[2px] rounded-[1px] overflow-hidden flex"
+            className="mt-2.5 h-[2px] rounded-[1px] overflow-hidden flex"
             style={{ background: "var(--color-bg3)" }}
           >
             <div
@@ -298,13 +298,13 @@ export function ShootListPage() {
       style={{ background: "var(--color-bg)", color: "var(--color-fg)" }}
     >
       <div className="flex items-center justify-between px-8 pt-6 pb-5">
-        <div className="flex items-center gap-[14px]">
+        <div className="flex items-center gap-3.5">
           <div style={{ color: "var(--color-accent)" }}>
             <LogoB size={28} />
           </div>
           <div>
             <div
-              className="text-[10px] uppercase tracking-[1.4px]"
+              className="text-2xs uppercase tracking-[1.4px]"
               style={{ color: "var(--color-fg-dim)" }}
             >
               Library
@@ -313,16 +313,16 @@ export function ShootListPage() {
               className="text-[22px] font-semibold leading-tight"
               style={{ color: "var(--color-fg)", letterSpacing: -0.4 }}
             >
-              {shoots.length} shoot{shoots.length === 1 ? "" : "s"} · {totalPhotos} photos
+              {shoots.length} shoot{shoots.length === 1 ? "" : "s"} Â· {totalPhotos} photos
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-[10px]">
+        <div className="flex items-center gap-2.5">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search shoots…"
-            className="px-[10px] py-[6px] rounded-md text-[12px] font-mono w-[220px]"
+            placeholder="Search shootsâ€¦"
+            className="px-2.5 py-1.5 rounded-md text-xs font-mono w-[220px]"
             style={{
               background: "var(--color-bg2)",
               border: "1px solid var(--color-border)",
@@ -334,26 +334,26 @@ export function ShootListPage() {
             onClick={openSettings}
             title="Settings (,)"
             aria-label="Settings"
-            className="px-[12px] py-[6px] rounded-md text-[12px] cursor-pointer"
+            className="px-3 py-1.5 rounded-md text-xs cursor-pointer"
             style={{
               background: "transparent",
               border: "1px solid var(--color-border)",
               color: "var(--color-fg-dim)",
             }}
           >
-            ⚙ Settings
+            âš™ Settings
           </button>
           <button
             type="button"
             onClick={() => setShowImport(true)}
-            className="px-[14px] py-[6px] rounded-md text-[12px] font-medium cursor-pointer"
+            className="px-3.5 py-1.5 rounded-md text-xs font-medium cursor-pointer"
             style={{
               background: "var(--color-accent-blue)",
               color: "#fff",
               border: "none",
             }}
           >
-            ＋ Import
+            ï¼‹ Import
           </button>
         </div>
       </div>
@@ -361,17 +361,17 @@ export function ShootListPage() {
       <div className="flex-1 overflow-auto px-8 pb-8">
         {isLoading && shoots.length === 0 && (
           <p
-            className="text-center mt-16 text-[12px]"
+            className="text-center mt-16 text-xs"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            Loading shoots…
+            Loading shootsâ€¦
           </p>
         )}
 
         {!isLoading && loadError && shoots.length === 0 && (
           <div className="flex flex-col items-center justify-center mt-24 gap-3">
             <p className="text-[13px] font-medium" style={{ color: "var(--color-danger)" }}>
-              Couldn’t load your shoots.
+              Couldnâ€™t load your shoots.
             </p>
             <p
               className="font-mono text-[11px] max-w-[480px] text-center break-words"
@@ -382,7 +382,7 @@ export function ShootListPage() {
             <button
               type="button"
               onClick={() => void refresh()}
-              className="mt-1 px-5 py-[8px] rounded-md text-[13px] font-medium cursor-pointer"
+              className="mt-1 px-5 py-2 rounded-md text-[13px] font-medium cursor-pointer"
               style={{ background: "var(--color-accent-blue)", color: "#fff", border: "none" }}
             >
               Retry
@@ -404,7 +404,7 @@ export function ShootListPage() {
             <button
               type="button"
               onClick={() => setShowImport(true)}
-              className="px-5 py-[8px] rounded-md text-[13px] font-medium cursor-pointer"
+              className="px-5 py-2 rounded-md text-[13px] font-medium cursor-pointer"
               style={{
                 background: "var(--color-accent-blue)",
                 color: "#fff",
@@ -439,10 +439,10 @@ export function ShootListPage() {
 
         {!isLoading && shoots.length > 0 && filtered.length === 0 && (
           <p
-            className="text-center mt-12 text-[12px]"
+            className="text-center mt-12 text-xs"
             style={{ color: "var(--color-fg-mute)" }}
           >
-            No shoots match “{query}”.
+            No shoots match â€œ{query}â€.
           </p>
         )}
       </div>

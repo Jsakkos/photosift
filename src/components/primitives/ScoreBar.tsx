@@ -1,4 +1,4 @@
-type ScoreTone = "accent" | "accent-2" | "success" | "warning" | "danger";
+﻿type ScoreTone = "accent" | "accent-2" | "success" | "warning" | "danger";
 
 const toneToColor: Record<ScoreTone, string> = {
   accent: "var(--color-accent)",
@@ -20,7 +20,7 @@ export function ScoreBar({ label, value, max = 100, tone = "accent-2", className
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   return (
     <div
-      className={`flex items-center gap-2 font-mono text-[10px] ${className ?? ""}`.trim()}
+      className={`flex items-center gap-2 font-mono text-2xs ${className ?? ""}`.trim()}
     >
       <span className="w-12 uppercase tracking-[0.5px] text-fg-dim">{label}</span>
       <div className="flex-1 h-[3px] rounded-[1px] overflow-hidden bg-[rgba(255,255,255,0.08)]">

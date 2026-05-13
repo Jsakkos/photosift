@@ -1,4 +1,4 @@
-import { open } from "@tauri-apps/plugin-dialog";
+﻿import { open } from "@tauri-apps/plugin-dialog";
 import type { DriveInfo } from "../../types";
 
 interface DriveSourceBarProps {
@@ -36,7 +36,7 @@ export function DriveSourceBar({
     <div className="flex items-stretch gap-2 flex-wrap">
       {drives.length === 0 && !selectedFolderPath && (
         <div
-          className="flex items-center px-[10px] text-[11px] italic"
+          className="flex items-center px-2.5 text-[11px] italic"
           style={{ color: "var(--color-fg-mute)", minHeight: "60px" }}
         >
           Plug in an SD card to import from a card, or browse a folder.
@@ -82,7 +82,7 @@ export function DriveSourceBar({
               style={{ color: "var(--color-fg-dim)" }}
             >
               {letter}{"  "}
-              {formatBytes(drive.totalBytes)}{" · "}
+              {formatBytes(drive.totalBytes)}{" Â· "}
               {formatBytes(drive.availableBytes)} free
             </div>
           </button>
@@ -112,21 +112,21 @@ export function DriveSourceBar({
             className="text-[11px] font-mono truncate"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            Folder · click to change
+            Folder Â· click to change
           </div>
         </button>
       ) : (
         <button
           type="button"
           onClick={handleBrowse}
-          className="self-center px-[12px] py-[6px] rounded-md text-[12px] cursor-pointer"
+          className="self-center px-3 py-1.5 rounded-md text-xs cursor-pointer"
           style={{
             background: "transparent",
             border: "1px solid var(--color-border)",
             color: "var(--color-fg-dim)",
           }}
         >
-          Browse folder…
+          Browse folderâ€¦
         </button>
       )}
     </div>

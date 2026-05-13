@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+﻿import { useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore, isRouteEligible, selectMaxFloor } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -17,14 +17,14 @@ function HeatmapHost() {
 
 const PASS_TIERS: { floor: number; label: string }[] = [
   { floor: 0, label: "all" },
-  { floor: 1, label: "★≥1" },
-  { floor: 2, label: "★≥2" },
-  { floor: 3, label: "★≥3" },
-  { floor: 4, label: "★≥4" },
-  { floor: 5, label: "★≥5" },
+  { floor: 1, label: "â˜…â‰¥1" },
+  { floor: 2, label: "â˜…â‰¥2" },
+  { floor: 3, label: "â˜…â‰¥3" },
+  { floor: 4, label: "â˜…â‰¥4" },
+  { floor: 5, label: "â˜…â‰¥5" },
 ];
 
-// Tiers at or above routeMinStar belong to the Route view, not Select — a pick
+// Tiers at or above routeMinStar belong to the Route view, not Select â€” a pick
 // graded that high graduates out, so those pills would always read 0 and clicking
 // one would dead-end. Keep only the reachable floors.
 function reachableTiers(routeMinStarGate: number): { floor: number; label: string }[] {
@@ -39,8 +39,8 @@ function PassPills() {
   const selectRequiresPick = useSettingsStore((s) => s.settings.selectRequiresPick ?? false);
   const routeMinStarGate = useSettingsStore((s) => s.settings.routeMinStar ?? 0);
 
-  // Pill counts must agree with what's actually shown in displayItems —
-  // exclude routed-eligible picks (#16) so the user doesn't see "★≥3 5"
+  // Pill counts must agree with what's actually shown in displayItems â€”
+  // exclude routed-eligible picks (#16) so the user doesn't see "â˜…â‰¥3 5"
   // and then find an empty Select pool because all five are already
   // routed-ready.
   const counts = useMemo(() => {
@@ -59,7 +59,7 @@ function PassPills() {
 
   return (
     <div
-      className="inline-flex items-center gap-[1px] rounded-md p-[2px]"
+      className="inline-flex items-center gap-[1px] rounded-md p-0.5"
       style={{ background: "var(--color-bg3)" }}
     >
       {reachableTiers(routeMinStarGate).map((tier) => {
@@ -71,7 +71,7 @@ function PassPills() {
             tabIndex={-1}
             aria-pressed={active}
             onClick={() => setSelectMinStar(tier.floor)}
-            className="px-[8px] py-[3px] rounded-xs font-mono text-[10px] tabular-nums flex items-center gap-[6px] bg-transparent border-0 cursor-pointer"
+            className="px-2 py-[3px] rounded-xs font-mono text-2xs tabular-nums flex items-center gap-1.5 bg-transparent border-0 cursor-pointer"
             style={{
               color: active ? "var(--color-on-accent)" : "var(--color-fg-dim)",
               background: active ? "var(--color-accent)" : "transparent",
@@ -93,10 +93,10 @@ function VisitedProgress() {
   if (total === 0) return null;
   return (
     <span
-      className="font-mono text-[10px] tabular-nums"
+      className="font-mono text-2xs tabular-nums"
       style={{ color: "var(--color-fg-mute)" }}
     >
-      · visited {visited}/{total}
+      Â· visited {visited}/{total}
     </span>
   );
 }
@@ -122,7 +122,7 @@ function TopBar() {
         style={{ color: "var(--color-fg)" }}
         title={image?.filepath ?? ""}
       >
-        {image?.filename ?? "—"}
+        {image?.filename ?? "â€”"}
       </span>
       <div className="flex-1" />
       <PassPills />
@@ -132,17 +132,17 @@ function TopBar() {
         onClick={toggleHeatmap}
         aria-pressed={heatmapOn}
         aria-label="Toggle face/eye heatmap overlay"
-        className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
+        className="inline-flex items-center gap-1.5 font-mono text-2xs uppercase tracking-[0.6px] px-1.5 py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
         style={{ color: heatmapOn ? "var(--color-fg-dim)" : "var(--color-fg-mute)" }}
       >
         <Kbd>H</Kbd>
         <span>heat</span>
       </button>
       <span
-        className="font-mono text-[10px] tabular-nums pl-3 ml-1 border-l"
+        className="font-mono text-2xs tabular-nums pl-3 ml-1 border-l"
         style={{ color: "var(--color-fg-dim)", borderColor: "var(--color-border)" }}
       >
-        Pass {passNumber} · {total === 0 ? "0 / 0" : `${index + 1} / ${total}`}
+        Pass {passNumber} Â· {total === 0 ? "0 / 0" : `${index + 1} / ${total}`}
       </span>
       <VisitedProgress />
     </div>
@@ -165,7 +165,7 @@ function RatingCard({
       type="button"
       tabIndex={-1}
       onClick={onClick}
-      className="flex items-center gap-[8px] px-[10px] py-[8px] rounded-md border bg-transparent cursor-pointer"
+      className="flex items-center gap-2 px-2.5 py-2 rounded-md border bg-transparent cursor-pointer"
       style={{
         background: active ? "rgba(212,165,116,0.12)" : "rgba(21,21,21,0.72)",
         borderColor: active ? "var(--color-accent)" : "var(--color-border)",
@@ -177,7 +177,7 @@ function RatingCard({
     >
       <Kbd>{clearCard ? "0" : String(value)}</Kbd>
       {clearCard ? (
-        <span className="font-mono text-[10px] uppercase tracking-[0.6px]">clear</span>
+        <span className="font-mono text-2xs uppercase tracking-[0.6px]">clear</span>
       ) : (
         <Stars value={value as 1 | 2 | 3 | 4 | 5} size={11} />
       )}
@@ -203,11 +203,11 @@ function RatingColumn() {
 
   return (
     <div
-      className="pointer-events-auto absolute top-1/2 -translate-y-1/2 left-6 flex flex-col gap-[8px]"
+      className="pointer-events-auto absolute top-1/2 -translate-y-1/2 left-6 flex flex-col gap-2"
       aria-label="Rating keys"
     >
       <div
-        className="mb-[2px] px-[10px] py-[6px] rounded-md flex items-center gap-2"
+        className="mb-0.5 px-2.5 py-1.5 rounded-md flex items-center gap-2"
         style={{
           background: "rgba(21,21,21,0.72)",
           border: "1px solid var(--color-border)",
@@ -216,7 +216,7 @@ function RatingColumn() {
       >
         <Stars value={rating as 0 | 1 | 2 | 3 | 4 | 5} size={14} />
         <span
-          className="font-mono text-[9px] uppercase tracking-[0.6px]"
+          className="font-mono text-3xs uppercase tracking-[0.6px]"
           style={{ color: "var(--color-fg-mute)" }}
         >
           current
@@ -233,11 +233,11 @@ function RatingColumn() {
 function ImmersiveHints() {
   return (
     <div
-      className="pointer-events-none absolute top-1/2 -translate-y-1/2 right-6 flex flex-col gap-[10px] items-end"
+      className="pointer-events-none absolute top-1/2 -translate-y-1/2 right-6 flex flex-col gap-2.5 items-end"
       aria-label="Select-mode hints"
     >
       <div
-        className="flex items-center gap-[8px] px-[12px] py-[8px] rounded-md"
+        className="flex items-center gap-2 px-3 py-2 rounded-md"
         style={{
           background: "rgba(21,21,21,0.72)",
           border: "1px solid var(--color-accent-2)",
@@ -246,10 +246,10 @@ function ImmersiveHints() {
         }}
       >
         <Kbd>Space</Kbd>
-        <span className="font-mono text-[10px] uppercase tracking-[1px]">pick</span>
+        <span className="font-mono text-2xs uppercase tracking-[1px]">pick</span>
       </div>
       <div
-        className="flex items-center gap-[8px] px-[10px] py-[6px] rounded-md"
+        className="flex items-center gap-2 px-2.5 py-1.5 rounded-md"
         style={{
           background: "rgba(21,21,21,0.72)",
           border: "1px solid var(--color-border)",
@@ -257,11 +257,11 @@ function ImmersiveHints() {
           color: "var(--color-fg-dim)",
         }}
       >
-        <Kbd>→</Kbd>
-        <span className="font-mono text-[10px] uppercase tracking-[0.6px]">skip</span>
+        <Kbd>â†’</Kbd>
+        <span className="font-mono text-2xs uppercase tracking-[0.6px]">skip</span>
       </div>
       <div
-        className="flex items-center gap-[6px] px-[10px] py-[6px] rounded-md"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md"
         style={{
           background: "rgba(21,21,21,0.72)",
           border: "1px solid var(--color-border)",
@@ -270,7 +270,7 @@ function ImmersiveHints() {
         }}
       >
         <Kbd>T</Kbd>
-        <span className="font-mono text-[10px] uppercase tracking-[0.6px]">filmstrip</span>
+        <span className="font-mono text-2xs uppercase tracking-[0.6px]">filmstrip</span>
       </div>
     </div>
   );
@@ -288,8 +288,8 @@ function BottomBar() {
       ]
     : [
         { kbd: "Space", label: "pick" },
-        { kbd: "→", label: "skip" },
-        { kbd: "1–5", label: "rate" },
+        { kbd: "â†’", label: "skip" },
+        { kbd: "1â€“5", label: "rate" },
         { kbd: "Tab", label: "2-up" },
         { kbd: "[", label: "narrow" },
         { kbd: "]", label: "widen" },
@@ -301,10 +301,10 @@ function BottomBar() {
       style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
     >
       {items.map((s) => (
-        <span key={s.label} className="inline-flex items-center gap-[6px]">
+        <span key={s.label} className="inline-flex items-center gap-1.5">
           <Kbd>{s.kbd}</Kbd>
           <span
-            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            className="font-mono text-2xs uppercase tracking-[0.6px]"
             style={{ color: "var(--color-fg-dim)" }}
           >
             {s.label}
@@ -318,7 +318,7 @@ function BottomBar() {
 /// Stamp `photos.select_visited_at` the first time each photo is the
 /// focused frame in Select. Rust-side `WHERE select_visited_at IS NULL`
 /// makes repeats a no-op, so the effect fires freely without needing
-/// local dedup. The visit bit gates the Select→Route layout-sync trigger.
+/// local dedup. The visit bit gates the Selectâ†’Route layout-sync trigger.
 function SelectVisitTracker() {
   const currentPhotoId = useProjectStore(
     (s) => s.displayItems[s.currentIndex]?.image.id ?? null,
@@ -338,7 +338,7 @@ function SelectVisitTracker() {
   return null;
 }
 
-/// Auto-enter 2-up when the cursor lands on a group cover with ≥2
+/// Auto-enter 2-up when the cursor lands on a group cover with â‰¥2
 /// reviewable members, unless the user has manually toggled 2-up off
 /// for that specific group (via Tab).
 function BracketAutoEnter() {

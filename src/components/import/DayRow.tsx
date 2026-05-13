@@ -1,4 +1,4 @@
-import { useRef } from "react";
+﻿import { useRef } from "react";
 import type { ScanDateEntry } from "../../types";
 
 interface DayRowProps {
@@ -40,13 +40,13 @@ function timeRange(entries: ScanDateEntry[]): string | null {
   const lo = formatHM(new Date(stamps[0]).toISOString().replace("T", " "));
   const hi = formatHM(new Date(stamps[stamps.length - 1]).toISOString().replace("T", " "));
   if (!lo || !hi || lo === hi) return lo;
-  return `${lo}–${hi}`;
+  return `${lo}â€“${hi}`;
 }
 
 function aspectFor(entry: ScanDateEntry): string {
   const portraitOrientations = new Set([5, 6, 7, 8]);
   // Without explicit orientation we default to 3/2 landscape (D750 native).
-  // The UI tolerates the 50/50 mix gracefully — strips wrap.
+  // The UI tolerates the 50/50 mix gracefully â€” strips wrap.
   const isPortrait = portraitOrientations.has(entry.orientation ?? 0);
   return isPortrait ? "2 / 3" : "3 / 2";
 }
@@ -86,13 +86,13 @@ export function DayRow({
       >
         <div className="flex items-baseline gap-2">
           <span
-            className="text-[12px]"
+            className="text-xs"
             style={{ color: "var(--color-fg-dim)", width: "1ch" }}
           >
-            {expanded ? "▼" : "▶"}
+            {expanded ? "â–¼" : "â–¶"}
           </span>
           <span
-            className="text-[14px] font-semibold"
+            className="text-sm font-semibold"
             style={{ color: "var(--color-fg)" }}
           >
             {dayLabel}
@@ -106,10 +106,10 @@ export function DayRow({
             {visibleEntries.length}{" "}
             {visibleEntries.length === 1 ? "photo" : "photos"}
           </span>
-          {range && <span>·  {range}</span>}
+          {range && <span>Â·  {range}</span>}
           {hiddenImportedCount > 0 && (
             <span style={{ color: "var(--color-fg-mute)" }}>
-              · {hiddenImportedCount} already imported
+              Â· {hiddenImportedCount} already imported
             </span>
           )}
         </div>
@@ -127,7 +127,7 @@ export function DayRow({
               className="flex items-baseline gap-1 cursor-pointer"
               style={{ color: "var(--color-fg)" }}
             >
-              <span>{allSelected ? "☑" : "☐"}</span>
+              <span>{allSelected ? "â˜‘" : "â˜"}</span>
               <span>All</span>
             </button>
             <span>
@@ -135,7 +135,7 @@ export function DayRow({
             </span>
             {thumbsLoading && (
               <span style={{ color: "var(--color-fg-mute)" }}>
-                · loading thumbnails {thumbsLoaded} / {visibleEntries.length}
+                Â· loading thumbnails {thumbsLoaded} / {visibleEntries.length}
               </span>
             )}
           </div>
@@ -168,7 +168,7 @@ export function DayRow({
                     outlineOffset: isSelected ? "-2px" : "-1px",
                     opacity: isSelected ? 1 : 0.65,
                   }}
-                  title={`${entry.filename}${entry.capturedAt ? ` · ${entry.capturedAt}` : ""}`}
+                  title={`${entry.filename}${entry.capturedAt ? ` Â· ${entry.capturedAt}` : ""}`}
                 >
                   {thumb ? (
                     <img
@@ -180,7 +180,7 @@ export function DayRow({
                     />
                   ) : (
                     <div
-                      className="w-full h-full flex items-center justify-center text-[9px] font-mono px-1 text-center break-all"
+                      className="w-full h-full flex items-center justify-center text-3xs font-mono px-1 text-center break-all"
                       style={{ color: "var(--color-fg-mute)" }}
                     >
                       {entry.filename}
@@ -188,7 +188,7 @@ export function DayRow({
                   )}
                   {entry.siblingJpegPath && (
                     <span
-                      className="absolute bottom-0.5 right-0.5 rounded-xs px-1 py-0.5 text-[9px] font-mono font-medium leading-none"
+                      className="absolute bottom-0.5 right-0.5 rounded-xs px-1 py-0.5 text-3xs font-mono font-medium leading-none"
                       style={{
                         background: "rgba(0, 0, 0, 0.7)",
                         color: "rgba(255, 255, 255, 0.95)",
