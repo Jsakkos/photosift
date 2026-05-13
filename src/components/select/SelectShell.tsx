@@ -122,6 +122,8 @@ function TopBar() {
         type="button"
         tabIndex={-1}
         onClick={toggleHeatmap}
+        aria-pressed={heatmapOn}
+        aria-label="Toggle face/eye heatmap overlay"
         className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
         style={{ color: heatmapOn ? "var(--color-fg-dim)" : "var(--color-fg-mute)" }}
       >

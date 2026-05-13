@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useProjectStore } from "../stores/projectStore";
+import { useModalA11y } from "../hooks/useModalA11y";
 import {
   clearCuratorForShoot,
   estimateCuratorCostCents,
@@ -133,6 +134,11 @@ export function ImportDialog({
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const initialDriveAppliedRef = useRef(false);
+
+  // Escape / focus-trap / focus-restore for the dialog. Disabled while an
+  // import is running — closing mid-run has its own Cancel control.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(dialogRef, onClose, !importing);
 
   // Honor an external request (e.g. from the drive-detected toast) to
   // pre-select a specific drive once on mount. After that, the user is
@@ -373,6 +379,10 @@ export function ImportDialog({
       className="fixed inset-0 bg-black/55 flex items-center justify-center z-50"
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="import-dialog-title"
         className={`rounded-md max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col p-5 ${dialogWidthClass}`}
         style={{
           background: "var(--color-bg2)",
@@ -381,6 +391,7 @@ export function ImportDialog({
         }}
       >
         <div
+          id="import-dialog-title"
           className="text-[14px] font-semibold mb-4"
           style={{ color: "var(--color-fg)" }}
         >

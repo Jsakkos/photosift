@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useModalA11y } from "../hooks/useModalA11y";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { FolderTemplate } from "../stores/settingsStore";
@@ -175,6 +176,9 @@ export function SettingsDialog() {
   }, []);
 
   const handleResetImmichPath = useCallback(() => setImmichPath(null), []);
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(dialogRef, closeDialog, isOpen);
 
   if (!isOpen) return null;
 
@@ -383,8 +387,14 @@ export function SettingsDialog() {
       data-testid="settings-dialog"
       className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
     >
-      <div className="bg-bg2 rounded-xl border border-white/10 p-6 w-[640px] max-w-[90vw] max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl font-medium text-fg mb-4">Settings</h2>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
+        className="bg-bg2 rounded-xl border border-white/10 p-6 w-[640px] max-w-[90vw] max-h-[90vh] overflow-y-auto"
+      >
+        <h2 id="settings-dialog-title" className="text-xl font-medium text-fg mb-4">Settings</h2>
 
         <div className="mb-4">
           <label className="block text-sm text-fg-dim mb-1">

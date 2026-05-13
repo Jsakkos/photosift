@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useRef } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useModalA11y } from "../hooks/useModalA11y";
 import { Kbd } from "./primitives";
 
 // Source of truth for key bindings lives in src/hooks/useKeyboardNav.ts.
@@ -99,21 +100,10 @@ export function ShortcutsOverlay() {
     toggle();
   };
 
-  // Esc closes the overlay even when focus lives on the main shell.
-  // The main keydown handler in useKeyboardNav already forwards `?`, so
-  // we only need a local Esc listener while open.
-  useEffect(() => {
-    if (!show) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        toggle();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [show, toggle]);
+  // Esc closes the overlay (plus focus-trap / focus-restore) even when
+  // focus lives on the main shell.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(dialogRef, toggle, show);
 
   if (!show) return null;
 
@@ -127,6 +117,7 @@ export function ShortcutsOverlay() {
       aria-label="Keyboard shortcuts"
     >
       <div
+        ref={dialogRef}
         className="max-w-[880px] max-h-[85vh] overflow-auto rounded-md"
         style={{
           background: "var(--color-bg2)",

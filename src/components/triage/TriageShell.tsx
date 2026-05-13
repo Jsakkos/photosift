@@ -48,6 +48,8 @@ function TopBar() {
         type="button"
         tabIndex={-1}
         onClick={toggleAllStrip}
+        aria-pressed={showAllStrip}
+        aria-label="Toggle filmstrip"
         className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
         style={{ color: showAllStrip ? "var(--color-fg-dim)" : "var(--color-fg-mute)" }}
       >
@@ -58,6 +60,8 @@ function TopBar() {
         type="button"
         tabIndex={-1}
         onClick={toggleFaces}
+        aria-pressed={showFaces}
+        aria-label="Toggle faces panel"
         className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
         style={{ color: showFaces ? "var(--color-fg-dim)" : "var(--color-fg-mute)" }}
       >
@@ -68,6 +72,8 @@ function TopBar() {
         type="button"
         tabIndex={-1}
         onClick={toggleHeatmap}
+        aria-pressed={heatmapOn}
+        aria-label="Toggle face/eye heatmap overlay"
         className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
         style={{ color: heatmapOn ? "var(--color-fg-dim)" : "var(--color-fg-mute)" }}
       >
@@ -79,6 +85,7 @@ function TopBar() {
           type="button"
           tabIndex={-1}
           onClick={toggleTriageAiRejectsFilter}
+          aria-pressed={triageOnlyAiRejects}
           title={
             triageOnlyAiRejects
               ? "Showing only photos the AI suggests rejecting. Click to show all unreviewed."
