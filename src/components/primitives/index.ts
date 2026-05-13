@@ -4,6 +4,13 @@ export { Kbd } from "./Kbd";
 export { ScoreBar } from "./ScoreBar";
 export { ExifChip } from "./ExifChip";
 export {
+  Badge,
+  IconBadge,
+  type BadgeTone,
+  type BadgeVariant,
+  type BadgePos,
+} from "./Badge";
+export {
   ColorLabelChip,
   ColorLabelRow,
   COLOR_LABEL_ORDER,

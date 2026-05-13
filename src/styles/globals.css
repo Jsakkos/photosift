@@ -19,6 +19,13 @@
   --color-accent: #d4a574;
   --color-accent-2: #7fb8d9;
   --color-accent-blue: #4a82d9;
+  /* Near-black text for filled-accent/warning surfaces (the warm tan & yellow
+     tones are too light for white text). */
+  --color-on-accent: #1a1a1a;
+
+  /* Photo-stage backdrop — deliberately darker than --color-bg so a centered
+     photo reads as the figure against it. */
+  --color-stage: #0c0c0c;
 
   /* Semantic */
   --color-success: #6fbb7b;

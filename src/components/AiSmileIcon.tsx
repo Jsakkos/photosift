@@ -9,6 +9,8 @@
 /// face regardless of actual expression.
 ///
 /// Sized and unpositioned for FaceTile's bottom badge row.
+import { IconBadge } from "./primitives";
+
 export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
   const state: "smile" | "neutral" | "frown" =
     smileScore == null
@@ -19,12 +21,7 @@ export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
           ? "frown"
           : "neutral";
 
-  const tint =
-    state === "smile"
-      ? "bg-green-500/90 text-white"
-      : state === "frown"
-        ? "bg-red-500/90 text-white"
-        : "bg-yellow-500/90 text-white";
+  const tone = state === "smile" ? "success" : state === "frown" ? "danger" : "warning";
 
   const label =
     smileScore == null
@@ -35,18 +32,17 @@ export function AiSmileIcon({ smileScore }: { smileScore: number | null }) {
       ? "On-device AI · Smile unknown — mouth classifier couldn't score this face."
       : `On-device AI · ${label}\nHappy-class probability from the mouth classifier.\nGreen ≥60% · Yellow 40-60% · Red ≤40%.\nMultiplies into the on-device AI pick score at half weight.`;
 
-  const opacity = smileScore == null ? "opacity-60" : "";
-
   return (
-    <div
-      className={`${tint} ${opacity} rounded w-6 h-6 flex items-center justify-center pointer-events-auto shadow-sm`}
+    <IconBadge
+      tone={tone}
+      className={`pointer-events-auto${smileScore == null ? " opacity-60" : ""}`}
       aria-label={label}
       title={title}
     >
       {state === "smile" && <SmileIcon />}
       {state === "neutral" && <NeutralIcon />}
       {state === "frown" && <FrownIcon />}
-    </div>
+    </IconBadge>
   );
 }
 

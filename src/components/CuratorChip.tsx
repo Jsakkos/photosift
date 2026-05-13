@@ -43,14 +43,14 @@ export function CuratorChip() {
     switch (judgment.suggestedFlag) {
       case "pick":
         return {
-          accent: "var(--color-success, #22c55e)",
-          bar: "rgba(34, 197, 94, 0.55)",
+          accent: "var(--color-success)",
+          bar: "color-mix(in srgb, var(--color-success) 55%, transparent)",
           label: "keep",
         };
       case "reject":
         return {
-          accent: "var(--color-danger, #ef4444)",
-          bar: "rgba(239, 68, 68, 0.55)",
+          accent: "var(--color-danger)",
+          bar: "color-mix(in srgb, var(--color-danger) 55%, transparent)",
           label: "toss",
         };
       case "keep":

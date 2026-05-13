@@ -108,7 +108,7 @@ export function FaceThumb({
 
   return (
     <div
-      className="relative overflow-hidden rounded bg-black/40 flex-shrink-0"
+      className="relative overflow-hidden rounded-xs bg-black/40 flex-shrink-0"
       style={{ width: sizePx, height: sizePx }}
     >
       <img

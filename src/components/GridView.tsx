@@ -3,6 +3,7 @@ import { FixedSizeGrid as Grid, GridChildComponentProps } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
+import { Badge } from "./primitives";
 
 const SIZES = [100, 160, 240] as const;
 const CELL_GAP = 8;
@@ -528,34 +529,42 @@ function GridThumb({
       {/* AI pick badge — suppressed in Select (every photo is already a
           pick, so the ★ AI stamp is pure noise there). */}
       {item.isAiPick && currentView !== "select" && <AiPickBadge />}
-      {/* Destination badge */}
+      {/* Destination badge — same treatment as the Route grid (glass chip,
+          accent-2 for Capture One, accent for Export). Stacks below the AI
+          badge when both are present in the top-right corner. */}
       {image.destination === "edit" && (
-        <div
-          className={`absolute ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}
+        <Badge
+          tone="accent-2"
+          variant="glass"
+          className={`absolute right-1 ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1"} font-semibold pointer-events-none`}
           title={"Route: Capture One\nReady to drag into Capture One (or DxO)."}
           aria-label="Route: Capture One"
         >
-          C1
-        </div>
+          → C1
+        </Badge>
       )}
       {image.destination === "export" && (
-        <div
-          className={`absolute ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}
+        <Badge
+          tone="accent"
+          variant="glass"
+          className={`absolute right-1 ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1"} font-semibold pointer-events-none`}
           title={"Route: Export\nCached JPEG copied to Immich ingest folder by the Publish button."}
           aria-label="Route: Export"
         >
-          EXP
-        </div>
+          → Exp
+        </Badge>
       )}
       {/* Group stack indicator */}
       {item.isGroupCover && item.groupMemberCount && (
-        <div
-          className="absolute bottom-1.5 right-1.5 bg-black/70 text-blue-300 text-[10px] font-semibold px-1.5 py-0.5 rounded backdrop-blur-sm"
+        <Badge
+          tone="neutral"
+          variant="glass"
+          className="absolute bottom-1 right-1 font-semibold pointer-events-none"
           title={`Group cover · ${item.groupMemberCount} photos total\n${item.groupMemberCount - 1} similar photos hidden.\nDouble-click or press Enter to drill in.`}
           aria-label={`Group cover, ${item.groupMemberCount} photos total`}
         >
           +{item.groupMemberCount - 1}
-        </div>
+        </Badge>
       )}
       {/* Filename on hover */}
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent pt-4 pb-1 px-1.5 opacity-0 hover:opacity-100 transition-opacity">

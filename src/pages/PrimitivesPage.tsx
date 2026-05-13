@@ -1,4 +1,6 @@
 import {
+  Badge,
+  IconBadge,
   ColorLabelChip,
   ColorLabelRow,
   ExifChip,
@@ -156,6 +158,38 @@ export function PrimitivesPage() {
           </Row>
           <Row label="Partial">
             <ExifChip shutter="1/250" fstop={4.0} iso={200} />
+          </Row>
+        </Section>
+
+        <Section title="Badge">
+          <Row label="solid">
+            {(["success", "danger", "warning", "accent", "accent-2", "star", "neutral"] as const).map((t) => (
+              <Badge key={t} tone={t}>{t}</Badge>
+            ))}
+          </Row>
+          <Row label="soft">
+            {(["success", "danger", "warning", "accent", "accent-2"] as const).map((t) => (
+              <Badge key={t} tone={t} variant="soft">{t}</Badge>
+            ))}
+          </Row>
+          <Row label="glass · sm">
+            <div className="flex items-center gap-3 px-3 py-2 rounded-xs" style={{ background: "var(--color-stage)" }}>
+              <Badge tone="star" variant="glass" size="sm">★★★</Badge>
+              <Badge tone="accent-2" variant="glass" size="sm">→ C1</Badge>
+              <Badge tone="accent" variant="glass" size="sm">→ Exp</Badge>
+              <Badge tone="neutral" variant="glass" size="sm">+4</Badge>
+            </div>
+          </Row>
+          <Row label="surface">
+            <Badge variant="surface" size="xs">A</Badge>
+            <Badge variant="surface" size="sm">override</Badge>
+          </Row>
+          <Row label="IconBadge">
+            <IconBadge tone="success">✓</IconBadge>
+            <IconBadge tone="danger">✕</IconBadge>
+            <IconBadge tone="warning">◑</IconBadge>
+            <IconBadge tone="success" size="sm">·</IconBadge>
+            <IconBadge variant="surface">🐾</IconBadge>
           </Row>
         </Section>
 
