@@ -174,7 +174,7 @@ function ShootCard({
           {shoot.cameraModel ? (
             <>
               <span className="font-mono text-2xs">{shoot.cameraModel}</span>
-              <span aria-hidden="true"> Â· </span>
+              <span aria-hidden="true"> · </span>
             </>
           ) : null}
           {shoot.photoCount} photos

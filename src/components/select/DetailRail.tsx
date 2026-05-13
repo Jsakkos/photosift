@@ -11,7 +11,7 @@ const RAIL_WIDTH = 330;
 const FACE_SIZE = 120;
 
 function noteFor(_image: ImageEntry, faces: Face[] | null, rating: number): string {
-  if (rating >= 4) return `Top-tier pick (${"â˜…".repeat(rating)}).`;
+  if (rating >= 4) return `Top-tier pick (${"★".repeat(rating)}).`;
   if (!faces || faces.length === 0) return "Frame-level pick; no faces analyzed.";
   const blinks = faces.filter((f) => verdictFor(f) === "blink").length;
   if (blinks > 0) return `${blinks} blink${blinks === 1 ? "" : "s"} in this frame.`;
@@ -91,7 +91,7 @@ export function DetailRail() {
             className="font-mono text-3xs uppercase tracking-[0.5px]"
             style={{ color: "var(--color-fg-mute)" }}
           >
-            {rating > 0 ? `${rating}â˜… rated` : "unrated"}
+            {rating > 0 ? `${rating}★ rated` : "unrated"}
           </span>
         </div>
         <div className="mt-1.5">
@@ -102,7 +102,7 @@ export function DetailRail() {
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
         {disabled && (
           <div className="text-[11px] py-6 text-center" style={{ color: "var(--color-fg-mute)" }}>
-            On-device AI disabled â€” enable it in Settings.
+            On-device AI disabled — enable it in Settings.
           </div>
         )}
         {!disabled && !analyzedAt && (

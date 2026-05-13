@@ -29,7 +29,7 @@ export function StarGroupedStrip() {
 
   // Source from displayItems and bucket by star rating so the order
   // within each star tier matches the store's navigation order. Photos
-  // filtered out by the current pass level won't appear â€” they're not
+  // filtered out by the current pass level won't appear — they're not
   // in displayItems.
   const sections = useMemo<Section[]>(() => {
     const buckets: Record<0 | 1 | 2 | 3 | 4 | 5, ImageEntry[]> = {
@@ -45,11 +45,11 @@ export function StarGroupedStrip() {
       buckets[r].push(d.image);
     }
     return [
-      { rating: 5, label: "â˜…â˜…â˜…â˜…â˜…", items: buckets[5] },
-      { rating: 4, label: "â˜…â˜…â˜…â˜…", items: buckets[4] },
-      { rating: 3, label: "â˜…â˜…â˜…", items: buckets[3] },
-      { rating: 2, label: "â˜…â˜…", items: buckets[2] },
-      { rating: 1, label: "â˜…", items: buckets[1] },
+      { rating: 5, label: "★★★★★", items: buckets[5] },
+      { rating: 4, label: "★★★★", items: buckets[4] },
+      { rating: 3, label: "★★★", items: buckets[3] },
+      { rating: 2, label: "★★", items: buckets[2] },
+      { rating: 1, label: "★", items: buckets[1] },
       { rating: 0, label: "Unrated", items: buckets[0] },
     ];
   }, [displayItems]);
@@ -101,7 +101,7 @@ export function StarGroupedStrip() {
                   className="font-mono text-3xs uppercase tracking-[0.6px]"
                   style={{ color: "var(--color-fg-mute)" }}
                 >
-                  noâ˜…
+                  no★
                 </span>
               )}
               <span

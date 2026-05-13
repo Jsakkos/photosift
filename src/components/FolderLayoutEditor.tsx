@@ -68,7 +68,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
       </div>
       <p className="text-xs text-fg-dim mb-3">
         Where shoots are created and what the cull buckets are named. The path
-        template applies to new imports only â€” existing shoots stay where they
+        template applies to new imports only — existing shoots stay where they
         are. Renaming a bucket relocates that bucket's files on the next layout
         sync (the old, now-empty folder is left behind).
       </p>

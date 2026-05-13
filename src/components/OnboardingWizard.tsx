@@ -51,7 +51,7 @@ export function OnboardingWizard({
   const handleSkip = () => {
     if (!replay && settings.libraryRoot == null) {
       const ok = window.confirm(
-        "PhotoSift needs a library folder before you can import photos.\n\nSkip the setup anyway? You can finish it later from the â€œ?â€ shortcuts overlay â†’ Take the tour.",
+        "PhotoSift needs a library folder before you can import photos.\n\nSkip the setup anyway? You can finish it later from the “?” shortcuts overlay → Take the tour.",
       );
       if (!ok) return;
     }
@@ -206,7 +206,7 @@ function LibraryStep() {
     <div>
       <SectionHint>
         Pick where copied photos live. New imports land under this root using the
-        template below â€” leave the defaults if youâ€™re not sure.
+        template below — leave the defaults if you’re not sure.
       </SectionHint>
       <div className="flex items-center gap-3 mb-5">
         <div
@@ -230,7 +230,7 @@ function LibraryStep() {
             border: "1px solid var(--color-border)",
           }}
         >
-          Choose folderâ€¦
+          Choose folder…
         </button>
         {settings.libraryRoot && (
           <button
@@ -333,8 +333,8 @@ function CuratorStep() {
     <div>
       <SectionHint>
         The Curator is an optional cloud LLM that characterises a shoot and
-        ranks each cluster on composition + aesthetics. Skip this if youâ€™d
-        rather cull on your own â€” PhotoSift works fully without it.
+        ranks each cluster on composition + aesthetics. Skip this if you’d
+        rather cull on your own — PhotoSift works fully without it.
       </SectionHint>
       <div className="flex gap-2 mb-5">
         {PROVIDERS.map((p) => (
@@ -361,7 +361,7 @@ function CuratorStep() {
               {PROVIDERS.find((p) => p.id === provider)!.label} API key
               {keyStatus?.configured && (
                 <span className="ml-2 font-mono text-2xs" style={{ color: "var(--color-success)" }}>
-                  configured â€¢â€¢â€¢â€¢{keyStatus.suffix}
+                  configured ••••{keyStatus.suffix}
                 </span>
               )}
             </div>
@@ -370,7 +370,7 @@ function CuratorStep() {
                 type="password"
                 value={keyInput}
                 onChange={(e) => setKeyInput(e.target.value)}
-                placeholder={keyStatus?.configured ? "Replace keyâ€¦" : "Paste your API key"}
+                placeholder={keyStatus?.configured ? "Replace key…" : "Paste your API key"}
                 className="flex-1 px-2.5 py-1.5 rounded-md text-xs font-mono"
                 style={{
                   background: "var(--color-bg3)",
@@ -411,7 +411,7 @@ function CuratorStep() {
         <div className="space-y-3">
           <div>
             <div className="text-[11px] mb-[5px]" style={{ color: "var(--color-fg-dim)" }}>
-              OpenAI-compatible base URL (Ollama, LM Studio, vLLMâ€¦)
+              OpenAI-compatible base URL (Ollama, LM Studio, vLLM…)
             </div>
             <input
               type="text"
@@ -469,7 +469,7 @@ function AiStep({
     <div>
       <SectionHint>
         On-device AI runs face / eye-state / sharpness detection on each photo
-        at import â€” no data leaves your machine. Itâ€™s fast on a CUDA GPU and
+        at import — no data leaves your machine. It’s fast on a CUDA GPU and
         still usable on CPU, just slower.
       </SectionHint>
       <label className="flex items-start gap-3 cursor-pointer mb-4">
@@ -494,11 +494,11 @@ function AiStep({
           style={{ background: "var(--color-bg)", border: "1px solid var(--color-border)", color: "var(--color-fg-dim)" }}
         >
           {provider === "cuda" && (
-            <span style={{ color: "var(--color-success)" }}>GPU (CUDA) detected â€” analysis will be fast.</span>
+            <span style={{ color: "var(--color-success)" }}>GPU (CUDA) detected — analysis will be fast.</span>
           )}
           {provider === "cpu" && (
             <>
-              CUDA isnâ€™t available, so analysis runs on CPU (a few seconds per
+              CUDA isn’t available, so analysis runs on CPU (a few seconds per
               photo).{" "}
               <a href={CUDA_DOC_URL} target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--color-fg)" }}>
                 CUDA runtime setup
@@ -508,7 +508,7 @@ function AiStep({
           )}
           {provider === "disabled" && (
             <span style={{ color: "var(--color-warning)" }}>
-              The AI models couldnâ€™t be loaded â€” on-device scoring will be skipped until thatâ€™s resolved.
+              The AI models couldn’t be loaded — on-device scoring will be skipped until that’s resolved.
             </span>
           )}
         </div>
@@ -520,7 +520,7 @@ function AiStep({
 const PASSES: { eyebrow: string; title: string; blurb: string; keys: [string, string][] }[] = [
   {
     eyebrow: "Pass 1",
-    title: "Triage â€” keep or toss",
+    title: "Triage — keep or toss",
     blurb: "Fast first cut: a quick yes/no on every frame.",
     keys: [
       ["P", "pick"],
@@ -530,7 +530,7 @@ const PASSES: { eyebrow: string; title: string; blurb: string; keys: [string, st
   },
   {
     eyebrow: "Pass 2",
-    title: "Select â€” best of the burst",
+    title: "Select — best of the burst",
     blurb: "Compare near-duplicates and crown the keeper of each cluster.",
     keys: [
       ["P", "pick (auto-rejects the rest of the group)"],
@@ -539,7 +539,7 @@ const PASSES: { eyebrow: string; title: string; blurb: string; keys: [string, st
   },
   {
     eyebrow: "Pass 3",
-    title: "Route â€” where it goes",
+    title: "Route — where it goes",
     blurb: "Send picks to Capture One or to a publish-direct export.",
     keys: [
       ["Click", "select photos, choose a destination from the Route menu"],
@@ -552,9 +552,9 @@ function TourStep() {
   return (
     <div className="space-y-4">
       <SectionHint>
-        Culling is three quick passes. Each is just a view preset â€” a filter
+        Culling is three quick passes. Each is just a view preset — a filter
         plus the keys that matter there. You can re-open this tour any time from
-        the â€œ?â€ shortcuts overlay.
+        the “?” shortcuts overlay.
       </SectionHint>
       {PASSES.map((p) => (
         <div
