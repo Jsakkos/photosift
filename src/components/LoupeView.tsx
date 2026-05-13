@@ -136,7 +136,7 @@ export function LoupeView() {
         ref={imgRef}
         src={displayUrl}
         alt={currentImage.filename}
-        className="w-full h-full object-contain transition-transform duration-100"
+        className="w-full h-full object-contain transition-transform duration-fast"
         style={imgStyle}
         draggable={false}
         onLoad={handleImgLoad}

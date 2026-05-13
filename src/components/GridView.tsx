@@ -491,7 +491,7 @@ function GridThumb({
       tabIndex={isFocused ? 0 : -1}
       aria-label={ariaLabel}
       aria-pressed={isSelected}
-      className={`relative w-full h-full rounded-xs overflow-hidden cursor-pointer border-2 transition-all ${
+      className={`relative w-full h-full rounded-xs overflow-hidden cursor-pointer border-2 transition-all duration-base ${
         isSelected
           ? "border-[var(--color-accent-blue)] shadow-[0_0_0_1px_var(--color-accent-blue)]"
           : isFocused
@@ -567,7 +567,7 @@ function GridThumb({
         </Badge>
       )}
       {/* Filename on hover */}
-      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent pt-4 pb-1 px-1.5 opacity-0 hover:opacity-100 transition-opacity">
+      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent pt-4 pb-1 px-1.5 opacity-0 hover:opacity-100 transition-opacity duration-fast">
         <span className="text-2xs text-white/80 truncate block">
           {image.filename}
         </span>

@@ -265,21 +265,23 @@ export function CullPage() {
       style={{ background: "var(--color-bg)" }}
     >
       <Toolbar />
-      {viewMode === "grid" ? (
-        displayCount === 0 ? (
+      <main id="cull-main" aria-label="Cull" className="flex-1 min-h-0 flex flex-col">
+        {viewMode === "grid" ? (
+          displayCount === 0 ? (
+            <EmptyViewState view={currentView} />
+          ) : (
+            <GridView />
+          )
+        ) : displayCount === 0 ? (
           <EmptyViewState view={currentView} />
+        ) : currentView === "triage" ? (
+          <TriageShell />
+        ) : currentView === "select" ? (
+          <SelectShell />
         ) : (
-          <GridView />
-        )
-      ) : displayCount === 0 ? (
-        <EmptyViewState view={currentView} />
-      ) : currentView === "triage" ? (
-        <TriageShell />
-      ) : currentView === "select" ? (
-        <SelectShell />
-      ) : (
-        <RouteShell />
-      )}
+          <RouteShell />
+        )}
+      </main>
       <ShortcutsOverlay />
       <FirstRunModal view={currentView} />
     </div>

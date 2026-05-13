@@ -98,7 +98,7 @@ function ShootCard({
               style={{ background: "rgba(255,255,255,0.1)" }}
             >
               <div
-                className="h-full transition-all"
+                className="h-full transition-all duration-slow"
                 style={{
                   width: `${Math.min(100, (progress.imported / Math.max(1, progress.total)) * 100)}%`,
                   background: "var(--color-accent-blue)",
@@ -121,7 +121,7 @@ function ShootCard({
             {status === "routed" ? "✓ routed" : "triaged"}
           </div>
         )}
-        <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-fast">
           <button
             type="button"
             onClick={onAddPhotos}
@@ -358,7 +358,7 @@ export function ShootListPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto px-8 pb-8">
+      <main aria-label="Library" className="flex-1 overflow-auto px-8 pb-8">
         {isLoading && shoots.length === 0 && (
           <p
             className="text-center mt-16 text-xs"
@@ -445,7 +445,7 @@ export function ShootListPage() {
             No shoots match “{query}”.
           </p>
         )}
-      </div>
+      </main>
 
       {showImport && (
         <ImportDialog

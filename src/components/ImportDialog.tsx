@@ -136,7 +136,12 @@ export function ImportDialog({
   const initialDriveAppliedRef = useRef(false);
 
   // Escape / focus-trap / focus-restore for the dialog. Disabled while an
-  // import is running — closing mid-run has its own Cancel control.
+  // import is running: mid-import cancellation has its own "Cancel import"
+  // control wired to the Tauri-side `cancel_import` command (which drains
+  // in-flight files cleanly). Letting Escape close the dialog while a
+  // worker is still chewing through copies would orphan the import — the
+  // user would lose the cancel UI but the backend would keep writing. The
+  // hook stays disabled until `importing` flips back to false.
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalA11y(dialogRef, onClose, !importing);
 
@@ -664,7 +669,7 @@ export function ImportDialog({
               style={{ background: "var(--color-bg3)" }}
             >
               <div
-                className="h-full transition-all"
+                className="h-full transition-all duration-slow"
                 style={{
                   width:
                     progress && progress.total > 0

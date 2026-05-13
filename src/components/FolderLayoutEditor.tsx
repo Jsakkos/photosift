@@ -94,7 +94,8 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
             type="button"
             onClick={() => insertToken(tok)}
             title={`Insert ${tok}`}
-            className="px-2 py-1 rounded bg-bg3 hover:bg-white/10 text-fg-dim hover:text-fg text-xs font-mono transition-colors"
+            aria-label={`Insert ${tok}`}
+            className="px-2 py-1 rounded bg-bg3 hover:bg-white/10 text-fg-dim hover:text-fg text-xs font-mono transition-colors duration-fast"
           >
             {tok}
           </button>

@@ -68,6 +68,21 @@
   --radius-xs: 2px;
   --radius-sm: 3px;
   --radius-md: 4px;
+
+  /* Motion durations — Tailwind v4 picks these up as `duration-fast` /
+     `duration-base` / `duration-slow` utilities. Choose by intent:
+       - fast (100ms): hover/active feedback that should feel immediate —
+         tab underline, button text-color hover, icon tint.
+       - base (150ms): state changes the user is watching land — pressed
+         toggle, selection ring, color-label confirmation. Matches the
+         Tailwind built-in default; use this when you'd otherwise reach
+         for a bare `transition-*` utility.
+       - slow (300ms): intentional reveals that need to be perceived as
+         a *change* rather than a snap — progress bar fills, layout
+         growth, the FlagFlash 0→1 keyframe. */
+  --duration-fast: 100ms;
+  --duration-base: 150ms;
+  --duration-slow: 300ms;
 }
 
 body {
@@ -92,10 +107,27 @@ body {
 
 button:focus-visible,
 [role="button"]:focus-visible,
+[role="tab"]:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--color-accent-blue);
   outline-offset: 2px;
+}
+
+/* Reduced-motion: silence everything not flagged as essential. Elements that
+   convey ongoing state via motion (Spinner, the AI progress pulse) opt back
+   in by tagging themselves with `.motion-essential` — see Spinner.tsx and
+   AiProgressIndicator.tsx. Per WCAG 2.3.3 (Animation from Interactions),
+   motion essential to convey state is exempt from reduced-motion. */
+@media (prefers-reduced-motion: reduce) {
+  *:not(.motion-essential),
+  *:not(.motion-essential)::before,
+  *:not(.motion-essential)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
