@@ -3,6 +3,7 @@ import { FixedSizeGrid as Grid, GridChildComponentProps } from "react-window";
 import { useProjectStore } from "../stores/projectStore";
 import { thumbUrl } from "../hooks/useImageLoader";
 import { AiPickBadge } from "./AiPickBadge";
+import { Badge } from "./primitives";
 
 const SIZES = [100, 160, 240] as const;
 const CELL_GAP = 8;
@@ -236,8 +237,8 @@ export function GridView() {
           item.groupId !== undefined && !item.isGroupCover;
         const tintClass = isGroupMember
           ? item.groupId! % 2 === 0
-            ? "bg-[var(--accent)]/[0.06]"
-            : "bg-[var(--accent)]/[0.12]"
+            ? "bg-accent/[0.06]"
+            : "bg-accent/[0.12]"
           : "";
         return (
           <div
@@ -396,21 +397,21 @@ export function GridView() {
             <button
               onClick={() => handleBulkAction("pick")}
               title="Pick selected (P)"
-              className="px-3 py-1 rounded border border-green-500/40 text-green-500 text-xs hover:bg-green-500/10"
+              className="px-3 py-1 rounded border border-success/40 text-success text-xs hover:bg-success/10"
             >
               P Pick
             </button>
             <button
               onClick={() => handleBulkAction("reject")}
               title="Reject selected (X)"
-              className="px-3 py-1 rounded border border-red-500/40 text-red-500 text-xs hover:bg-red-500/10"
+              className="px-3 py-1 rounded border border-danger/40 text-danger text-xs hover:bg-danger/10"
             >
               X Reject
             </button>
             <button
               onClick={() => handleBulkAction("unreviewed")}
               title="Reset to unreviewed (U)"
-              className="px-3 py-1 rounded border border-white/20 text-[var(--text-secondary)] text-xs hover:bg-white/5"
+              className="px-3 py-1 rounded border border-white/20 text-fg-dim text-xs hover:bg-white/5"
             >
               U Reset
             </button>
@@ -418,7 +419,7 @@ export function GridView() {
               <button
                 onClick={handleGroup}
                 title="Group selected (Ctrl+G)"
-                className="px-3 py-1 rounded border border-[var(--accent)]/40 text-[var(--accent)] text-xs hover:bg-[var(--accent)]/10"
+                className="px-3 py-1 rounded border border-accent/40 text-accent text-xs hover:bg-accent/10"
               >
                 Group
               </button>
@@ -427,7 +428,7 @@ export function GridView() {
               <button
                 onClick={handleUngroup}
                 title="Ungroup selected (Ctrl+Shift+G)"
-                className="px-3 py-1 rounded border border-orange-400/40 text-orange-400 text-xs hover:bg-orange-400/10"
+                className="px-3 py-1 rounded border border-warning/40 text-warning text-xs hover:bg-warning/10"
               >
                 Ungroup
               </button>
@@ -439,7 +440,7 @@ export function GridView() {
                 setViewMode("sequential");
               }}
               title="Open first selection in sequential view (Enter)"
-              className="px-3 py-1 rounded border border-white/20 text-[var(--text-secondary)] text-xs hover:bg-white/5"
+              className="px-3 py-1 rounded border border-white/20 text-fg-dim text-xs hover:bg-white/5"
             >
               Enter → Loupe
             </button>
@@ -517,7 +518,7 @@ function GridThumb({
           views preserves the visual cue. */}
       {showGroupBar && (
         <div
-          className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--accent)] pointer-events-none"
+          className="absolute left-0 top-0 bottom-0 w-[3px] bg-accent pointer-events-none"
           aria-hidden="true"
         />
       )}
@@ -528,34 +529,42 @@ function GridThumb({
       {/* AI pick badge — suppressed in Select (every photo is already a
           pick, so the ★ AI stamp is pure noise there). */}
       {item.isAiPick && currentView !== "select" && <AiPickBadge />}
-      {/* Destination badge */}
+      {/* Destination badge — same treatment as the Route grid (glass chip,
+          accent-2 for Capture One, accent for Export). Stacks below the AI
+          badge when both are present in the top-right corner. */}
       {image.destination === "edit" && (
-        <div
-          className={`absolute ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-purple-500/25 text-purple-300 border border-purple-500/30`}
+        <Badge
+          tone="accent-2"
+          variant="glass"
+          className={`absolute right-1 ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1"} font-semibold pointer-events-none`}
           title={"Route: Capture One\nReady to drag into Capture One (or DxO)."}
           aria-label="Route: Capture One"
         >
-          C1
-        </div>
+          → C1
+        </Badge>
       )}
       {image.destination === "export" && (
-        <div
-          className={`absolute ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1.5"} right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-[var(--accent)]/25 text-blue-300 border border-[var(--accent)]/30`}
+        <Badge
+          tone="accent"
+          variant="glass"
+          className={`absolute right-1 ${item.isAiPick && currentView !== "select" ? "top-7" : "top-1"} font-semibold pointer-events-none`}
           title={"Route: Export\nCached JPEG copied to Immich ingest folder by the Publish button."}
           aria-label="Route: Export"
         >
-          EXP
-        </div>
+          → Exp
+        </Badge>
       )}
       {/* Group stack indicator */}
       {item.isGroupCover && item.groupMemberCount && (
-        <div
-          className="absolute bottom-1.5 right-1.5 bg-black/70 text-blue-300 text-[10px] font-semibold px-1.5 py-0.5 rounded backdrop-blur-sm"
+        <Badge
+          tone="neutral"
+          variant="glass"
+          className="absolute bottom-1 right-1 font-semibold pointer-events-none"
           title={`Group cover · ${item.groupMemberCount} photos total\n${item.groupMemberCount - 1} similar photos hidden.\nDouble-click or press Enter to drill in.`}
           aria-label={`Group cover, ${item.groupMemberCount} photos total`}
         >
           +{item.groupMemberCount - 1}
-        </div>
+        </Badge>
       )}
       {/* Filename on hover */}
       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent pt-4 pb-1 px-1.5 opacity-0 hover:opacity-100 transition-opacity">

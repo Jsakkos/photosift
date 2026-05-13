@@ -1,11 +1,14 @@
+import { IconBadge } from "./primitives";
+
 /// Inline species tile for the FaceTile bottom-row. Renders only for
 /// non-human detections (cats today). Humans are the default, so leaving
 /// the slot empty keeps the portrait flow visually quiet.
 export function AiSpeciesIcon({ species }: { species: string }) {
   if (species !== "cat") return null;
   return (
-    <div
-      className="bg-[var(--bg-secondary)]/90 text-[var(--text-primary)] rounded w-6 h-6 flex items-center justify-center pointer-events-auto shadow-sm"
+    <IconBadge
+      variant="surface"
+      className="pointer-events-auto"
       aria-label="Cat face"
       title={
         "On-device AI · Cat face (detected by Tiny-YOLOv3).\n" +
@@ -14,7 +17,7 @@ export function AiSpeciesIcon({ species }: { species: string }) {
       }
     >
       <CatIcon />
-    </div>
+    </IconBadge>
   );
 }
 
@@ -26,8 +29,8 @@ function CatIcon() {
         fill="currentColor"
         opacity="0.9"
       />
-      <circle cx="8" cy="10" r="0.9" fill="var(--bg-secondary)" />
-      <circle cx="12" cy="10" r="0.9" fill="var(--bg-secondary)" />
+      <circle cx="8" cy="10" r="0.9" fill="var(--color-bg3)" />
+      <circle cx="12" cy="10" r="0.9" fill="var(--color-bg3)" />
     </svg>
   );
 }

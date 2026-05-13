@@ -65,7 +65,7 @@ function PassPills() {
             onClick={() => setSelectMinStar(tier.floor)}
             className="px-[8px] py-[3px] rounded-xs font-mono text-[10px] tabular-nums flex items-center gap-[6px] bg-transparent border-0 cursor-pointer"
             style={{
-              color: active ? "#1a1a1a" : "var(--color-fg-dim)",
+              color: active ? "var(--color-on-accent)" : "var(--color-fg-dim)",
               background: active ? "var(--color-accent)" : "transparent",
               fontWeight: active ? 600 : 400,
             }}
@@ -364,7 +364,7 @@ export function SelectShell() {
         {inBracket ? (
           <ComparisonView />
         ) : (
-          <div className="flex-1 relative overflow-hidden" style={{ background: "#0c0c0c" }}>
+          <div className="flex-1 relative overflow-hidden" style={{ background: "var(--color-stage)" }}>
             <LoupeView />
             <HeatmapHost />
             <RatingColumn />

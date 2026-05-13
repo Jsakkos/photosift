@@ -2,7 +2,7 @@ import { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } fr
 import { FixedSizeList as List } from "react-window";
 import { computeDisplayItems, useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
-import { Photo, type Verdict } from "../primitives";
+import { Photo, type StarCount, type Verdict } from "../primitives";
 import type { DisplayItem } from "../../types";
 
 // 108px leaves ~16px room for the vertical scrollbar on overflow, so
@@ -119,6 +119,7 @@ export function AllStrip() {
             alt={image.filename}
             fit="cover"
             verdict={verdictFromFlag(image.flag)}
+            stars={image.starRating as StarCount}
             groupMember={item.isGroupCover === true}
             selected={index === selectedFlatIndex}
             dim={image.flag === "reject" ? 0.45 : 1}

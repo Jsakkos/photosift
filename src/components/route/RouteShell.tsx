@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
-import { Photo } from "../primitives";
+import { Photo, type PhotoDestination, type StarCount } from "../primitives";
 import { RouteLightbox } from "./RouteLightbox";
 import type { ImageEntry } from "../../types";
 
@@ -17,28 +17,6 @@ const PASS_TIERS: { floor: number; label: string }[] = [
   { floor: 5, label: "★≥5" },
 ];
 
-type DestMeta = {
-  label: string;
-  tone: string;
-};
-
-// Route destinations collapse to two buckets (Capture One / Export). The
-// small corner badge on each thumbnail makes the user's routing decision
-// scannable from the grid without having to hover.
-function destMeta(dest: string): DestMeta | null {
-  if (dest === "edit") return { label: "C1", tone: "var(--color-accent-2)" };
-  if (dest === "export") return { label: "Exp", tone: "var(--color-accent)" };
-  return null;
-}
-
-function Stars9({ n }: { n: number }) {
-  return (
-    <span className="font-mono text-[9px]" style={{ color: "var(--color-warning)" }}>
-      {"★".repeat(Math.max(0, Math.min(5, n)))}
-    </span>
-  );
-}
-
 function PickCell({
   image,
   selected,
@@ -50,31 +28,18 @@ function PickCell({
   onToggle: () => void;
   onOpen: () => void;
 }) {
-  const tag = destMeta(image.destination);
-  const rating = Math.max(0, Math.min(5, image.starRating));
+  const rating = Math.max(0, Math.min(5, image.starRating)) as StarCount;
   return (
     <Photo
       src={thumbUrl(image.id)}
       alt={image.filename}
       fit="cover"
       selected={selected}
+      stars={rating}
+      destination={image.destination === "unrouted" ? null : (image.destination as PhotoDestination)}
       onClick={onToggle}
       style={{ width: "100%", aspectRatio: "3 / 2", borderRadius: 2 }}
     >
-      <div
-        className="absolute top-[4px] left-[4px] rounded-xs px-[5px] py-[2px]"
-        style={{ background: "rgba(0,0,0,0.6)" }}
-      >
-        <Stars9 n={rating} />
-      </div>
-      {tag && (
-        <div
-          className="absolute bottom-[4px] right-[4px] rounded-xs px-[5px] py-[2px] font-mono text-[9px]"
-          style={{ background: "rgba(0,0,0,0.7)", color: tag.tone }}
-        >
-          → {tag.label}
-        </div>
-      )}
       <button
         type="button"
         tabIndex={-1}
@@ -83,7 +48,7 @@ function PickCell({
           onOpen();
         }}
         title="Open in sequential view"
-        className="absolute top-[4px] right-[4px] rounded-xs w-[18px] h-[18px] flex items-center justify-center cursor-pointer border-0"
+        className="absolute top-1 right-1 rounded-xs w-[18px] h-[18px] flex items-center justify-center cursor-pointer border-0"
         style={{
           background: "rgba(0,0,0,0.55)",
           color: "var(--color-fg)",
@@ -322,7 +287,7 @@ export function RouteShell() {
                   className="px-[10px] py-[4px] rounded-xs font-mono text-[10px] border-0 cursor-pointer"
                   style={{
                     background: active ? "var(--color-accent)" : "transparent",
-                    color: active ? "#1a1a1a" : "var(--color-fg-dim)",
+                    color: active ? "var(--color-on-accent)" : "var(--color-fg-dim)",
                     fontWeight: active ? 600 : 400,
                   }}
                   aria-pressed={active}
@@ -405,7 +370,7 @@ export function RouteShell() {
         className="flex flex-col gap-[10px] p-4 border-l overflow-auto"
         style={{
           borderColor: "var(--color-border)",
-          background: "#111",
+          background: "var(--color-stage)",
         }}
       >
         <div
@@ -442,7 +407,7 @@ export function RouteShell() {
           className="px-[14px] py-[8px] rounded-md text-[12px] font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border-0"
           style={{
             background: "var(--color-accent)",
-            color: "#1a1a1a",
+            color: "var(--color-on-accent)",
           }}
         >
           Route {actionScopeCount} {actionScopeCount === 1 ? "photo" : "photos"}

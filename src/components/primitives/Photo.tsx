@@ -1,8 +1,15 @@
 import { memo, type CSSProperties, type ReactNode } from "react";
 import type { ColorLabelValue } from "./ColorLabel";
 import { ColorLabelChip } from "./ColorLabel";
+import type { StarCount } from "./Stars";
+import { Badge } from "./Badge";
 
 export type Verdict = "keep" | "toss" | null;
+
+/// The routing destinations that get a corner tag on a thumbnail.
+/// `"publish_direct"` is the DB value; both it and `"export"` render as
+/// the same "→ Exp" chip.
+export type PhotoDestination = "edit" | "export" | "publish_direct" | null;
 
 type PhotoProps = {
   src: string | null;
@@ -17,6 +24,10 @@ type PhotoProps = {
   colorLabel?: ColorLabelValue | null;
   groupMember?: boolean;
   selected?: boolean;
+  /// Star rating overlay (bottom-left). 0 / undefined renders nothing.
+  stars?: StarCount;
+  /// Routing destination tag (bottom-right). "unrouted" callers pass null.
+  destination?: PhotoDestination;
 
   className?: string;
   style?: CSSProperties;
@@ -70,6 +81,8 @@ function PhotoInner({
   colorLabel,
   groupMember = false,
   selected = false,
+  stars = 0,
+  destination = null,
   className,
   style,
   onClick,
@@ -124,6 +137,33 @@ function PhotoInner({
 
       {verdict !== null && <VerdictBadge verdict={verdict} />}
 
+      {stars > 0 && (
+        <Badge
+          pos="bl"
+          tone="star"
+          variant="glass"
+          className="tracking-[1px]"
+          aria-label={`${stars} star${stars === 1 ? "" : "s"}`}
+        >
+          {"★".repeat(stars)}
+        </Badge>
+      )}
+
+      {destination !== null && (
+        <Badge
+          pos="br"
+          tone={destination === "edit" ? "accent-2" : "accent"}
+          variant="glass"
+          className="font-semibold"
+          aria-label={destination === "edit" ? "Route: Capture One" : "Route: Export"}
+        >
+          {destination === "edit" ? "→ C1" : "→ Exp"}
+        </Badge>
+      )}
+
+      {/* colorLabel and destination both claim bottom-right; in practice a
+          thumbnail carries one or the other (color labels are a Select-pass
+          affordance, destination tags appear in Route). */}
       {colorLabel && (
         <div className="absolute bottom-1 right-1">
           <ColorLabelChip color={colorLabel} size={8} />

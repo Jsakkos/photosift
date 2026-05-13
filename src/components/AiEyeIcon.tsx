@@ -1,9 +1,11 @@
+import { IconBadge } from "./primitives";
+
 /// Compact eye-state indicator for a face tile. Combines the per-eye
 /// flags into one of three states: both open, both closed, or partial
 /// (one open / one closed). Rendered as an inline SVG so it scales
 /// crisply at icon size without a font dependency.
 ///
-/// Layout-wise this is now an inline 24x24 tile — FaceTile arranges a
+/// Layout-wise this is an inline 24x24 tile — FaceTile arranges a
 /// row of badges at the bottom of the face thumbnail, so the icon
 /// doesn't self-position anymore.
 ///
@@ -23,12 +25,7 @@ export function AiEyeIcon({
         ? "closed"
         : "partial";
 
-  const tint =
-    state === "open"
-      ? "bg-green-500/90 text-white"
-      : state === "closed"
-        ? "bg-red-500/90 text-white"
-        : "bg-yellow-500/90 text-white";
+  const tone = state === "open" ? "success" : state === "closed" ? "danger" : "warning";
 
   const label =
     state === "open"
@@ -39,15 +36,11 @@ export function AiEyeIcon({
   const title = `On-device AI · ${label}\nPer-eye open/closed from the eye classifier.\nFeeds the on-device AI pick score.`;
 
   return (
-    <div
-      className={`${tint} rounded w-6 h-6 flex items-center justify-center pointer-events-auto shadow-sm`}
-      aria-label={label}
-      title={title}
-    >
+    <IconBadge tone={tone} className="pointer-events-auto" aria-label={label} title={title}>
       {state === "open" && <EyeOpenIcon />}
       {state === "closed" && <EyeClosedIcon />}
       {state === "partial" && <EyePartialIcon />}
-    </div>
+    </IconBadge>
   );
 }
 

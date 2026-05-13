@@ -107,8 +107,8 @@ export function LoupeView() {
 
   if (!currentImage || !displayUrl) {
     return (
-      <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-primary)]">
-        <p className="text-[var(--text-secondary)]">No image selected</p>
+      <div className="absolute inset-0 flex items-center justify-center bg-stage">
+        <p className="text-fg-dim">No image selected</p>
       </div>
     );
   }
@@ -124,7 +124,7 @@ export function LoupeView() {
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 overflow-hidden bg-[var(--bg-primary)]"
+      className="absolute inset-0 overflow-hidden bg-stage"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -143,7 +143,7 @@ export function LoupeView() {
       />
       <FlagFlash />
       {currentView === "triage" && displayItems[currentIndex]?.isGroupCover && (
-        <div className="absolute top-4 right-4 px-3 py-1.5 rounded-md bg-[var(--accent)]/15 border border-[var(--accent)]/30 text-[var(--accent)] text-xs font-medium pointer-events-none flex items-center gap-2">
+        <div className="absolute top-4 right-4 px-3 py-1.5 rounded-md bg-accent/15 border border-accent/30 text-accent text-xs font-medium pointer-events-none flex items-center gap-2">
           <span className="flex flex-col gap-0.5">
             <span className="block w-2.5 h-0.5 bg-current rounded-sm" />
             <span className="block w-2.5 h-0.5 bg-current rounded-sm" />

@@ -7,6 +7,7 @@
 ///
 /// Callers should gate on `eyeProvider === "onnx"` so the mock
 /// alternating-0-1 values don't leak through.
+import { IconBadge } from "./primitives";
 
 interface EyeStatusBadgeProps {
   faceCount: number | null | undefined;
@@ -26,19 +27,19 @@ export function EyeStatusBadge({
   }
 
   const totalEyes = faceCount * 2;
-  let tint: string;
+  let tone: "success" | "danger" | "warning";
   let state: "open" | "closed" | "mixed";
   let label: string;
   if (eyesOpenCount >= totalEyes) {
-    tint = "bg-emerald-500/90 text-white";
+    tone = "success";
     state = "open";
     label = "All eyes open";
   } else if (eyesOpenCount <= 0) {
-    tint = "bg-red-500/90 text-white";
+    tone = "danger";
     state = "closed";
     label = "All eyes closed";
   } else {
-    tint = "bg-yellow-500/90 text-white";
+    tone = "warning";
     state = "mixed";
     label = `${eyesOpenCount}/${totalEyes} eyes open`;
   }
@@ -46,15 +47,18 @@ export function EyeStatusBadge({
   const title = `${label}\nWhole-photo eye summary across all detected faces.\nGreen = all open · Yellow = mixed · Red = all closed.\nPer-face detail in the AI panel.`;
 
   return (
-    <div
-      className={`absolute bottom-1 left-1 ${tint} rounded w-5 h-5 flex items-center justify-center pointer-events-auto shadow-sm`}
+    <IconBadge
+      tone={tone}
+      size="sm"
+      pos="bl"
+      className="pointer-events-auto"
       aria-label={label}
       title={title}
     >
       {state === "open" && <EyeOpenGlyph />}
       {state === "closed" && <EyeClosedGlyph />}
       {state === "mixed" && <EyeMixedGlyph />}
-    </div>
+    </IconBadge>
   );
 }
 

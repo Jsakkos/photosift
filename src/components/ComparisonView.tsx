@@ -123,7 +123,7 @@ function ComparePanel({
   clusterSize,
   filenameFor,
 }: PanelProps) {
-  if (!image) return <div className="flex-1" style={{ background: "#0a0a0a" }} />;
+  if (!image) return <div className="flex-1" style={{ background: "var(--color-stage)" }} />;
   const rating = Math.max(0, Math.min(5, image.starRating)) as 0 | 1 | 2 | 3 | 4 | 5;
   const sharp = Math.round(image.sharpnessScore ?? 0);
   const face = Math.round((image.faceCount ?? 0) > 0 ? 90 : 0);
@@ -137,7 +137,7 @@ function ComparePanel({
   return (
     <div
       className="flex-1 flex flex-col min-h-0 min-w-0"
-      style={{ background: "#0a0a0a" }}
+      style={{ background: "var(--color-stage)" }}
     >
       <div className="flex-1 relative overflow-hidden">
         <div

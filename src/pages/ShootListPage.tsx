@@ -109,7 +109,7 @@ function ShootCard({
         )}
         {status !== "in_progress" && !progress && (
           <div
-            className="absolute top-2 right-2 font-mono text-[9px] uppercase tracking-[1px] px-[6px] py-[2px] rounded-sm"
+            className="absolute top-2 right-2 font-mono text-[9px] uppercase tracking-[1px] px-[6px] py-[2px] rounded-xs"
             style={{
               color:
                 status === "routed"
