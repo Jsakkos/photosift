@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useProjectStore, isRouteEligible } from "../../stores/projectStore";
+import { useProjectStore, isRouteEligible, selectMaxFloor } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { LoupeView } from "../LoupeView";
 import { HeatmapOverlay } from "../HeatmapOverlay";
@@ -23,6 +23,14 @@ const PASS_TIERS: { floor: number; label: string }[] = [
   { floor: 4, label: "★≥4" },
   { floor: 5, label: "★≥5" },
 ];
+
+// Tiers at or above routeMinStar belong to the Route view, not Select — a pick
+// graded that high graduates out, so those pills would always read 0 and clicking
+// one would dead-end. Keep only the reachable floors.
+function reachableTiers(routeMinStarGate: number): { floor: number; label: string }[] {
+  const max = selectMaxFloor(routeMinStarGate);
+  return PASS_TIERS.filter((t) => t.floor <= max);
+}
 
 function PassPills() {
   const images = useProjectStore((s) => s.images);
@@ -54,7 +62,7 @@ function PassPills() {
       className="inline-flex items-center gap-[1px] rounded-md p-[2px]"
       style={{ background: "var(--color-bg3)" }}
     >
-      {PASS_TIERS.map((tier) => {
+      {reachableTiers(routeMinStarGate).map((tier) => {
         const active = tier.floor === selectMinStar;
         return (
           <button

@@ -33,7 +33,8 @@ function providerLabel(p: AiProviderStatus): { text: string; color: string } {
 export function SettingsDialog() {
   const { isOpen, settings, closeDialog, updateSettings, reclusterShoot } =
     useSettingsStore();
-  const { currentShoot, loadShoot, refreshDisplay } = useProjectStore();
+  const { currentShoot, loadShoot, refreshDisplay, setSelectMinStar } =
+    useProjectStore();
 
   const [nearDup, setNearDup] = useState(settings.nearDupThreshold);
   const [related, setRelated] = useState(settings.relatedThreshold);
@@ -221,6 +222,9 @@ export function SettingsDialog() {
       setLibraryRootError(String(e));
       return;
     }
+    // A lowered routeMinStar shrinks the reachable Select pass floors, so
+    // re-clamp the current floor before refreshing (no-op if already in range).
+    setSelectMinStar(useProjectStore.getState().selectMinStar);
     // Refresh displayItems so the triage-expand toggle takes effect immediately
     // without waiting for the next flag/view change.
     refreshDisplay();
