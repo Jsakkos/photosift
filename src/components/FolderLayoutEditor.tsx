@@ -54,19 +54,19 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
   return (
     <div className="mb-4 pt-4 border-t border-white/5">
       <div className="flex items-center justify-between mb-1">
-        <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+        <h3 className="text-sm font-semibold text-fg">
           Folder layout
         </h3>
         <button
           type="button"
           onClick={() => onChange(DEFAULT_FOLDER_TEMPLATE)}
           disabled={isDefault}
-          className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] underline disabled:opacity-40 disabled:no-underline"
+          className="text-xs text-fg-dim hover:text-fg underline disabled:opacity-40 disabled:no-underline"
         >
           Reset to defaults
         </button>
       </div>
-      <p className="text-xs text-[var(--text-secondary)] mb-3">
+      <p className="text-xs text-fg-dim mb-3">
         Where shoots are created and what the cull buckets are named. The path
         template applies to new imports only — existing shoots stay where they
         are. Renaming a bucket relocates that bucket's files on the next layout
@@ -74,7 +74,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
       </p>
 
       {/* Path template */}
-      <label className="block text-sm text-[var(--text-secondary)] mb-1">
+      <label className="block text-sm text-fg-dim mb-1">
         Shoot path template
       </label>
       <input
@@ -83,7 +83,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
         value={value.pathTemplate}
         onChange={(e) => setPath(e.target.value)}
         spellCheck={false}
-        className={`w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border text-sm font-mono ${
+        className={`w-full px-3 py-2 rounded-lg bg-bg text-fg border text-sm font-mono ${
           v.pathError ? "border-red-500/70" : "border-white/10"
         }`}
       />
@@ -94,7 +94,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
             type="button"
             onClick={() => insertToken(tok)}
             title={`Insert ${tok}`}
-            className="px-2 py-1 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs font-mono transition-colors"
+            className="px-2 py-1 rounded bg-bg3 hover:bg-white/10 text-fg-dim hover:text-fg text-xs font-mono transition-colors"
           >
             {tok}
           </button>
@@ -108,7 +108,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
       <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2">
         {BUCKET_ORDER.map((key) => (
           <div key={key}>
-            <label className="block text-xs text-[var(--text-secondary)] mb-1">
+            <label className="block text-xs text-fg-dim mb-1">
               {BUCKET_LABELS[key]}
             </label>
             <input
@@ -116,7 +116,7 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
               value={value.buckets[key]}
               onChange={(e) => setBucket(key, e.target.value)}
               spellCheck={false}
-              className={`w-full px-2.5 py-1.5 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border text-sm font-mono ${
+              className={`w-full px-2.5 py-1.5 rounded-lg bg-bg text-fg border text-sm font-mono ${
                 v.bucketErrors[key] ? "border-red-500/70" : "border-white/10"
               }`}
             />
@@ -130,17 +130,17 @@ export function FolderLayoutEditor({ value, onChange }: Props) {
       </div>
 
       {/* Live preview */}
-      <div className="mt-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5">
-        <div className="text-[10px] uppercase tracking-wide text-[var(--text-secondary)] mb-2">
+      <div className="mt-4 p-3 rounded-lg bg-bg border border-white/5">
+        <div className="text-[10px] uppercase tracking-wide text-fg-dim mb-2">
           Preview (sample shoot)
         </div>
-        <div className="font-mono text-[11px] leading-relaxed text-[var(--text-secondary)] space-y-0.5">
+        <div className="font-mono text-[11px] leading-relaxed text-fg-dim space-y-0.5">
           {tree.map((row) => (
             <div key={row.label} className="flex gap-2">
-              <span className="text-[var(--text-secondary)]/50 w-14 shrink-0">
+              <span className="text-fg-dim/50 w-14 shrink-0">
                 {row.label}
               </span>
-              <span className="text-[var(--text-primary)] break-all">
+              <span className="text-fg break-all">
                 {row.path}
               </span>
             </div>

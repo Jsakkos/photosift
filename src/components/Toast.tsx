@@ -24,7 +24,7 @@ export function Toast() {
   const isSticky = toast.action != null;
   const color = isError
     ? "bg-red-500/90 border-red-400"
-    : "bg-[var(--accent)] border-[var(--accent-hover)]";
+    : "bg-accent-blue border-accent-blue-hover";
 
   const handleAction = () => {
     toast.action?.onClick();

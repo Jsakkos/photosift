@@ -38,13 +38,13 @@ export function EmptyViewState({ view }: Props) {
     () => void setView("route"),
   );
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-2 bg-[var(--bg-primary)] px-8">
-      <p className="text-[var(--text-primary)] text-lg font-light">{title}</p>
-      <p className="text-[var(--text-secondary)] text-sm text-center max-w-md">
+    <div className="flex-1 flex flex-col items-center justify-center gap-2 bg-bg px-8">
+      <p className="text-fg text-lg font-light">{title}</p>
+      <p className="text-fg-dim text-sm text-center max-w-md">
         {body}
       </p>
       {hint && (
-        <p className="text-[var(--text-secondary)]/60 text-xs mt-2">{hint}</p>
+        <p className="text-fg-dim/60 text-xs mt-2">{hint}</p>
       )}
       {action && (
         <button

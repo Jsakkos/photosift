@@ -111,19 +111,19 @@ export function FirstRunModal({ view }: { view: CullView }) {
       <div
         className="w-[460px] max-w-[92vw] rounded-md overflow-hidden"
         style={{
-          background: "var(--color-bg2, #181818)",
-          border: "1px solid var(--color-border, rgba(255,255,255,0.1))",
-          color: "var(--color-fg, #e8e8e8)",
+          background: "var(--color-bg2)",
+          border: "1px solid var(--color-border)",
+          color: "var(--color-fg)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
         <div
           className="px-5 py-4 border-b"
-          style={{ borderColor: "var(--color-border, rgba(255,255,255,0.08))" }}
+          style={{ borderColor: "var(--color-border)" }}
         >
           <div
             className="text-[9px] uppercase tracking-[1.4px]"
-            style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.5))" }}
+            style={{ color: "var(--color-fg-dim)" }}
           >
             {guide.eyebrow}
           </div>
@@ -131,7 +131,7 @@ export function FirstRunModal({ view }: { view: CullView }) {
         </div>
 
         <div className="px-5 py-4 flex flex-col gap-4">
-          <p className="text-[13px] leading-relaxed" style={{ color: "var(--color-fg, #e8e8e8)" }}>
+          <p className="text-[13px] leading-relaxed" style={{ color: "var(--color-fg)" }}>
             {guide.blurb}
           </p>
 
@@ -139,7 +139,7 @@ export function FirstRunModal({ view }: { view: CullView }) {
             <div className="flex flex-col gap-[6px]">
               {guide.keys.map((row, i) => (
                 <div key={i} className="flex items-center justify-between gap-3 text-[12px]">
-                  <span style={{ color: "var(--color-fg, #e8e8e8)" }}>{row.label}</span>
+                  <span style={{ color: "var(--color-fg)" }}>{row.label}</span>
                   <span className="flex items-center gap-[3px]">
                     {row.keys.map((k, ki) => (
                       <Kbd key={ki}>{k}</Kbd>
@@ -153,8 +153,8 @@ export function FirstRunModal({ view }: { view: CullView }) {
           <p
             className="text-[12px] leading-relaxed pt-2 border-t"
             style={{
-              color: "var(--color-fg-dim, rgba(255,255,255,0.6))",
-              borderColor: "var(--color-border, rgba(255,255,255,0.08))",
+              color: "var(--color-fg-dim)",
+              borderColor: "var(--color-border)",
             }}
           >
             {guide.done}
@@ -163,16 +163,16 @@ export function FirstRunModal({ view }: { view: CullView }) {
 
         <div
           className="px-5 py-3 border-t flex items-center justify-between"
-          style={{ borderColor: "var(--color-border, rgba(255,255,255,0.08))" }}
+          style={{ borderColor: "var(--color-border)" }}
         >
-          <span className="text-[11px]" style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.5))" }}>
+          <span className="text-[11px]" style={{ color: "var(--color-fg-dim)" }}>
             Press <Kbd>?</Kbd> any time for all shortcuts
           </span>
           <button
             type="button"
             onClick={dismiss}
             className="text-[12px] px-3 py-1.5 rounded-sm cursor-pointer border-0"
-            style={{ background: "var(--color-accent-blue, #3b82f6)", color: "#fff" }}
+            style={{ background: "var(--color-accent-blue)", color: "#fff" }}
           >
             Got it · <Kbd>Esc</Kbd>
           </button>

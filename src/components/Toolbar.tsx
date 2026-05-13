@@ -16,23 +16,23 @@ export function Toolbar() {
   return (
     <div className="flex flex-col">
       {/* Row 1: Shoot info + controls */}
-      <div className="flex items-center justify-between px-4 py-2 bg-[var(--bg-secondary)] border-b border-white/5 text-sm">
+      <div className="flex items-center justify-between px-4 py-2 bg-bg2 border-b border-white/5 text-sm">
         <div className="flex items-center gap-4">
           <button
             onClick={() => navigate("/shoots")}
             title="Back to shoots"
             aria-label="Back to shoot list"
-            className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+            className="text-fg-dim hover:text-fg transition-colors"
           >
             &larr; Shoots
           </button>
-          <span className="font-medium text-[var(--text-primary)]">
+          <span className="font-medium text-fg">
             {currentShoot.slug}
           </span>
-          <span className="text-[var(--text-secondary)]">
+          <span className="text-fg-dim">
             {currentShoot.date}
           </span>
-          <span className="text-[var(--text-secondary)]">
+          <span className="text-fg-dim">
             {displayItems.length > 0
               ? `${currentIndex + 1} / ${displayItems.length}`
               : "No images"}
@@ -43,7 +43,7 @@ export function Toolbar() {
           <button
             onClick={toggleShortcutHints}
             title="Keyboard shortcuts (?)"
-            className="text-xs text-[var(--text-secondary)]/60 hover:text-[var(--text-primary)] transition-colors"
+            className="text-xs text-fg-dim/60 hover:text-fg transition-colors"
           >
             Press ? for shortcuts
           </button>
@@ -52,8 +52,8 @@ export function Toolbar() {
             title="Toggle auto-advance on pick/reject"
             className={`px-2 py-1 rounded text-xs transition-colors ${
               autoAdvance
-                ? "bg-[var(--accent)] text-white"
-                : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)]"
+                ? "bg-accent-blue text-white"
+                : "bg-bg3 text-fg-dim"
             }`}
           >
             Auto-advance {autoAdvance ? "ON" : "OFF"}
@@ -62,7 +62,7 @@ export function Toolbar() {
             onClick={openSettings}
             title="Settings (,)"
             aria-label="Settings"
-            className="w-7 h-7 flex items-center justify-center rounded bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors"
+            className="w-7 h-7 flex items-center justify-center rounded bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3"/>

@@ -11,12 +11,12 @@ export function AiProgressIndicator() {
 
   return (
     <div
-      className="flex items-center gap-2 text-xs text-[var(--text-secondary)]"
+      className="flex items-center gap-2 text-xs text-fg-dim"
       role="status"
       aria-live="polite"
     >
       <span
-        className="inline-block w-2.5 h-2.5 rounded-full bg-[var(--accent)] animate-pulse"
+        className="inline-block w-2.5 h-2.5 rounded-full bg-accent-blue animate-pulse"
         aria-hidden="true"
       />
       <span>

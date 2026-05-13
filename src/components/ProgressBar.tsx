@@ -20,7 +20,7 @@ export function ProgressBar() {
   const rejectPct = (rejects / total) * 100;
 
   return (
-    <div className="h-[3px] bg-[var(--bg-tertiary)] flex">
+    <div className="h-[3px] bg-bg3 flex">
       <div
         className="bg-green-500 transition-all duration-300"
         style={{ width: `${pickPct}%` }}
