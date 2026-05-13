@@ -1,4 +1,4 @@
-export type ColorLabelValue = "red" | "yellow" | "green" | "blue" | "purple";
+﻿export type ColorLabelValue = "red" | "yellow" | "green" | "blue" | "purple";
 
 const COLOR_VAR: Record<ColorLabelValue, string> = {
   red: "var(--color-label-red)",
@@ -34,7 +34,7 @@ type ColorLabelRowProps = {
 
 export function ColorLabelRow({ value, onChange, size = 12, className }: ColorLabelRowProps) {
   return (
-    <div className={`inline-flex items-center gap-[6px] ${className ?? ""}`.trim()}>
+    <div className={`inline-flex items-center gap-1.5 ${className ?? ""}`.trim()}>
       {COLOR_LABEL_ORDER.map((c) => {
         const selected = value === c;
         return (

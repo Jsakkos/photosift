@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useAiStore } from "../stores/aiStore";
@@ -50,7 +50,7 @@ export function OnboardingWizard({
   const handleSkip = () => {
     if (!replay && settings.libraryRoot == null) {
       const ok = window.confirm(
-        "PhotoSift needs a library folder before you can import photos.\n\nSkip the setup anyway? You can finish it later from the “?” shortcuts overlay → Take the tour.",
+        "PhotoSift needs a library folder before you can import photos.\n\nSkip the setup anyway? You can finish it later from the â€œ?â€ shortcuts overlay â†’ Take the tour.",
       );
       if (!ok) return;
     }
@@ -94,15 +94,15 @@ export function OnboardingWizard({
           style={{ borderColor: "var(--color-border)" }}
         >
           <div
-            className="text-[10px] uppercase tracking-[1.4px] mb-[2px]"
+            className="text-2xs uppercase tracking-[1.4px] mb-0.5"
             style={{ color: "var(--color-fg-dim)" }}
           >
             {replay ? "Take the tour" : "Welcome to PhotoSift"}
           </div>
-          <div className="text-[18px] font-semibold" style={{ color: "var(--color-fg)" }}>
+          <div className="text-lg font-semibold" style={{ color: "var(--color-fg)" }}>
             {STEP_TITLES[step]}
           </div>
-          <div className="flex gap-[6px] mt-3">
+          <div className="flex gap-1.5 mt-3">
             {([0, 1, 2, 3] as StepId[]).map((i) => (
               <div
                 key={i}
@@ -138,7 +138,7 @@ export function OnboardingWizard({
           <button
             type="button"
             onClick={handleSkip}
-            className="text-[12px] cursor-pointer bg-transparent border-0 underline"
+            className="text-xs cursor-pointer bg-transparent border-0 underline"
             style={{ color: "var(--color-fg-dim)" }}
           >
             {replay ? "Close" : "Skip setup"}
@@ -148,7 +148,7 @@ export function OnboardingWizard({
               <button
                 type="button"
                 onClick={() => setStep((s) => Math.max(0, s - 1) as StepId)}
-                className="px-[14px] py-[6px] rounded-md text-[12px] cursor-pointer"
+                className="px-3.5 py-1.5 rounded-md text-xs cursor-pointer"
                 style={{
                   background: "transparent",
                   color: "var(--color-fg-dim)",
@@ -162,7 +162,7 @@ export function OnboardingWizard({
               <button
                 type="button"
                 onClick={() => setStep((s) => Math.min(LAST_STEP, s + 1) as StepId)}
-                className="px-[16px] py-[6px] rounded-md text-[12px] font-medium cursor-pointer"
+                className="px-4 py-1.5 rounded-md text-xs font-medium cursor-pointer"
                 style={{ background: "var(--color-accent-blue)", color: "#fff", border: "none" }}
               >
                 Next
@@ -171,7 +171,7 @@ export function OnboardingWizard({
               <button
                 type="button"
                 onClick={() => finish(true)}
-                className="px-[16px] py-[6px] rounded-md text-[12px] font-medium cursor-pointer"
+                className="px-4 py-1.5 rounded-md text-xs font-medium cursor-pointer"
                 style={{ background: "var(--color-accent-blue)", color: "#fff", border: "none" }}
               >
                 {replay ? "Done" : "Start culling"}
@@ -186,7 +186,7 @@ export function OnboardingWizard({
 
 function SectionHint({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[12px] leading-[1.6] mb-4" style={{ color: "var(--color-fg-dim)" }}>
+    <p className="text-xs leading-[1.6] mb-4" style={{ color: "var(--color-fg-dim)" }}>
       {children}
     </p>
   );
@@ -205,11 +205,11 @@ function LibraryStep() {
     <div>
       <SectionHint>
         Pick where copied photos live. New imports land under this root using the
-        template below — leave the defaults if you’re not sure.
+        template below â€” leave the defaults if youâ€™re not sure.
       </SectionHint>
       <div className="flex items-center gap-3 mb-5">
         <div
-          className="flex-1 px-[10px] py-[7px] rounded-md text-[12px] font-mono truncate"
+          className="flex-1 px-2.5 py-[7px] rounded-md text-xs font-mono truncate"
           style={{
             background: "var(--color-bg3)",
             border: "1px solid var(--color-border)",
@@ -222,14 +222,14 @@ function LibraryStep() {
         <button
           type="button"
           onClick={pickRoot}
-          className="px-[14px] py-[7px] rounded-md text-[12px] cursor-pointer"
+          className="px-3.5 py-[7px] rounded-md text-xs cursor-pointer"
           style={{
             background: "transparent",
             color: "var(--color-fg)",
             border: "1px solid var(--color-border)",
           }}
         >
-          Choose folder…
+          Choose folderâ€¦
         </button>
         {settings.libraryRoot && (
           <button
@@ -259,12 +259,12 @@ const PROVIDERS: { id: "anthropic" | "gemini" | "local"; label: string }[] = [
 const MODEL_OPTIONS: Record<"anthropic" | "gemini", { value: string; label: string }[]> = {
   anthropic: [
     { value: "claude-sonnet-4-6", label: "claude-sonnet-4-6 (recommended)" },
-    { value: "claude-opus-4-7", label: "claude-opus-4-7 (more thorough, ~5× cost)" },
+    { value: "claude-opus-4-7", label: "claude-opus-4-7 (more thorough, ~5Ã— cost)" },
     { value: "claude-haiku-4-5", label: "claude-haiku-4-5 (cheaper, less nuance)" },
   ],
   gemini: [
     { value: "gemini-2.5-flash", label: "gemini-2.5-flash (recommended)" },
-    { value: "gemini-2.5-pro", label: "gemini-2.5-pro (more thorough, ~5× cost)" },
+    { value: "gemini-2.5-pro", label: "gemini-2.5-pro (more thorough, ~5Ã— cost)" },
     { value: "gemini-2.0-flash", label: "gemini-2.0-flash (cheapest)" },
   ],
 };
@@ -300,7 +300,7 @@ function CuratorStep() {
       setKeyInput("");
       setMsg("Key saved to your OS keychain.");
     } catch (e) {
-      setMsg(`Couldn’t save the key: ${e}`);
+      setMsg(`Couldnâ€™t save the key: ${e}`);
     } finally {
       setBusy(false);
     }
@@ -332,8 +332,8 @@ function CuratorStep() {
     <div>
       <SectionHint>
         The Curator is an optional cloud LLM that characterises a shoot and
-        ranks each cluster on composition + aesthetics. Skip this if you’d
-        rather cull on your own — PhotoSift works fully without it.
+        ranks each cluster on composition + aesthetics. Skip this if youâ€™d
+        rather cull on your own â€” PhotoSift works fully without it.
       </SectionHint>
       <div className="flex gap-2 mb-5">
         {PROVIDERS.map((p) => (
@@ -341,7 +341,7 @@ function CuratorStep() {
             key={p.id}
             type="button"
             onClick={() => void updateSettings({ curatorProvider: p.id })}
-            className="px-[14px] py-[6px] rounded-md text-[12px] cursor-pointer"
+            className="px-3.5 py-1.5 rounded-md text-xs cursor-pointer"
             style={{
               background: provider === p.id ? "var(--color-accent-blue)" : "transparent",
               color: provider === p.id ? "#fff" : "var(--color-fg-dim)",
@@ -359,8 +359,8 @@ function CuratorStep() {
             <div className="text-[11px] mb-[5px]" style={{ color: "var(--color-fg-dim)" }}>
               {PROVIDERS.find((p) => p.id === provider)!.label} API key
               {keyStatus?.configured && (
-                <span className="ml-2 font-mono text-[10px]" style={{ color: "var(--color-success)" }}>
-                  configured ••••{keyStatus.suffix}
+                <span className="ml-2 font-mono text-2xs" style={{ color: "var(--color-success)" }}>
+                  configured â€¢â€¢â€¢â€¢{keyStatus.suffix}
                 </span>
               )}
             </div>
@@ -369,8 +369,8 @@ function CuratorStep() {
                 type="password"
                 value={keyInput}
                 onChange={(e) => setKeyInput(e.target.value)}
-                placeholder={keyStatus?.configured ? "Replace key…" : "Paste your API key"}
-                className="flex-1 px-[10px] py-[6px] rounded-md text-[12px] font-mono"
+                placeholder={keyStatus?.configured ? "Replace keyâ€¦" : "Paste your API key"}
+                className="flex-1 px-2.5 py-1.5 rounded-md text-xs font-mono"
                 style={{
                   background: "var(--color-bg3)",
                   border: "1px solid var(--color-border)",
@@ -381,7 +381,7 @@ function CuratorStep() {
                 type="button"
                 onClick={() => void saveKey()}
                 disabled={busy || !keyInput.trim()}
-                className="px-[14px] py-[6px] rounded-md text-[12px] cursor-pointer disabled:opacity-50"
+                className="px-3.5 py-1.5 rounded-md text-xs cursor-pointer disabled:opacity-50"
                 style={{ background: "transparent", color: "var(--color-fg)", border: "1px solid var(--color-border)" }}
               >
                 Save key
@@ -395,7 +395,7 @@ function CuratorStep() {
             <select
               value={modelValue}
               onChange={(e) => setModel(e.target.value)}
-              className="px-[10px] py-[6px] rounded-md text-[12px]"
+              className="px-2.5 py-1.5 rounded-md text-xs"
               style={{ background: "var(--color-bg3)", border: "1px solid var(--color-border)", color: "var(--color-fg)" }}
             >
               {MODEL_OPTIONS[provider].map((m) => (
@@ -410,13 +410,13 @@ function CuratorStep() {
         <div className="space-y-3">
           <div>
             <div className="text-[11px] mb-[5px]" style={{ color: "var(--color-fg-dim)" }}>
-              OpenAI-compatible base URL (Ollama, LM Studio, vLLM…)
+              OpenAI-compatible base URL (Ollama, LM Studio, vLLMâ€¦)
             </div>
             <input
               type="text"
               value={settings.curatorLocalBaseUrl}
               onChange={(e) => void updateSettings({ curatorLocalBaseUrl: e.target.value })}
-              className="w-full px-[10px] py-[6px] rounded-md text-[12px] font-mono"
+              className="w-full px-2.5 py-1.5 rounded-md text-xs font-mono"
               style={{ background: "var(--color-bg3)", border: "1px solid var(--color-border)", color: "var(--color-fg)" }}
             />
           </div>
@@ -430,14 +430,14 @@ function CuratorStep() {
                 value={settings.curatorModelLocal}
                 onChange={(e) => void updateSettings({ curatorModelLocal: e.target.value })}
                 placeholder="e.g. qwen2.5vl:7b"
-                className="flex-1 px-[10px] py-[6px] rounded-md text-[12px] font-mono"
+                className="flex-1 px-2.5 py-1.5 rounded-md text-xs font-mono"
                 style={{ background: "var(--color-bg3)", border: "1px solid var(--color-border)", color: "var(--color-fg)" }}
               />
               <button
                 type="button"
                 onClick={() => void testLocal()}
                 disabled={busy}
-                className="px-[14px] py-[6px] rounded-md text-[12px] cursor-pointer disabled:opacity-50"
+                className="px-3.5 py-1.5 rounded-md text-xs cursor-pointer disabled:opacity-50"
                 style={{ background: "transparent", color: "var(--color-fg)", border: "1px solid var(--color-border)" }}
               >
                 Test
@@ -468,7 +468,7 @@ function AiStep({
     <div>
       <SectionHint>
         On-device AI runs face / eye-state / sharpness detection on each photo
-        at import — no data leaves your machine. It’s fast on a CUDA GPU and
+        at import â€” no data leaves your machine. Itâ€™s fast on a CUDA GPU and
         still usable on CPU, just slower.
       </SectionHint>
       <label className="flex items-start gap-3 cursor-pointer mb-4">
@@ -476,28 +476,28 @@ function AiStep({
           type="checkbox"
           checked={enabled}
           onChange={(e) => onToggle(e.target.checked)}
-          className="mt-[2px] cursor-pointer"
+          className="mt-0.5 cursor-pointer"
         />
         <div>
-          <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+          <div className="text-xs" style={{ color: "var(--color-fg)" }}>
             Run on-device AI on import
           </div>
-          <div className="text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
+          <div className="text-2xs" style={{ color: "var(--color-fg-dim)" }}>
             You can re-run analysis any time from Settings.
           </div>
         </div>
       </label>
       {enabled && (
         <div
-          className="text-[11px] rounded-sm px-[10px] py-[8px]"
+          className="text-[11px] rounded-sm px-2.5 py-2"
           style={{ background: "var(--color-bg)", border: "1px solid var(--color-border)", color: "var(--color-fg-dim)" }}
         >
           {provider === "cuda" && (
-            <span style={{ color: "var(--color-success)" }}>GPU (CUDA) detected — analysis will be fast.</span>
+            <span style={{ color: "var(--color-success)" }}>GPU (CUDA) detected â€” analysis will be fast.</span>
           )}
           {provider === "cpu" && (
             <>
-              CUDA isn’t available, so analysis runs on CPU (a few seconds per
+              CUDA isnâ€™t available, so analysis runs on CPU (a few seconds per
               photo).{" "}
               <a href={CUDA_DOC_URL} target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--color-fg)" }}>
                 CUDA runtime setup
@@ -507,7 +507,7 @@ function AiStep({
           )}
           {provider === "disabled" && (
             <span style={{ color: "var(--color-warning)" }}>
-              The AI models couldn’t be loaded — on-device scoring will be skipped until that’s resolved.
+              The AI models couldnâ€™t be loaded â€” on-device scoring will be skipped until thatâ€™s resolved.
             </span>
           )}
         </div>
@@ -519,7 +519,7 @@ function AiStep({
 const PASSES: { eyebrow: string; title: string; blurb: string; keys: [string, string][] }[] = [
   {
     eyebrow: "Pass 1",
-    title: "Triage — keep or toss",
+    title: "Triage â€” keep or toss",
     blurb: "Fast first cut: a quick yes/no on every frame.",
     keys: [
       ["P", "pick"],
@@ -529,7 +529,7 @@ const PASSES: { eyebrow: string; title: string; blurb: string; keys: [string, st
   },
   {
     eyebrow: "Pass 2",
-    title: "Select — best of the burst",
+    title: "Select â€” best of the burst",
     blurb: "Compare near-duplicates and crown the keeper of each cluster.",
     keys: [
       ["P", "pick (auto-rejects the rest of the group)"],
@@ -538,7 +538,7 @@ const PASSES: { eyebrow: string; title: string; blurb: string; keys: [string, st
   },
   {
     eyebrow: "Pass 3",
-    title: "Route — where it goes",
+    title: "Route â€” where it goes",
     blurb: "Send picks to Capture One or to a publish-direct export.",
     keys: [
       ["Click", "select photos, choose a destination from the Route menu"],
@@ -551,9 +551,9 @@ function TourStep() {
   return (
     <div className="space-y-4">
       <SectionHint>
-        Culling is three quick passes. Each is just a view preset — a filter
+        Culling is three quick passes. Each is just a view preset â€” a filter
         plus the keys that matter there. You can re-open this tour any time from
-        the “?” shortcuts overlay.
+        the â€œ?â€ shortcuts overlay.
       </SectionHint>
       {PASSES.map((p) => (
         <div
@@ -561,13 +561,13 @@ function TourStep() {
           className="rounded-sm px-4 py-3"
           style={{ background: "var(--color-bg)", border: "1px solid var(--color-border)" }}
         >
-          <div className="text-[9px] uppercase tracking-[1.2px]" style={{ color: "var(--color-fg-mute)" }}>
+          <div className="text-3xs uppercase tracking-[1.2px]" style={{ color: "var(--color-fg-mute)" }}>
             {p.eyebrow}
           </div>
           <div className="text-[13px] font-semibold mt-[1px]" style={{ color: "var(--color-fg)" }}>
             {p.title}
           </div>
-          <div className="text-[11px] mt-[2px] mb-2" style={{ color: "var(--color-fg-dim)" }}>
+          <div className="text-[11px] mt-0.5 mb-2" style={{ color: "var(--color-fg-dim)" }}>
             {p.blurb}
           </div>
           <div className="flex flex-col gap-[5px]">

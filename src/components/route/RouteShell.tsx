@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
@@ -10,11 +10,11 @@ type DestinationId = "edit" | "export";
 
 const PASS_TIERS: { floor: number; label: string }[] = [
   { floor: 0, label: "all" },
-  { floor: 1, label: "★≥1" },
-  { floor: 2, label: "★≥2" },
-  { floor: 3, label: "★≥3" },
-  { floor: 4, label: "★≥4" },
-  { floor: 5, label: "★≥5" },
+  { floor: 1, label: "â˜…â‰¥1" },
+  { floor: 2, label: "â˜…â‰¥2" },
+  { floor: 3, label: "â˜…â‰¥3" },
+  { floor: 4, label: "â˜…â‰¥4" },
+  { floor: 5, label: "â˜…â‰¥5" },
 ];
 
 function PickCell({
@@ -57,7 +57,7 @@ function PickCell({
           lineHeight: 1,
         }}
       >
-        ⤢
+        â¤¢
       </button>
     </Photo>
   );
@@ -80,35 +80,35 @@ function ShipStrip({
 }) {
   return (
     <div
-      className="rounded-md p-[10px] border"
+      className="rounded-md p-2.5 border"
       style={{
         background: "var(--color-hover)",
         borderColor: "var(--color-border)",
       }}
     >
       <div className="flex items-baseline justify-between mb-[3px]">
-        <span className="text-[12px] font-medium" style={{ color: accentTone }}>
+        <span className="text-xs font-medium" style={{ color: accentTone }}>
           {title}
         </span>
         <span
-          className="font-mono text-[10px]"
+          className="font-mono text-2xs"
           style={{ color: "var(--color-fg-dim)" }}
         >
           {count} ready
         </span>
       </div>
       <div
-        className="text-[10px] leading-[1.4] mb-[8px]"
+        className="text-2xs leading-[1.4] mb-2"
         style={{ color: "var(--color-fg-dim)" }}
       >
         {subtitle}
       </div>
-      <div className="flex gap-[6px]">
+      <div className="flex gap-1.5">
         <button
           type="button"
           tabIndex={-1}
           onClick={onOpenFolder}
-          className="flex-1 px-[10px] py-[5px] rounded-xs text-[10px] border bg-transparent cursor-pointer"
+          className="flex-1 px-2.5 py-[5px] rounded-xs text-2xs border bg-transparent cursor-pointer"
           style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
         >
           Open folder
@@ -117,7 +117,7 @@ function ShipStrip({
           type="button"
           tabIndex={-1}
           onClick={onCopyPath}
-          className="flex-1 px-[10px] py-[5px] rounded-xs text-[10px] border bg-transparent cursor-pointer"
+          className="flex-1 px-2.5 py-[5px] rounded-xs text-2xs border bg-transparent cursor-pointer"
           style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
         >
           Copy path
@@ -187,9 +187,9 @@ export function RouteShell() {
 
   const clearSelection = () => setSelectedIds(new Set());
 
-  // ⤢ on a pick tile opens a Route-local lightbox (embedded preview at
+  // â¤¢ on a pick tile opens a Route-local lightbox (embedded preview at
   // fit-screen). Route doesn't have a sequential/loupe view of its own
-  // — that's Triage/Select — so we render a contained modal here
+  // â€” that's Triage/Select â€” so we render a contained modal here
   // instead of trying to jam Route into the sequential mode shape.
   const openInLightbox = (id: number) => {
     setLightboxPhotoId(id);
@@ -214,7 +214,7 @@ export function RouteShell() {
       setToast(`Unrouted ${ids.length}`);
     } else {
       const label = dest === "edit" ? "Capture One" : "Export";
-      setToast(`Routed ${ids.length} → ${label}`);
+      setToast(`Routed ${ids.length} â†’ ${label}`);
     }
     clearSelection();
   };
@@ -255,26 +255,26 @@ export function RouteShell() {
       style={{ gridTemplateColumns: "1fr 320px" }}
     >
       <div className="flex flex-col min-h-0 p-4">
-        <div className="flex items-baseline justify-between mb-[14px] gap-4">
+        <div className="flex items-baseline justify-between mb-3.5 gap-4">
           <div>
             <div
-              className="text-[9px] uppercase tracking-[1.4px]"
+              className="text-3xs uppercase tracking-[1.4px]"
               style={{ color: "var(--color-fg-dim)" }}
             >
               Route
             </div>
             <div
-              className="text-[18px] font-semibold mt-[2px] flex items-baseline gap-2"
+              className="text-lg font-semibold mt-0.5 flex items-baseline gap-2"
               style={{ color: "var(--color-fg)" }}
             >
               <span className="font-mono" style={{ color: "var(--color-accent)" }}>
                 {selectedFloorLabel}
               </span>
-              <span>· {picks.length} picks ready</span>
+              <span>Â· {picks.length} picks ready</span>
             </div>
           </div>
           <div
-            className="inline-flex items-center gap-[1px] rounded-md p-[2px]"
+            className="inline-flex items-center gap-[1px] rounded-md p-0.5"
             style={{ background: "var(--color-bg2)" }}
           >
             {PASS_TIERS.map((tier) => {
@@ -285,7 +285,7 @@ export function RouteShell() {
                   type="button"
                   tabIndex={-1}
                   onClick={() => setSelectMinStar(tier.floor)}
-                  className="px-[10px] py-[4px] rounded-xs font-mono text-[10px] border-0 cursor-pointer"
+                  className="px-2.5 py-1 rounded-xs font-mono text-2xs border-0 cursor-pointer"
                   style={{
                     background: active ? "var(--color-accent)" : "transparent",
                     color: active ? "var(--color-on-accent)" : "var(--color-fg-dim)",
@@ -301,7 +301,7 @@ export function RouteShell() {
         </div>
 
         <div
-          className="flex items-center gap-[10px] mb-[10px] text-[11px]"
+          className="flex items-center gap-2.5 mb-2.5 text-[11px]"
           style={{ color: "var(--color-fg-dim)" }}
         >
           <span className="font-mono text-[11px]" style={{ color: "var(--color-fg)" }}>
@@ -314,7 +314,7 @@ export function RouteShell() {
             tabIndex={-1}
             onClick={selectAll}
             disabled={picks.length === 0}
-            className="px-[10px] py-[4px] rounded-xs text-[10px] border bg-transparent cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            className="px-2.5 py-1 rounded-xs text-2xs border bg-transparent cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
             style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
           >
             Select all
@@ -324,18 +324,18 @@ export function RouteShell() {
             tabIndex={-1}
             onClick={clearSelection}
             disabled={!hasSelection}
-            className="px-[10px] py-[4px] rounded-xs text-[10px] border bg-transparent cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            className="px-2.5 py-1 rounded-xs text-2xs border bg-transparent cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
             style={{ borderColor: "var(--color-border)", color: "var(--color-fg)" }}
           >
             Clear
           </button>
-          <span className="text-[10px] opacity-70">
-            · Click to toggle · ⤢ to open in loupe
+          <span className="text-2xs opacity-70">
+            Â· Click to toggle Â· â¤¢ to open in loupe
           </span>
         </div>
 
         <div
-          className="flex-1 overflow-auto grid gap-[10px] content-start"
+          className="flex-1 overflow-auto grid gap-2.5 content-start"
           style={{ gridTemplateColumns: "repeat(5, 1fr)" }}
         >
           {picks.map((image) => (
@@ -349,7 +349,7 @@ export function RouteShell() {
           ))}
           {picks.length === 0 && (
             <div
-              className="col-span-5 py-12 text-center text-[12px]"
+              className="col-span-5 py-12 text-center text-xs"
               style={{ color: "var(--color-fg-mute)" }}
             >
               No picks at this pass level. Narrow with the pills or return to Select.
@@ -358,24 +358,24 @@ export function RouteShell() {
         </div>
 
         <div
-          className="mt-3 pt-[10px] px-3 flex gap-[14px] items-center border-t text-[11px]"
+          className="mt-3 pt-2.5 px-3 flex gap-3.5 items-center border-t text-[11px]"
           style={{ borderColor: "var(--color-border)", color: "var(--color-fg-dim)" }}
         >
           <span className="font-mono text-[11px]">
-            {counts.captureOne} → C1 · {counts.export} → Export · {counts.pending} pending
+            {counts.captureOne} â†’ C1 Â· {counts.export} â†’ Export Â· {counts.pending} pending
           </span>
         </div>
       </div>
 
       <div
-        className="flex flex-col gap-[10px] p-4 border-l overflow-auto"
+        className="flex flex-col gap-2.5 p-4 border-l overflow-auto"
         style={{
           borderColor: "var(--color-border)",
           background: "var(--color-stage)",
         }}
       >
         <div
-          className="text-[9px] uppercase tracking-[1.2px]"
+          className="text-3xs uppercase tracking-[1.2px]"
           style={{ color: "var(--color-fg-dim)" }}
         >
           Route {hasSelection ? `${selectedIds.size} selected` : `all ${picks.length}`} to
@@ -389,7 +389,7 @@ export function RouteShell() {
           <select
             value={destChoice}
             onChange={(e) => setDestChoice(e.target.value as DestinationId)}
-            className="px-[10px] py-[6px] rounded-xs text-[12px] border cursor-pointer"
+            className="px-2.5 py-1.5 rounded-xs text-xs border cursor-pointer"
             style={{
               background: "var(--color-hover)",
               borderColor: "var(--color-border)",
@@ -405,7 +405,7 @@ export function RouteShell() {
           type="button"
           onClick={() => void applyDestination(destChoice)}
           disabled={actionScopeCount === 0}
-          className="px-[14px] py-[8px] rounded-md text-[12px] font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border-0"
+          className="px-3.5 py-2 rounded-md text-xs font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border-0"
           style={{
             background: "var(--color-accent)",
             color: "var(--color-on-accent)",
@@ -418,7 +418,7 @@ export function RouteShell() {
           type="button"
           onClick={() => void applyDestination("unrouted")}
           disabled={actionScopeCount === 0}
-          className="px-[10px] py-[5px] rounded-xs text-[10px] border bg-transparent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed self-start"
+          className="px-2.5 py-[5px] rounded-xs text-2xs border bg-transparent cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed self-start"
           style={{ borderColor: "var(--color-border)", color: "var(--color-fg-dim)" }}
         >
           Unroute
@@ -427,7 +427,7 @@ export function RouteShell() {
         {counts.captureOne > 0 && (
           <ShipStrip
             title="Ship to Capture One"
-            subtitle="Drag the folder onto Capture One, or use File → Import Images → Choose Folder."
+            subtitle="Drag the folder onto Capture One, or use File â†’ Import Images â†’ Choose Folder."
             count={counts.captureOne}
             accentTone="var(--color-accent-2)"
             onOpenFolder={() => void handleOpenFolder("edit")}

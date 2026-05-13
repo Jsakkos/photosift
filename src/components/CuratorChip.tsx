@@ -1,4 +1,4 @@
-import { useProjectStore } from "../stores/projectStore";
+﻿import { useProjectStore } from "../stores/projectStore";
 import { humanizeCuratorReason } from "../lib/curatorText";
 import { Kbd } from "./primitives";
 
@@ -7,7 +7,7 @@ import { Kbd } from "./primitives";
 /// kept in sync via patchCuratorJudgment after accept/override). When
 /// no judgment exists for the current photo, renders a slim empty-state
 /// hint pointing the user back to the Library (where Curator runs are
-/// kicked off) — this is the "empty state names the right subsystem"
+/// kicked off) â€” this is the "empty state names the right subsystem"
 /// requirement from #17. Press `.` in Triage to accept.
 export function CuratorChip() {
   const judgment = useProjectStore((s) => {
@@ -20,8 +20,8 @@ export function CuratorChip() {
   if (!judgment) {
     return (
       <section
-        aria-label="Curator — no judgment yet"
-        className="rounded-sm px-[10px] py-[8px] text-[11px] leading-snug"
+        aria-label="Curator â€” no judgment yet"
+        className="rounded-sm px-2.5 py-2 text-[11px] leading-snug"
         style={{
           background: "var(--color-bg2)",
           border: "1px dashed var(--color-border)",
@@ -29,12 +29,12 @@ export function CuratorChip() {
         }}
       >
         <span
-          className="font-mono text-[10px] uppercase tracking-[1px] mr-[6px]"
+          className="font-mono text-2xs uppercase tracking-[1px] mr-1.5"
           style={{ color: "var(--color-fg-mute)" }}
         >
           Curator
         </span>
-        No judgment yet — run from the Library card.
+        No judgment yet â€” run from the Library card.
       </section>
     );
   }
@@ -77,20 +77,20 @@ export function CuratorChip() {
       }}
     >
       <header
-        className="px-[10px] py-[6px] flex items-center justify-between gap-2"
+        className="px-2.5 py-1.5 flex items-center justify-between gap-2"
         style={{ borderBottom: "1px solid var(--color-border)" }}
       >
         <div className="flex items-center gap-2 min-w-0">
           <span
-            className="font-mono text-[10px] uppercase tracking-[1px]"
+            className="font-mono text-2xs uppercase tracking-[1px]"
             style={{ color: tone.accent }}
-            title={`Curator (${providerLabel(judgment.provider)} · ${judgment.model})`}
+            title={`Curator (${providerLabel(judgment.provider)} Â· ${judgment.model})`}
           >
-            Curator · {tone.label}
+            Curator Â· {tone.label}
           </span>
           <span
-            title={`${providerLabel(judgment.provider)} · ${judgment.model}`}
-            className="font-mono text-[9px] uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs"
+            title={`${providerLabel(judgment.provider)} Â· ${judgment.model}`}
+            className="font-mono text-3xs uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs"
             style={{
               color: "var(--color-fg-dim)",
               background: "var(--color-bg3)",
@@ -100,7 +100,7 @@ export function CuratorChip() {
           </span>
           {handled ? (
             <span
-              className="font-mono text-[9px] uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs"
+              className="font-mono text-3xs uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs"
               style={{
                 color: "var(--color-fg-dim)",
                 background: "var(--color-bg3)",
@@ -110,7 +110,7 @@ export function CuratorChip() {
             </span>
           ) : judgment.suggestedFlag !== "keep" ? (
             <span
-              className="inline-flex items-center gap-[4px] font-mono text-[10px]"
+              className="inline-flex items-center gap-1 font-mono text-2xs"
               style={{ color: "var(--color-fg-dim)" }}
             >
               <Kbd>.</Kbd>
@@ -118,19 +118,19 @@ export function CuratorChip() {
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-[8px] shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           <span
-            className="font-mono text-[10px] tabular-nums"
+            className="font-mono text-2xs tabular-nums"
             style={{ color: "var(--color-fg-dim)" }}
-            title="composition / aesthetic (0-10) · cluster rank"
+            title="composition / aesthetic (0-10) Â· cluster rank"
           >
             {judgment.composition}/{judgment.aesthetic}
-            {judgment.clusterRank != null && ` · #${judgment.clusterRank}`}
+            {judgment.clusterRank != null && ` Â· #${judgment.clusterRank}`}
           </span>
         </div>
       </header>
       <p
-        className="px-[10px] py-[8px] text-[11px] leading-[1.5]"
+        className="px-2.5 py-2 text-[11px] leading-[1.5]"
         style={{ color: "var(--color-fg)" }}
       >
         {humanizeCuratorReason(

@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from "react";
+﻿import { useRef, useState, useCallback } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
 import { currentPair as bracketCurrentPair } from "../lib/bracket";
@@ -46,7 +46,7 @@ function providerLabel(provider: string): string {
 }
 
 /// Dim footer strip under the image showing the Curator's per-photo take.
-/// Collapses to nothing when there's no judgment — the filename still lives
+/// Collapses to nothing when there's no judgment â€” the filename still lives
 /// in the row above, so an unjudged side just shows filename + stars + pills.
 function CuratorRow({
   judgment,
@@ -65,12 +65,12 @@ function CuratorRow({
       : null;
   return (
     <div
-      className="px-4 py-[6px] border-t flex items-center gap-2 min-w-0"
+      className="px-4 py-1.5 border-t flex items-center gap-2 min-w-0"
       style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
     >
       <span
-        title={`${providerLabel(judgment.provider)} · ${judgment.model}`}
-        className="font-mono text-[9px] uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs shrink-0"
+        title={`${providerLabel(judgment.provider)} Â· ${judgment.model}`}
+        className="font-mono text-3xs uppercase tracking-[0.6px] px-[5px] py-[1px] rounded-xs shrink-0"
         style={{ color: "var(--color-fg-dim)", background: "var(--color-bg3)" }}
       >
         {providerInitial(judgment.provider)}
@@ -84,11 +84,11 @@ function CuratorRow({
       </span>
       {(rank || judgment.isKeeper) && (
         <span
-          className="font-mono text-[9px] tabular-nums shrink-0 ml-auto pl-2"
+          className="font-mono text-3xs tabular-nums shrink-0 ml-auto pl-2"
           style={{ color: "var(--color-fg-mute)" }}
         >
           {rank}
-          {rank && judgment.isKeeper ? " · " : ""}
+          {rank && judgment.isKeeper ? " Â· " : ""}
           {judgment.isKeeper ? "keeper" : ""}
         </span>
       )}
@@ -100,7 +100,7 @@ function ScorePill({ label, value }: { label: string; value: number }) {
   const high = value >= 85;
   return (
     <span
-      className="inline-flex items-center gap-[4px] px-[6px] py-[2px] rounded-xs font-mono text-[9px]"
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs font-mono text-3xs"
       style={{
         background: "rgba(0,0,0,0.45)",
         color: high ? "var(--color-accent-2)" : "var(--color-fg-dim)",
@@ -130,7 +130,7 @@ function ComparePanel({
         style={{ background: "var(--color-stage)" }}
       >
         <span
-          className="font-mono text-[10px] uppercase tracking-[1px]"
+          className="font-mono text-2xs uppercase tracking-[1px]"
           style={{ color: "var(--color-fg-mute)" }}
         >
           no photo
@@ -155,14 +155,14 @@ function ComparePanel({
     >
       <div className="flex-1 relative overflow-hidden">
         <div
-          className="absolute top-3 left-3 z-10 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[1px]"
+          className="absolute top-3 left-3 z-10 flex items-center gap-2 font-mono text-2xs uppercase tracking-[1px]"
           style={{ color: "var(--color-fg-dim)" }}
         >
           <span>{side}</span>
         </div>
         {scale > 1 && (
           <div
-            className="absolute top-3 left-1/2 -translate-x-1/2 z-10 font-mono text-[10px] px-2 py-[2px] rounded-xs"
+            className="absolute top-3 left-1/2 -translate-x-1/2 z-10 font-mono text-2xs px-2 py-0.5 rounded-xs"
             style={{ background: "rgba(0,0,0,0.55)", color: "rgba(255,255,255,0.7)" }}
           >
             {Math.round(scale * 100)}%
@@ -305,50 +305,50 @@ export function ComparisonView() {
         </span>
         {groupOrdinal > 0 && (
           <span
-            className="font-mono text-[10px]"
+            className="font-mono text-2xs"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            · Group G{groupOrdinal} · Round {round} · Pair {pairIdx}/{totalRealPairs}
+            Â· Group G{groupOrdinal} Â· Round {round} Â· Pair {pairIdx}/{totalRealPairs}
           </span>
         )}
         <span
-          className="font-mono text-[10px]"
+          className="font-mono text-2xs"
           style={{ color: "var(--color-fg-mute)" }}
         >
-          · locked zoom {Math.round(transform.scale * 100)}%
+          Â· locked zoom {Math.round(transform.scale * 100)}%
         </span>
         <div className="flex-1" />
-        <div className="flex items-center gap-[8px]">
+        <div className="flex items-center gap-2">
           <Kbd>1</Kbd>
           <span
-            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            className="font-mono text-2xs uppercase tracking-[0.6px]"
             style={{ color: "var(--color-fg-dim)" }}
           >
             pick L
           </span>
         </div>
-        <div className="flex items-center gap-[8px]">
+        <div className="flex items-center gap-2">
           <Kbd>2</Kbd>
           <span
-            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            className="font-mono text-2xs uppercase tracking-[0.6px]"
             style={{ color: "var(--color-fg-dim)" }}
           >
             pick R
           </span>
         </div>
-        <div className="flex items-center gap-[8px]">
+        <div className="flex items-center gap-2">
           <Kbd>3</Kbd>
           <span
-            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            className="font-mono text-2xs uppercase tracking-[0.6px]"
             style={{ color: "var(--color-accent-2)" }}
           >
             both
           </span>
         </div>
-        <div className="flex items-center gap-[8px]">
+        <div className="flex items-center gap-2">
           <Kbd>Tab</Kbd>
           <span
-            className="font-mono text-[10px] uppercase tracking-[0.6px]"
+            className="font-mono text-2xs uppercase tracking-[0.6px]"
             style={{ color: "var(--color-fg-dim)" }}
           >
             single
@@ -395,8 +395,8 @@ export function ComparisonView() {
         className="h-10 flex items-center px-4 gap-4 shrink-0 border-t"
         style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
       >
-        <span className="font-mono text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
-          Winner(s) promoted · pan + zoom synchronised
+        <span className="font-mono text-2xs" style={{ color: "var(--color-fg-dim)" }}>
+          Winner(s) promoted Â· pan + zoom synchronised
         </span>
         <div className="flex-1" />
       </div>

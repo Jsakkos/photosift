@@ -1,4 +1,4 @@
-import { useRef } from "react";
+﻿import { useRef } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useModalA11y } from "../hooks/useModalA11y";
 import type { Settings } from "../stores/settingsStore";
@@ -11,7 +11,7 @@ import { Kbd } from "./primitives";
 /// the shortcuts overlay flips the `onboarded*` flags back to false.
 ///
 /// Copy is kept in sync with the keyboard map in `PhotoSift_Spec.md`
-/// and the shortcuts overlay — if a binding changes, update all three.
+/// and the shortcuts overlay â€” if a binding changes, update all three.
 
 interface ViewGuide {
   /// The settings flag that gates this view's modal.
@@ -22,7 +22,7 @@ interface ViewGuide {
   blurb: string;
   /// Primary actions: each `keys` renders as a row of <Kbd>.
   keys: { keys: string[]; label: string }[];
-  /// What "done" looks like — what flows you to the next stage.
+  /// What "done" looks like â€” what flows you to the next stage.
   done: string;
 }
 
@@ -30,7 +30,7 @@ const GUIDES: Record<CullView, ViewGuide> = {
   triage: {
     flag: "onboardedTriage",
     eyebrow: "Pass 1",
-    title: "Triage — keep or toss?",
+    title: "Triage â€” keep or toss?",
     blurb:
       "The fast first pass: one keep/toss decision per photo. Near-duplicate bursts collapse to a single thumbnail, so one keystroke can decide the whole burst.",
     keys: [
@@ -39,29 +39,29 @@ const GUIDES: Record<CullView, ViewGuide> = {
       { keys: ["Space"], label: "Skip to next unreviewed" },
       { keys: ["Shift", "P"], label: "Keep everything in this group" },
     ],
-    done: "Done when every photo is reviewed — your kept photos then flow into Select.",
+    done: "Done when every photo is reviewed â€” your kept photos then flow into Select.",
   },
   select: {
     flag: "onboardedSelect",
     eyebrow: "Pass 2",
-    title: "Select — which are the best?",
+    title: "Select â€” which are the best?",
     blurb:
-      "Narrow your keepers down through rating passes: rate the ones worth keeping at ★1, raise the floor so only ★1+ show, rate the best of those at ★2, and on up to ★5.",
+      "Narrow your keepers down through rating passes: rate the ones worth keeping at â˜…1, raise the floor so only â˜…1+ show, rate the best of those at â˜…2, and on up to â˜…5.",
     keys: [
-      { keys: ["1"], label: "Rate ★1 (through ★5)" },
+      { keys: ["1"], label: "Rate â˜…1 (through â˜…5)" },
       { keys: ["]"], label: "Raise the pass floor" },
       { keys: ["["], label: "Lower the pass floor" },
       { keys: ["Tab"], label: "2-up comparison" },
       { keys: ["X"], label: "Reject (out of Select)" },
     ],
-    done: "Done when you've visited every pick and raised the floor at least once — your picks then flow into Route.",
+    done: "Done when you've visited every pick and raised the floor at least once â€” your picks then flow into Route.",
   },
   route: {
     flag: "onboardedRoute",
     eyebrow: "Pass 3",
-    title: "Route — edit, or publish as-is?",
+    title: "Route â€” edit, or publish as-is?",
     blurb:
-      "Give each pick a destination: into your editor (Capture One / DxO) for work, or straight to publish. Route is mouse-driven — select photos, then pick a destination from the Route dropdown.",
+      "Give each pick a destination: into your editor (Capture One / DxO) for work, or straight to publish. Route is mouse-driven â€” select photos, then pick a destination from the Route dropdown.",
     keys: [],
     done: "Done when every pick has a destination.",
   },
@@ -113,12 +113,12 @@ export function FirstRunModal({ view }: { view: CullView }) {
           style={{ borderColor: "var(--color-border)" }}
         >
           <div
-            className="text-[9px] uppercase tracking-[1.4px]"
+            className="text-3xs uppercase tracking-[1.4px]"
             style={{ color: "var(--color-fg-dim)" }}
           >
             {guide.eyebrow}
           </div>
-          <div className="text-[16px] font-semibold mt-[2px]">{guide.title}</div>
+          <div className="text-base font-semibold mt-0.5">{guide.title}</div>
         </div>
 
         <div className="px-5 py-4 flex flex-col gap-4">
@@ -127,9 +127,9 @@ export function FirstRunModal({ view }: { view: CullView }) {
           </p>
 
           {guide.keys.length > 0 && (
-            <div className="flex flex-col gap-[6px]">
+            <div className="flex flex-col gap-1.5">
               {guide.keys.map((row, i) => (
-                <div key={i} className="flex items-center justify-between gap-3 text-[12px]">
+                <div key={i} className="flex items-center justify-between gap-3 text-xs">
                   <span style={{ color: "var(--color-fg)" }}>{row.label}</span>
                   <span className="flex items-center gap-[3px]">
                     {row.keys.map((k, ki) => (
@@ -142,7 +142,7 @@ export function FirstRunModal({ view }: { view: CullView }) {
           )}
 
           <p
-            className="text-[12px] leading-relaxed pt-2 border-t"
+            className="text-xs leading-relaxed pt-2 border-t"
             style={{
               color: "var(--color-fg-dim)",
               borderColor: "var(--color-border)",
@@ -162,10 +162,10 @@ export function FirstRunModal({ view }: { view: CullView }) {
           <button
             type="button"
             onClick={dismiss}
-            className="text-[12px] px-3 py-1.5 rounded-sm cursor-pointer border-0"
+            className="text-xs px-3 py-1.5 rounded-sm cursor-pointer border-0"
             style={{ background: "var(--color-accent-blue)", color: "#fff" }}
           >
-            Got it · <Kbd>Esc</Kbd>
+            Got it Â· <Kbd>Esc</Kbd>
           </button>
         </div>
       </div>

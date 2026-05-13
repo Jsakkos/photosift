@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -139,14 +139,14 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
           checked={selectSubset}
           onChange={toggleSelectSubset}
           disabled={scanning}
-          className="mt-[2px] cursor-pointer"
+          className="mt-0.5 cursor-pointer"
         />
         <div>
-          <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+          <div className="text-xs" style={{ color: "var(--color-fg)" }}>
             Select subset
           </div>
-          <div className="text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
-            Load thumbnails so you can deselect unwanted photos. Off by default —
+          <div className="text-2xs" style={{ color: "var(--color-fg-dim)" }}>
+            Load thumbnails so you can deselect unwanted photos. Off by default â€”
             embedded previews take a while on RAW folders.
           </div>
         </div>
@@ -154,7 +154,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
 
       {scanning && (
         <div
-          className="mb-3 p-[10px] rounded-md text-[11px] font-mono"
+          className="mb-3 p-2.5 rounded-md text-[11px] font-mono"
           style={{
             background: "var(--color-bg3)",
             border: "1px solid var(--color-border)",
@@ -163,25 +163,25 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
         >
           {progress
             ? selectSubset
-              ? `Loading thumbnails… ${progress.done} of ${progress.total}`
-              : `Scanning folder… ${progress.done} of ${progress.total}`
-            : "Scanning folder…"}
+              ? `Loading thumbnailsâ€¦ ${progress.done} of ${progress.total}`
+              : `Scanning folderâ€¦ ${progress.done} of ${progress.total}`
+            : "Scanning folderâ€¦"}
         </div>
       )}
 
       {entries !== null && entries.length > 0 && !selectSubset && (
         <div
-          className="mb-3 p-[10px] rounded-md"
+          className="mb-3 p-2.5 rounded-md"
           style={{ background: "var(--color-bg3)" }}
         >
-          <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+          <div className="text-xs" style={{ color: "var(--color-fg)" }}>
             {entries.length} {entries.length === 1 ? "photo" : "photos"} ready to import
           </div>
           <div
-            className="text-[11px] mt-[2px] font-mono"
+            className="text-[11px] mt-0.5 font-mono"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            {formatBytes(totalBytes)} · everything under the source folder will be imported
+            {formatBytes(totalBytes)} Â· everything under the source folder will be imported
           </div>
         </div>
       )}
@@ -189,7 +189,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
       {entries !== null && entries.length > 0 && selectSubset && (
         <div className="mb-3">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[12px]" style={{ color: "var(--color-fg-dim)" }}>
+            <div className="text-xs" style={{ color: "var(--color-fg-dim)" }}>
               {selected.size} of {entries.length} selected
               <span className="ml-2 opacity-60">({formatBytes(totalBytes)})</span>
             </div>
@@ -197,7 +197,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
               <button
                 type="button"
                 onClick={selectAll}
-                className="px-[8px] py-[3px] rounded-xs text-[11px] cursor-pointer"
+                className="px-2 py-[3px] rounded-xs text-[11px] cursor-pointer"
                 style={{
                   background: "var(--color-bg3)",
                   color: "var(--color-fg)",
@@ -209,7 +209,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
               <button
                 type="button"
                 onClick={selectNone}
-                className="px-[8px] py-[3px] rounded-xs text-[11px] cursor-pointer"
+                className="px-2 py-[3px] rounded-xs text-[11px] cursor-pointer"
                 style={{
                   background: "var(--color-bg3)",
                   color: "var(--color-fg)",
@@ -220,7 +220,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
               </button>
             </div>
           </div>
-          <p className="text-[10px] mb-2" style={{ color: "var(--color-fg-mute)" }}>
+          <p className="text-2xs mb-2" style={{ color: "var(--color-fg-mute)" }}>
             Click to toggle. Shift-click to toggle a range.
           </p>
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 max-h-[50vh] overflow-y-auto pr-1">
@@ -238,7 +238,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
                       ? "var(--color-accent-blue)"
                       : "transparent",
                   }}
-                  title={`${entry.filename} · ${formatBytes(entry.fileSizeBytes)}${entry.capturedAt ? ` · ${entry.capturedAt}` : ""}`}
+                  title={`${entry.filename} Â· ${formatBytes(entry.fileSizeBytes)}${entry.capturedAt ? ` Â· ${entry.capturedAt}` : ""}`}
                 >
                   {entry.thumbDataUrl ? (
                     <img
@@ -250,7 +250,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
                     />
                   ) : (
                     <div
-                      className="w-full h-full flex items-center justify-center text-[10px] px-1 text-center"
+                      className="w-full h-full flex items-center justify-center text-2xs px-1 text-center"
                       style={{
                         background: "var(--color-bg3)",
                         color: "var(--color-fg-dim)",
@@ -261,10 +261,10 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
                   )}
                   {isSelected && (
                     <div
-                      className="absolute top-1 right-1 w-4 h-4 rounded-full text-white text-[10px] flex items-center justify-center font-bold"
+                      className="absolute top-1 right-1 w-4 h-4 rounded-full text-white text-2xs flex items-center justify-center font-bold"
                       style={{ background: "var(--color-accent-blue)" }}
                     >
-                      ✓
+                      âœ“
                     </div>
                   )}
                 </div>
@@ -275,13 +275,13 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
       )}
 
       {entries !== null && entries.length === 0 && !scanning && (
-        <p className="text-[12px] mb-3" style={{ color: "var(--color-fg-dim)" }}>
+        <p className="text-xs mb-3" style={{ color: "var(--color-fg-dim)" }}>
           No supported image files found in that folder.
         </p>
       )}
 
       {error && (
-        <p className="text-[12px] mb-3" style={{ color: "var(--color-danger)" }}>
+        <p className="text-xs mb-3" style={{ color: "var(--color-danger)" }}>
           {error}
         </p>
       )}

@@ -1,4 +1,4 @@
-type ExifChipProps = {
+﻿type ExifChipProps = {
   shutter?: string | null;
   fstop?: number | string | null;
   iso?: number | null;
@@ -7,7 +7,7 @@ type ExifChipProps = {
 };
 
 function Sep() {
-  return <span className="opacity-40">·</span>;
+  return <span className="opacity-40">Â·</span>;
 }
 
 export function ExifChip({ shutter, fstop, iso, focal, className }: ExifChipProps) {
@@ -23,7 +23,7 @@ export function ExifChip({ shutter, fstop, iso, focal, className }: ExifChipProp
     <div
       className={[
         "inline-flex items-center gap-2",
-        "font-mono text-[10px] text-[rgba(255,255,255,0.8)]",
+        "font-mono text-2xs text-[rgba(255,255,255,0.8)]",
         "bg-black/55 backdrop-blur-sm",
         "px-[7px] py-[3px] rounded-xs",
         className ?? "",

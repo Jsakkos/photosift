@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -66,7 +66,7 @@ const PIPELINE_STAGES: { label: string; phases: string[] }[] = [
   { label: "read EXIF", phases: ["processing"] },
   { label: "p-hash group", phases: ["clustering"] },
   { label: "sharpness", phases: ["finalizing"] },
-  { label: "face · eye · smile", phases: ["finalizing"] },
+  { label: "face Â· eye Â· smile", phases: ["finalizing"] },
 ];
 
 function PipelineRow({
@@ -84,7 +84,7 @@ function PipelineRow({
   return (
     <div>
       <div
-        className="flex justify-between font-mono text-[10px] mb-[3px]"
+        className="flex justify-between font-mono text-2xs mb-[3px]"
         style={{ color: running ? "var(--color-fg)" : "var(--color-fg-dim)" }}
       >
         <span>{label}</span>
@@ -125,7 +125,7 @@ export function ImportDialog({
   const [importMode, setImportMode] = useState<ImportMode>("copy");
   // #4: a single user-controlled toggle for "skip duplicates", applied
   // identically to drive (DateBrowser) and folder (FolderSubsetGrid)
-  // sources. Default ON — matches the pre-#4 implicit behaviour. When OFF,
+  // sources. Default ON â€” matches the pre-#4 implicit behaviour. When OFF,
   // the backend bypasses the cross-shoot hash check; the per-shoot
   // UNIQUE constraint still blocks same-shoot duplicates.
   const [skipDuplicates, setSkipDuplicates] = useState(true);
@@ -136,7 +136,7 @@ export function ImportDialog({
   const initialDriveAppliedRef = useRef(false);
 
   // Escape / focus-trap / focus-restore for the dialog. Disabled while an
-  // import is running — closing mid-run has its own Cancel control.
+  // import is running â€” closing mid-run has its own Cancel control.
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalA11y(dialogRef, onClose, !importing);
 
@@ -180,7 +180,7 @@ export function ImportDialog({
       .catch(() => setCuratorReady(false));
   }, [curatorProvider, settings.curatorModelLocal]);
   // When prerequisites aren't met, force the checkbox off regardless of
-  // the saved default — we can't run the curator without them.
+  // the saved default â€” we can't run the curator without them.
   useEffect(() => {
     if (!curatorReady && curatorEnabled) setCuratorEnabled(false);
   }, [curatorReady, curatorEnabled]);
@@ -242,12 +242,12 @@ export function ImportDialog({
       const shootId = event.payload.shootId;
       if (addMode) {
         // Adding a batch can change cluster membership and stale any cached
-        // Curator judgments — offer a one-click re-run if there are any.
+        // Curator judgments â€” offer a one-click re-run if there are any.
         getCuratorJudgmentsForShoot(shootId)
           .then((judgments) => {
             if (judgments.length === 0) return;
             setToast(
-              `Added ${event.payload.photoCount} photo${event.payload.photoCount === 1 ? "" : "s"} — Curator judgments may be stale.`,
+              `Added ${event.payload.photoCount} photo${event.payload.photoCount === 1 ? "" : "s"} â€” Curator judgments may be stale.`,
               "info",
               {
                 label: "Re-run Curator",
@@ -264,7 +264,7 @@ export function ImportDialog({
         // Auto-start the curator on the new shoot if the user opted in
         // for this import. Read the ref so we don't capture stale state.
         startCuratorForShoot(shootId).catch((e) => {
-          // Don't block import success on curator start failure —
+          // Don't block import success on curator start failure â€”
           // surface the error but let the import flow proceed.
           console.error("Failed to start curator:", e);
         });
@@ -392,7 +392,7 @@ export function ImportDialog({
       >
         <div
           id="import-dialog-title"
-          className="text-[14px] font-semibold mb-4"
+          className="text-sm font-semibold mb-4"
           style={{ color: "var(--color-fg)" }}
         >
           {addMode ? `Add photos to ${targetShoot!.slug}` : "Import"}
@@ -430,11 +430,11 @@ export function ImportDialog({
 
             {!source && (
               <div
-                className="text-[12px] py-6 px-3"
+                className="text-xs py-6 px-3"
                 style={{ color: "var(--color-fg-dim)" }}
               >
                 Pick a source above to begin. PhotoSift detects SD cards and
-                external drives automatically — they'll appear here within a few
+                external drives automatically â€” they'll appear here within a few
                 seconds of plugging in.
               </div>
             )}
@@ -442,7 +442,7 @@ export function ImportDialog({
             {source?.kind === "folder" && !addMode && (
               <div className="mb-4 mt-4">
                 <div
-                  className="text-[11px] mb-[6px]"
+                  className="text-[11px] mb-1.5"
                   style={{ color: "var(--color-fg-dim)" }}
                 >
                   Import mode
@@ -454,13 +454,13 @@ export function ImportDialog({
                     value="copy"
                     checked={importMode === "copy"}
                     onChange={() => setImportMode("copy")}
-                    className="mt-[2px]"
+                    className="mt-0.5"
                   />
                   <div>
-                    <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+                    <div className="text-xs" style={{ color: "var(--color-fg)" }}>
                       Copy to library
                     </div>
-                    <div className="text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
+                    <div className="text-2xs" style={{ color: "var(--color-fg-dim)" }}>
                       Files are copied into a canonical folder under the library
                       root.
                     </div>
@@ -473,13 +473,13 @@ export function ImportDialog({
                     value="in_place"
                     checked={importMode === "in_place"}
                     onChange={() => setImportMode("in_place")}
-                    className="mt-[2px]"
+                    className="mt-0.5"
                   />
                   <div>
-                    <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+                    <div className="text-xs" style={{ color: "var(--color-fg)" }}>
                       Import in-place
                     </div>
-                    <div className="text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
+                    <div className="text-2xs" style={{ color: "var(--color-fg-dim)" }}>
                       Register files where they are. XMP sidecars land next to
                       the originals on export.
                     </div>
@@ -490,7 +490,7 @@ export function ImportDialog({
 
             {error && (
               <p
-                className="text-[12px] mt-3 mb-2"
+                className="text-xs mt-3 mb-2"
                 style={{ color: "var(--color-danger)" }}
               >
                 {error}
@@ -503,19 +503,19 @@ export function ImportDialog({
                   type="checkbox"
                   checked={skipDuplicates}
                   onChange={(e) => setSkipDuplicates(e.target.checked)}
-                  className="mt-[2px] cursor-pointer"
+                  className="mt-0.5 cursor-pointer"
                 />
                 <div>
-                  <div className="text-[12px]" style={{ color: "var(--color-fg)" }}>
+                  <div className="text-xs" style={{ color: "var(--color-fg)" }}>
                     Skip duplicates
                   </div>
                   <div
-                    className="text-[10px]"
+                    className="text-2xs"
                     style={{ color: "var(--color-fg-dim)" }}
                   >
                     {skipDuplicates
                       ? "Files already imported in any shoot are skipped."
-                      : "Duplicates can land in this shoot too — the same RAW will live in both shoots."}
+                      : "Duplicates can land in this shoot too â€” the same RAW will live in both shoots."}
                   </div>
                 </div>
               </label>
@@ -537,11 +537,11 @@ export function ImportDialog({
                   checked={curatorEnabled}
                   onChange={(e) => setCuratorEnabled(e.target.checked)}
                   disabled={!curatorReady}
-                  className="mt-[2px] cursor-pointer disabled:cursor-not-allowed"
+                  className="mt-0.5 cursor-pointer disabled:cursor-not-allowed"
                 />
                 <div>
                   <div
-                    className="text-[12px]"
+                    className="text-xs"
                     style={{
                       color: curatorReady
                         ? "var(--color-fg)"
@@ -550,7 +550,7 @@ export function ImportDialog({
                   >
                     Run Curator on import
                     <span
-                      className="ml-2 font-mono text-[10px]"
+                      className="ml-2 font-mono text-2xs"
                       style={{ color: "var(--color-fg-dim)" }}
                     >
                       (via {curatorProviderLabel})
@@ -559,7 +559,7 @@ export function ImportDialog({
                       curatorProvider === "anthropic" &&
                       curatorCostCents !== null && (
                         <span
-                          className="ml-2 font-mono text-[10px]"
+                          className="ml-2 font-mono text-2xs"
                           style={{ color: "var(--color-fg-dim)" }}
                         >
                           (~{formatCostCents(curatorCostCents)} estimated for{" "}
@@ -569,7 +569,7 @@ export function ImportDialog({
                       )}
                   </div>
                   <div
-                    className="text-[10px]"
+                    className="text-2xs"
                     style={{ color: "var(--color-fg-dim)" }}
                   >
                     {curatorReady
@@ -601,7 +601,7 @@ export function ImportDialog({
                 }}
                 readOnly={addMode}
                 placeholder="e.g. 2026-03-05_nikon-d750"
-                className="flex-1 px-[10px] py-[6px] rounded-md text-[12px] font-mono read-only:opacity-70"
+                className="flex-1 px-2.5 py-1.5 rounded-md text-xs font-mono read-only:opacity-70"
                 style={{
                   background: "var(--color-bg3)",
                   border: "1px solid var(--color-border)",
@@ -614,14 +614,14 @@ export function ImportDialog({
               >
                 {selectedPaths.length > 0 && (
                   <>
-                    {selectedPaths.length} · {formatBytes(totalBytes)}
+                    {selectedPaths.length} Â· {formatBytes(totalBytes)}
                   </>
                 )}
               </div>
               <button
                 type="button"
                 onClick={onClose}
-                className="px-[14px] py-[6px] rounded-md text-[12px] cursor-pointer"
+                className="px-3.5 py-1.5 rounded-md text-xs cursor-pointer"
                 style={{
                   background: "transparent",
                   color: "var(--color-fg-dim)",
@@ -634,7 +634,7 @@ export function ImportDialog({
                 type="button"
                 onClick={handleStart}
                 disabled={!source || !slug.trim() || selectedPaths.length === 0}
-                className="px-[14px] py-[6px] rounded-md text-[12px] font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3.5 py-1.5 rounded-md text-xs font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{
                   background: "var(--color-accent-blue)",
                   color: "#fff",
@@ -648,7 +648,7 @@ export function ImportDialog({
         ) : (
           <div>
             <div
-              className="text-[12px] mb-1"
+              className="text-xs mb-1"
               style={{
                 color: cancelling
                   ? "var(--color-danger)"
@@ -656,11 +656,11 @@ export function ImportDialog({
               }}
             >
               {cancelling
-                ? "Cancelling… waiting for in-flight files to finish."
-                : "Processing files…"}
+                ? "Cancellingâ€¦ waiting for in-flight files to finish."
+                : "Processing filesâ€¦"}
             </div>
             <div
-              className="h-1 mt-[10px] rounded-sm overflow-hidden"
+              className="h-1 mt-2.5 rounded-sm overflow-hidden"
               style={{ background: "var(--color-bg3)" }}
             >
               <div
@@ -675,15 +675,15 @@ export function ImportDialog({
               />
             </div>
             <div
-              className="flex justify-between font-mono text-[10px] mt-2"
+              className="flex justify-between font-mono text-2xs mt-2"
               style={{ color: "var(--color-fg-dim)" }}
             >
               <span className="truncate">
                 {progress
                   ? `${progress.current} / ${progress.total}${
-                      progress.currentFilename ? ` · ${progress.currentFilename}` : ""
+                      progress.currentFilename ? ` Â· ${progress.currentFilename}` : ""
                     }`
-                  : "starting…"}
+                  : "startingâ€¦"}
               </span>
               <button
                 type="button"
@@ -699,11 +699,11 @@ export function ImportDialog({
                 className="text-[11px] cursor-pointer bg-transparent border-0 disabled:opacity-50 disabled:cursor-default"
                 style={{ color: "var(--color-danger)" }}
               >
-                {cancelling ? "Cancelling…" : "Cancel import"}
+                {cancelling ? "Cancellingâ€¦" : "Cancel import"}
               </button>
             </div>
             <div
-              className="mt-4 pt-[14px] grid grid-cols-2 gap-[6px]"
+              className="mt-4 pt-3.5 grid grid-cols-2 gap-1.5"
               style={{ borderTop: "1px solid var(--color-border)" }}
             >
               {PIPELINE_STAGES.map((stage) => (

@@ -1,4 +1,4 @@
-import type { CullView } from "../../types";
+﻿import type { CullView } from "../../types";
 
 export type TabId = "library" | CullView;
 
@@ -21,7 +21,7 @@ type TabBarProps = {
 export function TabBar({ activeTab, onSelect, projectName, disabledTabs }: TabBarProps) {
   return (
     <div
-      className="h-10 flex items-center px-4 gap-[2px] border-b shrink-0"
+      className="h-10 flex items-center px-4 gap-0.5 border-b shrink-0"
       style={{ background: "var(--color-bg)", borderColor: "var(--color-border)" }}
     >
       {TABS.map((t) => {
@@ -34,7 +34,7 @@ export function TabBar({ activeTab, onSelect, projectName, disabledTabs }: TabBa
             disabled={disabled}
             tabIndex={-1}
             onClick={() => onSelect(t.id)}
-            className="relative flex items-center gap-2 px-[14px] py-[8px] text-[12px] font-medium bg-transparent border-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+            className="relative flex items-center gap-2 px-3.5 py-2 text-xs font-medium bg-transparent border-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
             style={{
               color: active ? "var(--color-fg)" : "var(--color-fg-dim)",
               borderBottom: active ? "2px solid var(--color-accent-blue)" : "2px solid transparent",
@@ -42,7 +42,7 @@ export function TabBar({ activeTab, onSelect, projectName, disabledTabs }: TabBa
             }}
             aria-pressed={active}
           >
-            <span className="font-mono text-[10px]" style={{ color: "var(--color-fg-mute)" }}>
+            <span className="font-mono text-2xs" style={{ color: "var(--color-fg-mute)" }}>
               {t.number}
             </span>
             {t.label}

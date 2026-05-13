@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAiStore, sharpnessBadgeScore } from "../../stores/aiStore";
@@ -22,7 +22,7 @@ function noteFor(image: ImageEntry, faces: Face[] | null): string {
   else if (sharp > 0) bits.push(`Sharpness ${Math.round(sharp)}/100`);
   if (blinks > 0) bits.push(`${blinks} blink${blinks === 1 ? "" : "s"} detected`);
   if (blurs > 0) bits.push(`${blurs} soft face${blurs === 1 ? "" : "s"}`);
-  return bits.join(" · ");
+  return bits.join(" Â· ");
 }
 
 export function FacesRail() {
@@ -90,14 +90,14 @@ export function FacesRail() {
         borderLeft: "1px solid var(--color-border)",
       }}
     >
-      <div className="px-3 py-[10px] border-b" style={{ borderColor: "var(--color-border)" }}>
+      <div className="px-3 py-2.5 border-b" style={{ borderColor: "var(--color-border)" }}>
         <div
-          className="text-[11px] font-medium flex items-center gap-[6px]"
+          className="text-[11px] font-medium flex items-center gap-1.5"
           style={{ color: "var(--color-fg)" }}
         >
           <span>Faces</span>
           <span
-            className="font-mono text-[9px] uppercase tracking-[0.5px] px-[5px] py-[1px] rounded-xs"
+            className="font-mono text-3xs uppercase tracking-[0.5px] px-[5px] py-[1px] rounded-xs"
             style={{ color: "var(--color-fg-mute)", background: "var(--color-bg2)" }}
             title="Source: local ONNX models (face detect, eye/smile classifiers, sharpness)."
           >
@@ -105,10 +105,10 @@ export function FacesRail() {
           </span>
           {faces !== null && (
             <span
-              className="font-mono text-[10px]"
+              className="font-mono text-2xs"
               style={{ color: "var(--color-fg-mute)" }}
             >
-              · {faces.length} detected
+              Â· {faces.length} detected
             </span>
           )}
         </div>
@@ -117,7 +117,7 @@ export function FacesRail() {
       <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
         {disabled && (
           <div className="text-[11px] py-8 text-center" style={{ color: "var(--color-fg-mute)" }}>
-            On-device AI disabled — enable it in Settings to score this frame.
+            On-device AI disabled â€” enable it in Settings to score this frame.
           </div>
         )}
         {!disabled && !analyzedAt && (
@@ -146,7 +146,7 @@ export function FacesRail() {
         )}
 
         {!disabled && analyzedAt && (
-          <div className="flex flex-col gap-[6px]">
+          <div className="flex flex-col gap-1.5">
             <ScoreBar label="sharp" value={Math.round(sharpness)} tone="accent-2" />
             <ScoreBar label="face" value={topFaceConfidence} tone="accent-2" />
             {showEyes && <ScoreBar label="eye" value={eyeScore} tone="warning" />}
@@ -167,7 +167,7 @@ export function FacesRail() {
       </div>
 
       <div
-        className="shrink-0 px-3 py-[10px] border-t flex items-center justify-end"
+        className="shrink-0 px-3 py-2.5 border-t flex items-center justify-end"
         style={{ borderColor: "var(--color-border)", background: "var(--color-bg)" }}
       >
         <ExifChip

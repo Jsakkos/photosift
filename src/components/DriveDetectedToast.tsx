@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+﻿import { useEffect } from "react";
 import { useDriveDetection } from "../hooks/useDriveDetection";
 import { useImportIntentStore } from "../stores/importIntentStore";
 
@@ -63,7 +63,7 @@ export function DriveDetectedToast() {
             className="text-[11px] font-mono"
             style={{ color: "var(--color-fg-dim)" }}
           >
-            {formatBytes(newlyDetected.totalBytes)} ·{" "}
+            {formatBytes(newlyDetected.totalBytes)} Â·{" "}
             {formatBytes(newlyDetected.availableBytes)} free
           </div>
         </div>
@@ -73,7 +73,7 @@ export function DriveDetectedToast() {
             requestImport(newlyDetected);
             acknowledge();
           }}
-          className="px-3 py-1 rounded-md text-[12px] font-medium cursor-pointer"
+          className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer"
           style={{
             background: "var(--color-accent-blue)",
             color: "#fff",
@@ -86,14 +86,14 @@ export function DriveDetectedToast() {
           type="button"
           onClick={acknowledge}
           aria-label="Dismiss"
-          className="text-[18px] leading-none px-1 cursor-pointer"
+          className="text-lg leading-none px-1 cursor-pointer"
           style={{
             background: "transparent",
             color: "var(--color-fg-mute)",
             border: "none",
           }}
         >
-          ×
+          Ã—
         </button>
       </div>
     </div>

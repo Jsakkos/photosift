@@ -1,4 +1,4 @@
-import {
+﻿import {
   Badge,
   IconBadge,
   ColorLabelChip,
@@ -18,7 +18,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <section className="mb-10">
       <h2
-        className="font-mono text-[10px] uppercase tracking-[1.2px] mb-4"
+        className="font-mono text-2xs uppercase tracking-[1.2px] mb-4"
         style={{ color: "var(--color-fg-mute)" }}
       >
         {title}
@@ -37,7 +37,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   return (
     <div className="flex items-start gap-6 py-2">
       <div
-        className="w-32 shrink-0 font-mono text-[10px] uppercase tracking-[1.2px] pt-1"
+        className="w-32 shrink-0 font-mono text-2xs uppercase tracking-[1.2px] pt-1"
         style={{ color: "var(--color-fg-mute)" }}
       >
         {label}
@@ -95,7 +95,7 @@ export function PrimitivesPage() {
                 <div className="px-3 py-2">
                   <div className="text-[11px]">{name}</div>
                   <div
-                    className="font-mono text-[10px]"
+                    className="font-mono text-2xs"
                     style={{ color: "var(--color-fg-mute)" }}
                   >
                     {varname}
@@ -111,20 +111,20 @@ export function PrimitivesPage() {
             <span>The quick brown fox jumps over the lazy dog</span>
           </Row>
           <Row label="Mono 11px">
-            <span className="font-mono text-[11px]">1/500 · f/2.8 · ISO 400 · 85mm</span>
+            <span className="font-mono text-[11px]">1/500 Â· f/2.8 Â· ISO 400 Â· 85mm</span>
           </Row>
           <Row label="Mono 10px caps">
             <span
-              className="font-mono text-[10px] uppercase tracking-[1.2px]"
+              className="font-mono text-2xs uppercase tracking-[1.2px]"
               style={{ color: "var(--color-fg-dim)" }}
             >
-              Unreviewed · Keep · Toss
+              Unreviewed Â· Keep Â· Toss
             </span>
           </Row>
         </Section>
 
         <Section title="Stars">
-          <Row label="0 · 1 · 2 · 3 · 4 · 5">
+          <Row label="0 Â· 1 Â· 2 Â· 3 Â· 4 Â· 5">
             {[0, 1, 2, 3, 4, 5].map((v) => (
               <Stars key={v} value={v as 0 | 1 | 2 | 3 | 4 | 5} />
             ))}
@@ -139,8 +139,8 @@ export function PrimitivesPage() {
             <Kbd>P</Kbd>
             <Kbd>X</Kbd>
             <Kbd>Space</Kbd>
-            <Kbd>⇧ P</Kbd>
-            <Kbd>⌘ E</Kbd>
+            <Kbd>â‡§ P</Kbd>
+            <Kbd>âŒ˜ E</Kbd>
             <Kbd>Z</Kbd>
             <Kbd>Tab</Kbd>
             <Kbd>[</Kbd>
@@ -173,11 +173,11 @@ export function PrimitivesPage() {
               <Badge key={t} tone={t} variant="soft">{t}</Badge>
             ))}
           </Row>
-          <Row label="glass · sm">
+          <Row label="glass Â· sm">
             <div className="flex items-center gap-3 px-3 py-2 rounded-xs" style={{ background: "var(--color-stage)" }}>
-              <Badge tone="star" variant="glass" size="sm">★★★</Badge>
-              <Badge tone="accent-2" variant="glass" size="sm">→ C1</Badge>
-              <Badge tone="accent" variant="glass" size="sm">→ Exp</Badge>
+              <Badge tone="star" variant="glass" size="sm">â˜…â˜…â˜…</Badge>
+              <Badge tone="accent-2" variant="glass" size="sm">â†’ C1</Badge>
+              <Badge tone="accent" variant="glass" size="sm">â†’ Exp</Badge>
               <Badge tone="neutral" variant="glass" size="sm">+4</Badge>
             </div>
           </Row>
@@ -186,11 +186,11 @@ export function PrimitivesPage() {
             <Badge variant="surface" size="sm">override</Badge>
           </Row>
           <Row label="IconBadge">
-            <IconBadge tone="success">✓</IconBadge>
-            <IconBadge tone="danger">✕</IconBadge>
-            <IconBadge tone="warning">◑</IconBadge>
-            <IconBadge tone="success" size="sm">·</IconBadge>
-            <IconBadge variant="surface">🐾</IconBadge>
+            <IconBadge tone="success">âœ“</IconBadge>
+            <IconBadge tone="danger">âœ•</IconBadge>
+            <IconBadge tone="warning">â—‘</IconBadge>
+            <IconBadge tone="success" size="sm">Â·</IconBadge>
+            <IconBadge variant="surface">ðŸ¾</IconBadge>
           </Row>
         </Section>
 
@@ -224,9 +224,9 @@ export function PrimitivesPage() {
               <ColorLabelChip key={c} color={c} />
             ))}
           </Row>
-          <Row label="Row · interactive">
+          <Row label="Row Â· interactive">
             <ColorLabelRow value={labelValue} onChange={setLabelValue} />
-            <span className="font-mono text-[10px]" style={{ color: "var(--color-fg-dim)" }}>
+            <span className="font-mono text-2xs" style={{ color: "var(--color-fg-dim)" }}>
               value = {labelValue ?? "null"}
             </span>
           </Row>

@@ -1,7 +1,7 @@
-import type { CSSProperties, ReactNode } from "react";
+﻿import type { CSSProperties, ReactNode } from "react";
 
-/// Shared chip / icon-tile primitive. Every small status marker in the app —
-/// AI verdicts, sharpness pills, destination tags, star overlays, EXIF — should
+/// Shared chip / icon-tile primitive. Every small status marker in the app â€”
+/// AI verdicts, sharpness pills, destination tags, star overlays, EXIF â€” should
 /// route through here so radius / padding / font / corner-offset stay uniform.
 /// Geometry follows the design handoff: 2px radius for chips, 1px hairline
 /// borders, JetBrains Mono, fixed corner offset (4px) for overlay badges.
@@ -15,9 +15,9 @@ export type BadgeTone =
   | "star"
   | "neutral";
 
-/// `solid` — filled tone, near-black text. `soft` — tinted tone + hairline,
-/// tone text. `glass` — translucent black for over-photo overlays, tone text.
-/// `surface` — neutral elevated chip (bg3 + hairline), ignores `tone`.
+/// `solid` â€” filled tone, near-black text. `soft` â€” tinted tone + hairline,
+/// tone text. `glass` â€” translucent black for over-photo overlays, tone text.
+/// `surface` â€” neutral elevated chip (bg3 + hairline), ignores `tone`.
 export type BadgeVariant = "solid" | "soft" | "glass" | "surface";
 
 export type BadgePos = "tl" | "tr" | "bl" | "br";
@@ -71,7 +71,7 @@ export function surfaceStyleFor(tone: BadgeTone, variant: BadgeVariant): CSSProp
 type BadgeProps = {
   tone?: BadgeTone;
   variant?: BadgeVariant;
-  /// `xs` ≈ 9px text (overlay chips), `sm` ≈ 10px text (inline chips).
+  /// `xs` â‰ˆ 9px text (overlay chips), `sm` â‰ˆ 10px text (inline chips).
   size?: "xs" | "sm";
   pos?: BadgePos;
   className?: string;
@@ -92,7 +92,7 @@ export function Badge({
   ...aria
 }: BadgeProps) {
   const sizeClass =
-    size === "xs" ? "text-[9px] px-[5px] py-[2px]" : "text-[10px] px-[6px] py-[3px]";
+    size === "xs" ? "text-3xs px-[5px] py-0.5" : "text-2xs px-1.5 py-[3px]";
   return (
     <span
       className={[
