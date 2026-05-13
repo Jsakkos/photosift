@@ -66,17 +66,18 @@ jobs:
           }
           $major = $full.Split('.')[0]
           # Pin to the latest msedgedriver for that major so a minor drift on
-          # the runner doesn't break us. The LATEST_RELEASE_* files are tiny
-          # text blobs (often UTF-16 + BOM) — strip everything but digits/dots.
-          # If that lookup fails, fall back to the exact runtime version.
+          # the runner doesn't break us. The LATEST_RELEASE_* blobs are tiny
+          # UTF-16-with-BOM text files — WebClient.DownloadString honours the
+          # BOM; then strip everything but digits/dots. Fall back to the exact
+          # runtime version if the lookup fails or yields nothing.
           $driverVersion = $null
           try {
-            $resp = Invoke-WebRequest -UseBasicParsing -Uri "https://msedgedriver.microsoft.com/LATEST_RELEASE_${major}_WINDOWS"
-            $driverVersion = ($resp.Content -replace '[^\d\.]', '')
+            $raw = [System.Net.WebClient]::new().DownloadString("https://msedgedriver.microsoft.com/LATEST_RELEASE_${major}_WINDOWS")
+            $driverVersion = ($raw -replace '[^\d\.]', '')
           } catch {
             Write-Host "LATEST_RELEASE_${major}_WINDOWS lookup failed: $_"
           }
-          if (-not $driverVersion) {
+          if (-not ($driverVersion -match '^\d+\.\d+\.\d+\.\d+$')) {
             $driverVersion = $full
             Write-Host "Falling back to exact version $full"
           }
