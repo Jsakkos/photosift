@@ -19,6 +19,7 @@
   --color-accent: #d4a574;
   --color-accent-2: #7fb8d9;
   --color-accent-blue: #4a82d9;
+  --color-accent-blue-hover: #3b6fc4;
   /* Near-black text for filled-accent/warning surfaces (the warm tan & yellow
      tones are too light for white text). */
   --color-on-accent: #1a1a1a;
@@ -55,23 +56,6 @@
   --radius-xs: 2px;
   --radius-sm: 3px;
   --radius-md: 4px;
-}
-
-/* Legacy CSS-variable aliases. Many existing components read these names
-   directly (via style={{ background: 'var(--bg-primary)' }}). Aliasing keeps
-   those screens working while Phase 0 rolls out — each screen's owning phase
-   will migrate its consumers onto Tailwind utilities and we can delete this
-   block when no references remain. */
-:root {
-  --bg-primary: var(--color-bg);
-  --bg-secondary: var(--color-bg2);
-  --bg-tertiary: var(--color-bg3);
-  --text-primary: var(--color-fg);
-  --text-secondary: var(--color-fg-dim);
-  --accent: var(--color-accent-blue);
-  --accent-hover: #3b6fc4;
-  --star-filled: var(--color-star);
-  --star-empty: #404040;
 }
 
 body {

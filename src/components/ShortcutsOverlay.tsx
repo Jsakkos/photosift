@@ -129,20 +129,20 @@ export function ShortcutsOverlay() {
       <div
         className="max-w-[880px] max-h-[85vh] overflow-auto rounded-md"
         style={{
-          background: "var(--color-bg2, #181818)",
-          border: "1px solid var(--color-border, rgba(255,255,255,0.1))",
-          color: "var(--color-fg, #e8e8e8)",
+          background: "var(--color-bg2)",
+          border: "1px solid var(--color-border)",
+          color: "var(--color-fg)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
         <div
           className="flex items-center justify-between px-5 py-3 border-b"
-          style={{ borderColor: "var(--color-border, rgba(255,255,255,0.08))" }}
+          style={{ borderColor: "var(--color-border)" }}
         >
           <div>
             <div
               className="text-[9px] uppercase tracking-[1.4px]"
-              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.5))" }}
+              style={{ color: "var(--color-fg-dim)" }}
             >
               Keyboard
             </div>
@@ -155,7 +155,7 @@ export function ShortcutsOverlay() {
               type="button"
               onClick={takeTheTour}
               className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent underline"
-              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
+              style={{ color: "var(--color-fg-dim)" }}
               title="Re-open the three-pass onboarding tour"
             >
               Take the tour
@@ -164,7 +164,7 @@ export function ShortcutsOverlay() {
               type="button"
               onClick={replayTour}
               className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent underline"
-              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
+              style={{ color: "var(--color-fg-dim)" }}
               title="Show the per-view first-run guidance again"
             >
               Replay tour
@@ -173,7 +173,7 @@ export function ShortcutsOverlay() {
               type="button"
               onClick={toggle}
               className="text-[11px] opacity-70 hover:opacity-100 px-2 py-1 rounded-sm cursor-pointer border-0 bg-transparent"
-              style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.6))" }}
+              style={{ color: "var(--color-fg-dim)" }}
               aria-label="Close shortcuts"
             >
               Close · <Kbd>Esc</Kbd>
@@ -189,7 +189,7 @@ export function ShortcutsOverlay() {
             <div key={section.heading}>
               <div
                 className="text-[9px] uppercase tracking-[1.2px] mb-2"
-                style={{ color: "var(--color-fg-dim, rgba(255,255,255,0.5))" }}
+                style={{ color: "var(--color-fg-dim)" }}
               >
                 {section.heading}
               </div>
@@ -199,7 +199,7 @@ export function ShortcutsOverlay() {
                     key={i}
                     className="flex items-center justify-between gap-3 text-[12px]"
                   >
-                    <span style={{ color: "var(--color-fg, #e8e8e8)" }}>
+                    <span style={{ color: "var(--color-fg)" }}>
                       {row.label}
                     </span>
                     <span className="flex items-center gap-[3px]">

@@ -383,11 +383,11 @@ export function SettingsDialog() {
       data-testid="settings-dialog"
       className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
     >
-      <div className="bg-[var(--bg-secondary)] rounded-xl border border-white/10 p-6 w-[640px] max-w-[90vw] max-h-[90vh] overflow-y-auto">
-        <h2 className="text-xl font-medium text-[var(--text-primary)] mb-4">Settings</h2>
+      <div className="bg-bg2 rounded-xl border border-white/10 p-6 w-[640px] max-w-[90vw] max-h-[90vh] overflow-y-auto">
+        <h2 className="text-xl font-medium text-fg mb-4">Settings</h2>
 
         <div className="mb-4">
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             Library root (for copy-mode imports)
           </label>
           <div className="flex gap-2">
@@ -396,12 +396,12 @@ export function SettingsDialog() {
               value={libraryRoot ?? ""}
               readOnly
               placeholder="Default: system Pictures folder"
-              className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm"
+              className="flex-1 px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm"
             />
             <button
               onClick={handleBrowseLibraryRoot}
               title="Pick a library root directory"
-              className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm"
+              className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm"
             >
               Browse
             </button>
@@ -409,13 +409,13 @@ export function SettingsDialog() {
               <button
                 onClick={handleResetLibraryRoot}
                 title="Reset to system default"
-                className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm"
+                className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors text-sm"
               >
                 Reset
               </button>
             )}
           </div>
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
+          <p className="text-xs text-fg-dim mt-1">
             Copy-mode imports create shoots under <code>{"{root}"}/DSLR/YYYY/YYYY-MM_slug/RAW/</code>. In-place imports ignore this.
           </p>
           {libraryRootError && (
@@ -424,7 +424,7 @@ export function SettingsDialog() {
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             Immich ingest folder (for Publish Direct)
           </label>
           <div className="flex gap-2">
@@ -433,12 +433,12 @@ export function SettingsDialog() {
               value={immichPath ?? ""}
               readOnly
               placeholder="Not configured — Publish Direct disabled"
-              className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm"
+              className="flex-1 px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm"
             />
             <button
               onClick={handleBrowseImmichPath}
               title="Pick the Immich ingest directory"
-              className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm"
+              className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm"
             >
               Browse
             </button>
@@ -446,21 +446,21 @@ export function SettingsDialog() {
               <button
                 onClick={handleResetImmichPath}
                 title="Clear (disables Publish Direct)"
-                className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm"
+                className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors text-sm"
               >
                 Reset
               </button>
             )}
           </div>
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
-            Photos flagged with <kbd className="px-1 bg-[var(--bg-tertiary)] rounded">D</kbd> (publish direct) have their cached JPEG copied here. Re-running skips files that already exist.
+          <p className="text-xs text-fg-dim mt-1">
+            Photos flagged with <kbd className="px-1 bg-bg3 rounded">D</kbd> (publish direct) have their cached JPEG copied here. Re-running skips files that already exist.
           </p>
         </div>
 
         <FolderLayoutEditor value={folderTemplate} onChange={setFolderTemplate} />
 
         <div className="mb-4">
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             Near-duplicate threshold (hamming distance, 0–8 typical)
           </label>
           <input
@@ -469,15 +469,15 @@ export function SettingsDialog() {
             max={64}
             value={nearDup}
             onChange={(e) => setNearDup(parseInt(e.target.value) || 0)}
-            className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm"
+            className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm"
           />
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
+          <p className="text-xs text-fg-dim mt-1">
             Lower = stricter. Default 4.
           </p>
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             Related threshold (hamming distance)
           </label>
           <input
@@ -486,15 +486,15 @@ export function SettingsDialog() {
             max={64}
             value={related}
             onChange={(e) => setRelated(parseInt(e.target.value) || 0)}
-            className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm"
+            className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm"
           />
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
+          <p className="text-xs text-fg-dim mt-1">
             Must be ≥ near-duplicate threshold. Default 12.
           </p>
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             Group time window (seconds)
           </label>
           <input
@@ -503,9 +503,9 @@ export function SettingsDialog() {
             max={3600}
             value={timeWindow}
             onChange={(e) => setTimeWindow(parseInt(e.target.value) || 0)}
-            className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm"
+            className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm"
           />
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
+          <p className="text-xs text-fg-dim mt-1">
             Two photos only cluster if their capture times are within this
             gap AND their pHashes are similar. Blocks cross-moment pHash
             false-positives. Default 60. Set to 0 to disable and use
@@ -514,7 +514,7 @@ export function SettingsDialog() {
         </div>
 
         <div className="mb-4">
-          <label className="flex items-center gap-2 text-sm text-[var(--text-primary)] cursor-pointer">
+          <label className="flex items-center gap-2 text-sm text-fg cursor-pointer">
             <input
               type="checkbox"
               checked={selectPick}
@@ -523,13 +523,13 @@ export function SettingsDialog() {
             />
             Select view requires pick (hide unreviewed)
           </label>
-          <p className="text-xs text-[var(--text-secondary)] mt-1 ml-6">
+          <p className="text-xs text-fg-dim mt-1 ml-6">
             When on, photos must pass triage before reaching Select. Off = current behavior (shows picks + unreviewed).
           </p>
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             Route minimum star rating (0 = any)
           </label>
           <input
@@ -538,9 +538,9 @@ export function SettingsDialog() {
             max={5}
             value={routeStar}
             onChange={(e) => setRouteStar(parseInt(e.target.value) || 0)}
-            className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm"
+            className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm"
           />
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
+          <p className="text-xs text-fg-dim mt-1">
             Route view only shows picks rated ≥ N. Default 3. Set to 0 to disable.
           </p>
         </div>
@@ -560,43 +560,43 @@ export function SettingsDialog() {
         )}
 
         {currentShoot && (
-          <div className="mb-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5">
+          <div className="mb-4 p-3 rounded-lg bg-bg border border-white/5">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-[var(--text-secondary)]">
+              <span className="text-sm text-fg-dim">
                 Re-cluster current shoot with these thresholds
               </span>
               <button
                 onClick={handleRecluster}
                 disabled={reclustering || !valid}
-                className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 text-[var(--text-primary)] text-xs transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors disabled:opacity-50"
               >
                 {reclustering ? "Re-clustering..." : "Re-cluster"}
               </button>
             </div>
             {reclusterMsg && (
-              <p className="text-xs text-[var(--accent)] mt-2">{reclusterMsg}</p>
+              <p className="text-xs text-accent-blue mt-2">{reclusterMsg}</p>
             )}
           </div>
         )}
 
         <div className="mb-4 pt-4 border-t border-white/5">
-          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-1">
+          <h3 className="text-sm font-semibold text-fg mb-1">
             On-device AI
           </h3>
-          <p className="text-xs text-[var(--text-secondary)] mb-3">
+          <p className="text-xs text-fg-dim mb-3">
             Local ONNX models. Computes face detection, eye open/closed,
             smile, and sharpness percentile per photo. Feeds the AI-pick
             badge in the grid and the score bars in the faces rail.
           </p>
 
           <div className="mb-3 flex items-center justify-between text-sm">
-            <span className="text-[var(--text-secondary)]">Inference backend</span>
+            <span className="text-fg-dim">Inference backend</span>
             <span className={providerLabel(aiProvider).color}>
               {providerLabel(aiProvider).text}
             </span>
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-[var(--text-primary)] cursor-pointer mb-3">
+          <label className="flex items-center gap-2 text-sm text-fg cursor-pointer mb-3">
             <input
               type="checkbox"
               checked={enableAi}
@@ -605,11 +605,11 @@ export function SettingsDialog() {
             />
             Enable on-device AI on import
           </label>
-          <p className="text-xs text-[var(--text-secondary)] -mt-2 ml-6 mb-3">
+          <p className="text-xs text-fg-dim -mt-2 ml-6 mb-3">
             When on, each import kicks off face + eye + sharpness analysis in the background.
           </p>
 
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             Eye open/closed classifier confidence: {eyeConfidence.toFixed(2)}
           </label>
           <input
@@ -624,51 +624,51 @@ export function SettingsDialog() {
           />
 
           {currentShoot && (
-            <div className="mt-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5">
+            <div className="mt-4 p-3 rounded-lg bg-bg border border-white/5">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-[var(--text-secondary)]">
+                <span className="text-sm text-fg-dim">
                   Re-analyze this shoot with on-device AI
                 </span>
                 <button
                   onClick={handleReanalyze}
                   disabled={reanalyzing}
-                  className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 text-[var(--text-primary)] text-xs transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors disabled:opacity-50"
                 >
                   {reanalyzing ? "Queuing..." : "Re-analyze"}
                 </button>
               </div>
               {reanalyzeMsg && (
-                <p className="text-xs text-[var(--accent)] mt-2">{reanalyzeMsg}</p>
+                <p className="text-xs text-accent-blue mt-2">{reanalyzeMsg}</p>
               )}
             </div>
           )}
         </div>
 
         <div className="mb-4 pt-4 border-t border-white/5">
-          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-1">
+          <h3 className="text-sm font-semibold text-fg mb-1">
             Curator (cloud)
           </h3>
-          <p className="text-xs text-[var(--text-secondary)] mb-3">
+          <p className="text-xs text-fg-dim mb-3">
             Compositional and aesthetic judgment via a vision LLM (Anthropic,
             Gemini, or a local OpenAI-compatible endpoint). Computes a
             per-photo keep/toss recommendation, cluster rank, and a written
             reason. Accept with{" "}
-            <kbd className="px-1 bg-[var(--bg-tertiary)] rounded">.</kbd> in Triage.
+            <kbd className="px-1 bg-bg3 rounded">.</kbd> in Triage.
             Cloud keys are stored in the OS keychain — never written to the database.
           </p>
 
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             Provider
           </label>
-          <div className="flex gap-1 mb-3 p-1 rounded-lg bg-[var(--bg-primary)] border border-white/10">
+          <div className="flex gap-1 mb-3 p-1 rounded-lg bg-bg border border-white/10">
             {(["anthropic", "gemini", "local"] as const).map((p) => (
               <button
                 key={p}
                 onClick={() => setCuratorProvider(p)}
                 className={`flex-1 px-3 py-1.5 rounded text-sm transition-colors ${
                   curatorProvider === p
-                    ? "bg-[var(--accent)] text-white"
-                    : "text-[var(--text-secondary)] hover:bg-white/5"
+                    ? "bg-accent-blue text-white"
+                    : "text-fg-dim hover:bg-white/5"
                 }`}
               >
                 {providerName(p)}
@@ -678,7 +678,7 @@ export function SettingsDialog() {
 
           {curatorProvider === "anthropic" && (
             <>
-              <label className="block text-sm text-[var(--text-secondary)] mb-1">
+              <label className="block text-sm text-fg-dim mb-1">
                 Anthropic API key
               </label>
               <div className="flex gap-2 mb-1">
@@ -687,7 +687,7 @@ export function SettingsDialog() {
                     type="text"
                     value={`••••••••${keyStatusAnthropic.suffix}`}
                     readOnly
-                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-secondary)] border border-white/10 text-sm font-mono"
+                    className="flex-1 px-3 py-2 rounded-lg bg-bg text-fg-dim border border-white/10 text-sm font-mono"
                   />
                 ) : (
                   <input
@@ -695,7 +695,7 @@ export function SettingsDialog() {
                     value={newKey}
                     onChange={(e) => setNewKey(e.target.value)}
                     placeholder="sk-ant-..."
-                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm font-mono"
+                    className="flex-1 px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm font-mono"
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -705,14 +705,14 @@ export function SettingsDialog() {
                     <button
                       onClick={handleTestConnection}
                       disabled={keyBusy}
-                      className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                      className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
                     >
                       Test
                     </button>
                     <button
                       onClick={handleClearKey}
                       disabled={keyBusy}
-                      className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                      className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
                     >
                       Replace
                     </button>
@@ -721,20 +721,20 @@ export function SettingsDialog() {
                   <button
                     onClick={handleSaveKey}
                     disabled={keyBusy || !newKey.trim()}
-                    className="px-3 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm transition-colors disabled:opacity-50"
+                    className="px-3 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white text-sm transition-colors disabled:opacity-50"
                   >
                     Save
                   </button>
                 )}
               </div>
 
-              <label className="block text-sm text-[var(--text-secondary)] mb-1 mt-3">
+              <label className="block text-sm text-fg-dim mb-1 mt-3">
                 Model
               </label>
               <select
                 value={modelAnthropic}
                 onChange={(e) => setModelAnthropic(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm mb-1"
+                className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm mb-1"
               >
                 <option value="claude-sonnet-4-6">claude-sonnet-4-6 (recommended)</option>
                 <option value="claude-opus-4-7">claude-opus-4-7 (more thorough, ~5× cost)</option>
@@ -745,7 +745,7 @@ export function SettingsDialog() {
 
           {curatorProvider === "gemini" && (
             <>
-              <label className="block text-sm text-[var(--text-secondary)] mb-1">
+              <label className="block text-sm text-fg-dim mb-1">
                 Gemini API key
               </label>
               <div className="flex gap-2 mb-1">
@@ -754,7 +754,7 @@ export function SettingsDialog() {
                     type="text"
                     value={`••••••••${keyStatusGemini.suffix}`}
                     readOnly
-                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-secondary)] border border-white/10 text-sm font-mono"
+                    className="flex-1 px-3 py-2 rounded-lg bg-bg text-fg-dim border border-white/10 text-sm font-mono"
                   />
                 ) : (
                   <input
@@ -762,7 +762,7 @@ export function SettingsDialog() {
                     value={newKey}
                     onChange={(e) => setNewKey(e.target.value)}
                     placeholder="AIza..."
-                    className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm font-mono"
+                    className="flex-1 px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm font-mono"
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -772,14 +772,14 @@ export function SettingsDialog() {
                     <button
                       onClick={handleTestConnection}
                       disabled={keyBusy}
-                      className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                      className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
                     >
                       Test
                     </button>
                     <button
                       onClick={handleClearKey}
                       disabled={keyBusy}
-                      className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                      className="px-3 py-2 rounded-lg bg-bg3 text-fg-dim hover:text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
                     >
                       Replace
                     </button>
@@ -788,20 +788,20 @@ export function SettingsDialog() {
                   <button
                     onClick={handleSaveKey}
                     disabled={keyBusy || !newKey.trim()}
-                    className="px-3 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm transition-colors disabled:opacity-50"
+                    className="px-3 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white text-sm transition-colors disabled:opacity-50"
                   >
                     Save
                   </button>
                 )}
               </div>
 
-              <label className="block text-sm text-[var(--text-secondary)] mb-1 mt-3">
+              <label className="block text-sm text-fg-dim mb-1 mt-3">
                 Model
               </label>
               <select
                 value={modelGemini}
                 onChange={(e) => setModelGemini(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm mb-1"
+                className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm mb-1"
               >
                 <option value="gemini-2.5-flash">gemini-2.5-flash (recommended)</option>
                 <option value="gemini-2.5-pro">gemini-2.5-pro (more thorough, ~5× cost)</option>
@@ -812,7 +812,7 @@ export function SettingsDialog() {
 
           {curatorProvider === "local" && (
             <>
-              <label className="block text-sm text-[var(--text-secondary)] mb-1">
+              <label className="block text-sm text-fg-dim mb-1">
                 Base URL
               </label>
               <div className="flex gap-2 mb-3">
@@ -822,22 +822,22 @@ export function SettingsDialog() {
                   onChange={(e) => setLocalBaseUrl(e.target.value)}
                   placeholder="http://localhost:11434/v1"
                   spellCheck={false}
-                  className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm font-mono"
+                  className="flex-1 px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm font-mono"
                 />
                 <button
                   onClick={handleTestConnection}
                   disabled={keyBusy || !modelLocal.trim() || !localBaseUrl.trim()}
-                  className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+                  className="px-3 py-2 rounded-lg bg-bg3 text-fg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
                 >
                   Test
                 </button>
               </div>
-              <p className="text-xs text-[var(--text-secondary)] -mt-2 mb-3">
+              <p className="text-xs text-fg-dim -mt-2 mb-3">
                 Works with Ollama, LM Studio, vLLM, llama.cpp server, or anything that
                 speaks the OpenAI Chat Completions API.
               </p>
 
-              <label className="block text-sm text-[var(--text-secondary)] mb-1">
+              <label className="block text-sm text-fg-dim mb-1">
                 Model
               </label>
               <input
@@ -846,14 +846,14 @@ export function SettingsDialog() {
                 onChange={(e) => setModelLocal(e.target.value)}
                 placeholder="qwen2-vl:7b · llava:13b · llama3.2-vision:11b"
                 spellCheck={false}
-                className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm font-mono mb-1"
+                className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm font-mono mb-1"
               />
             </>
           )}
 
-          {keyMsg && <p className="text-xs text-[var(--accent)] mb-3 mt-2">{keyMsg}</p>}
+          {keyMsg && <p className="text-xs text-accent-blue mb-3 mt-2">{keyMsg}</p>}
 
-          <label className="flex items-center gap-2 text-sm text-[var(--text-primary)] cursor-pointer mt-3 mb-1">
+          <label className="flex items-center gap-2 text-sm text-fg cursor-pointer mt-3 mb-1">
             <input
               type="checkbox"
               checked={curatorRunOnImport}
@@ -863,14 +863,14 @@ export function SettingsDialog() {
             />
             Run Curator on import (default for new shoots)
           </label>
-          <p className="text-xs text-[var(--text-secondary)] -mt-1 ml-6 mb-3">
+          <p className="text-xs text-fg-dim -mt-1 ml-6 mb-3">
             Per-shoot toggle in the import dialog can override this default.
             {curatorProvider === "local"
               ? " Disabled until a model name is set."
               : " Disabled until an API key is configured."}
           </p>
 
-          <label className="block text-sm text-[var(--text-secondary)] mb-1">
+          <label className="block text-sm text-fg-dim mb-1">
             {curatorProvider === "local" ? "Max cost per shoot ($, ignored for local)" : "Max cost per shoot ($)"}
           </label>
           <input
@@ -880,23 +880,23 @@ export function SettingsDialog() {
             value={curatorMaxCostDollars}
             onChange={(e) => setCuratorMaxCostDollars(e.target.value)}
             disabled={curatorProvider === "local"}
-            className="w-full px-3 py-2 rounded-lg bg-[var(--bg-primary)] text-[var(--text-primary)] border border-white/10 text-sm disabled:opacity-50"
+            className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm disabled:opacity-50"
           />
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
+          <p className="text-xs text-fg-dim mt-1">
             {curatorProvider === "local"
               ? "Local inference is free; cap is inert. Token counts are tracked instead."
               : "Worker stops dispatching new calls once this is exceeded; in-flight calls finish. Default $5.00."}
           </p>
 
           {currentShoot && (
-            <div className="mt-4 p-3 rounded-lg bg-[var(--bg-primary)] border border-white/5">
+            <div className="mt-4 p-3 rounded-lg bg-bg border border-white/5">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-sm text-[var(--text-primary)] truncate">
+                  <div className="text-sm text-fg truncate">
                     Run Curator on{" "}
                     <span className="font-mono">{currentShoot.slug}</span>
                   </div>
-                  <div className="text-xs text-[var(--text-secondary)] mt-0.5">
+                  <div className="text-xs text-fg-dim mt-0.5">
                     {currentShoot.photoCount} photos
                     {curatorProvider === "anthropic" && curatorEstimate !== null &&
                       ` · ~${formatCostCents(curatorEstimate)} estimated`}
@@ -908,14 +908,14 @@ export function SettingsDialog() {
                   <button
                     onClick={handleRunCurator}
                     disabled={curatorRunning || !activeKeyStatus?.configured || (curatorProvider === "local" && !modelLocal.trim())}
-                    className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 text-[var(--text-primary)] text-xs transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg text-xs transition-colors disabled:opacity-50"
                   >
                     {curatorRunning ? "Starting…" : "Run"}
                   </button>
                   <button
                     onClick={handleRerunCurator}
                     disabled={curatorRunning || !activeKeyStatus?.configured || (curatorProvider === "local" && !modelLocal.trim())}
-                    className="px-3 py-1.5 rounded bg-[var(--bg-tertiary)] hover:bg-white/10 text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 rounded bg-bg3 hover:bg-white/10 text-fg-dim hover:text-fg text-xs transition-colors disabled:opacity-50"
                     title="Discard existing judgments and re-run"
                   >
                     Re-run
@@ -923,15 +923,15 @@ export function SettingsDialog() {
                 </div>
               </div>
               {curatorMsg && (
-                <p className="text-xs text-[var(--accent)] mt-2">{curatorMsg}</p>
+                <p className="text-xs text-accent-blue mt-2">{curatorMsg}</p>
               )}
               {curatorProvider !== "local" && !activeKeyStatus?.configured && (
-                <p className="text-xs text-[var(--text-secondary)] mt-2">
+                <p className="text-xs text-fg-dim mt-2">
                   Save an API key above to enable.
                 </p>
               )}
               {curatorProvider === "local" && !modelLocal.trim() && (
-                <p className="text-xs text-[var(--text-secondary)] mt-2">
+                <p className="text-xs text-fg-dim mt-2">
                   Set a model name above to enable.
                 </p>
               )}
@@ -942,14 +942,14 @@ export function SettingsDialog() {
         <div className="flex justify-end gap-2">
           <button
             onClick={closeDialog}
-            className="px-4 py-2 rounded-lg text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+            className="px-4 py-2 rounded-lg text-fg-dim hover:text-fg transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={!valid}
-            className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-medium transition-colors disabled:opacity-50"
+            className="px-4 py-2 rounded-lg bg-accent-blue hover:bg-accent-blue-hover text-white font-medium transition-colors disabled:opacity-50"
           >
             Save
           </button>

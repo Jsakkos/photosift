@@ -87,7 +87,7 @@ function TopBar() {
           className="inline-flex items-center gap-[6px] font-mono text-[10px] uppercase tracking-[0.6px] px-[6px] py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
           style={{
             color: triageOnlyAiRejects
-              ? "var(--color-danger, #ef4444)"
+              ? "var(--color-danger)"
               : "var(--color-fg-mute)",
           }}
         >

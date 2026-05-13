@@ -55,7 +55,7 @@ export function GroupStack({
       <div
         className={`absolute rounded overflow-hidden ${
           isCurrent
-            ? "ring-2 ring-[var(--accent)] brightness-100"
+            ? "ring-2 ring-accent-blue brightness-100"
             : "brightness-75 hover:brightness-90"
         }`}
         style={{ top: SHADOW_OFFSET, left: 0, width: coverW, height: coverH }}
@@ -70,7 +70,7 @@ export function GroupStack({
       </div>
       {/* Count badge */}
       <div
-        className="absolute -top-1 -right-1 bg-[var(--accent)] text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full z-10 min-w-[20px] text-center"
+        className="absolute -top-1 -right-1 bg-accent-blue text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full z-10 min-w-[20px] text-center"
         title={`${count} photos in this group`}
         aria-hidden="true"
       >
