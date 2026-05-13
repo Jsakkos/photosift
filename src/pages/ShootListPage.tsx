@@ -197,7 +197,7 @@ function ShootCard({
 }
 
 export function ShootListPage() {
-  const { shoots, isLoading, refresh, deleteShoot } = useShootListStore();
+  const { shoots, isLoading, loadError, refresh, deleteShoot } = useShootListStore();
   const openSettings = useSettingsStore((s) => s.openDialog);
   const navigate = useNavigate();
   const [showImport, setShowImport] = useState(false);
@@ -368,7 +368,29 @@ export function ShootListPage() {
           </p>
         )}
 
-        {!isLoading && shoots.length === 0 && (
+        {!isLoading && loadError && shoots.length === 0 && (
+          <div className="flex flex-col items-center justify-center mt-24 gap-3">
+            <p className="text-[13px] font-medium" style={{ color: "var(--color-danger)" }}>
+              Couldn’t load your shoots.
+            </p>
+            <p
+              className="font-mono text-[11px] max-w-[480px] text-center break-words"
+              style={{ color: "var(--color-fg-mute)" }}
+            >
+              {loadError}
+            </p>
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              className="mt-1 px-5 py-[8px] rounded-md text-[13px] font-medium cursor-pointer"
+              style={{ background: "var(--color-accent-blue)", color: "#fff", border: "none" }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {!isLoading && !loadError && shoots.length === 0 && (
           <div className="flex flex-col items-center justify-center mt-24 gap-4">
             <div style={{ color: "var(--color-accent)", opacity: 0.7 }}>
               <LogoB size={96} />

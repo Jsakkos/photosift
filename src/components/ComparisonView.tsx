@@ -3,7 +3,7 @@ import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
 import { currentPair as bracketCurrentPair } from "../lib/bracket";
 import { humanizeCuratorReason } from "../lib/curatorText";
-import { Kbd, Stars } from "./primitives";
+import { Kbd, Spinner, Stars } from "./primitives";
 import type { CuratorJudgment, ImageEntry } from "../types";
 
 type Side = "L" | "R";
@@ -123,7 +123,21 @@ function ComparePanel({
   clusterSize,
   filenameFor,
 }: PanelProps) {
-  if (!image) return <div className="flex-1" style={{ background: "var(--color-stage)" }} />;
+  if (!image) {
+    return (
+      <div
+        className="flex-1 flex items-center justify-center"
+        style={{ background: "var(--color-stage)" }}
+      >
+        <span
+          className="font-mono text-[10px] uppercase tracking-[1px]"
+          style={{ color: "var(--color-fg-mute)" }}
+        >
+          no photo
+        </span>
+      </div>
+    );
+  }
   const rating = Math.max(0, Math.min(5, image.starRating)) as 0 | 1 | 2 | 3 | 4 | 5;
   const sharp = Math.round(image.sharpnessScore ?? 0);
   const face = Math.round((image.faceCount ?? 0) > 0 ? 90 : 0);
@@ -154,7 +168,7 @@ function ComparePanel({
             {Math.round(scale * 100)}%
           </div>
         )}
-        {url && (
+        {url ? (
           <div className="absolute inset-0 p-5 flex items-center justify-center">
             <img
               src={url}
@@ -163,6 +177,10 @@ function ComparePanel({
               style={imgStyle}
               draggable={false}
             />
+          </div>
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center" style={{ color: "var(--color-fg-mute)" }}>
+            <Spinner size={20} thickness={2} aria-label="Loading preview" />
           </div>
         )}
       </div>

@@ -7,6 +7,7 @@ import {
   Kbd,
   Photo,
   ScoreBar,
+  Spinner,
   Stars,
   COLOR_LABEL_ORDER,
 } from "../components/primitives";
@@ -190,6 +191,20 @@ export function PrimitivesPage() {
             <IconBadge tone="warning">◑</IconBadge>
             <IconBadge tone="success" size="sm">·</IconBadge>
             <IconBadge variant="surface">🐾</IconBadge>
+          </Row>
+        </Section>
+
+        <Section title="Spinner">
+          <Row label="sizes">
+            <Spinner size={12} />
+            <Spinner size={14} />
+            <Spinner size={18} />
+            <Spinner size={24} thickness={3} />
+          </Row>
+          <Row label="tones">
+            <span className="text-accent-blue"><Spinner /></span>
+            <span className="text-success"><Spinner /></span>
+            <span className="text-fg-dim"><Spinner /></span>
           </Row>
         </Section>
 

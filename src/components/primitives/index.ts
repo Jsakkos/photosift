@@ -3,6 +3,7 @@ export { Stars, type StarCount } from "./Stars";
 export { Kbd } from "./Kbd";
 export { ScoreBar } from "./ScoreBar";
 export { ExifChip } from "./ExifChip";
+export { Spinner } from "./Spinner";
 export {
   Badge,
   IconBadge,
