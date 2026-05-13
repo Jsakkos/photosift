@@ -7,6 +7,7 @@ import {
   setCuratorApiKey,
   testCuratorConnection,
 } from "../lib/curatorApi";
+import { formatError } from "../lib/errorMessages";
 import { FolderLayoutEditor } from "./FolderLayoutEditor";
 import { Kbd } from "./primitives";
 
@@ -300,7 +301,7 @@ function CuratorStep() {
       setKeyInput("");
       setMsg("Key saved to your OS keychain.");
     } catch (e) {
-      setMsg(`Couldnâ€™t save the key: ${e}`);
+      setMsg(`Couldn't save key — ${formatError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -313,7 +314,7 @@ function CuratorStep() {
       await testCuratorConnection();
       setMsg("Connected.");
     } catch (e) {
-      setMsg(`Connection failed: ${e}`);
+      setMsg(`Couldn't reach the provider — ${formatError(e)}`);
     } finally {
       setBusy(false);
     }

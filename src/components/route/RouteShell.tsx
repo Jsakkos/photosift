@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { thumbUrl } from "../../hooks/useImageLoader";
+import { formatError } from "../../lib/errorMessages";
 import { Photo, type PhotoDestination, type StarCount } from "../primitives";
 import { RouteLightbox } from "./RouteLightbox";
 import type { ImageEntry } from "../../types";
@@ -227,7 +228,7 @@ export function RouteShell() {
         bucket,
       });
     } catch (err) {
-      setToast(`Open failed: ${err}`, "error");
+      setToast(`Couldn't open folder — ${formatError(err)}`, "error");
     }
   };
 
@@ -241,7 +242,7 @@ export function RouteShell() {
       await navigator.clipboard.writeText(path);
       setToast(`Copied path: ${path}`);
     } catch (err) {
-      setToast(`Copy failed: ${err}`, "error");
+      setToast(`Couldn't copy path — ${formatError(err)}`, "error");
     }
   };
 

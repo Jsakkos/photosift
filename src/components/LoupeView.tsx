@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect } from "react";
 import { useProjectStore } from "../stores/projectStore";
 import { useImageLoader } from "../hooks/useImageLoader";
 import { FlagFlash } from "./FlagFlash";
+import { Spinner } from "./primitives";
 import { computeNativeScale, clampZoomScale } from "../lib/loupeZoom";
 
 export function LoupeView() {
@@ -15,6 +16,13 @@ export function LoupeView() {
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [zoomScale, setZoomScale] = useState(1);
   const [nativeScale, setNativeScale] = useState(1);
+  // `loadState` mirrors the `<img>` lifecycle. We start in `loading` whenever
+  // the image id changes, flip to `loaded` on the first onLoad, and to `error`
+  // if the protocol handler couldn't decode the file. The spinner overlay
+  // hides on `loaded` or `error` so it doesn't sit on top of the error chip.
+  const [loadState, setLoadState] = useState<"loading" | "loaded" | "error">(
+    "loading",
+  );
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
   // Last user-adjusted (scroll-wheel) zoom scale for the current image.
@@ -37,6 +45,7 @@ export function LoupeView() {
   useEffect(() => {
     savedScaleRef.current = null;
     setPanOffset({ x: 0, y: 0 });
+    setLoadState("loading");
   }, [currentImage?.id]);
 
   useEffect(() => {
@@ -48,12 +57,17 @@ export function LoupeView() {
   }, [isZoomed, currentImage?.id, measureNative]);
 
   const handleImgLoad = useCallback(() => {
+    setLoadState("loaded");
     if (!isZoomed) return;
     const native = measureNative();
     if (native === null) return;
     setNativeScale(native);
     setZoomScale(savedScaleRef.current ?? native);
   }, [isZoomed, measureNative]);
+
+  const handleImgError = useCallback(() => {
+    setLoadState("error");
+  }, []);
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
@@ -140,7 +154,26 @@ export function LoupeView() {
         style={imgStyle}
         draggable={false}
         onLoad={handleImgLoad}
+        onError={handleImgError}
       />
+      {loadState === "loading" && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-fg-dim">
+          <Spinner size={28} thickness={3} aria-label="Loading photo" />
+        </div>
+      )}
+      {loadState === "error" && (
+        <div
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md text-xs font-medium pointer-events-none"
+          role="status"
+          style={{
+            background: "var(--color-bg2)",
+            color: "var(--color-danger)",
+            border: "1px solid var(--color-danger)",
+          }}
+        >
+          Couldn't load preview
+        </div>
+      )}
       <FlagFlash />
       {currentView === "triage" && displayItems[currentIndex]?.isGroupCover && (
         <div className="absolute top-4 right-4 px-3 py-1.5 rounded-md bg-accent/15 border border-accent/30 text-accent text-xs font-medium pointer-events-none flex items-center gap-2">

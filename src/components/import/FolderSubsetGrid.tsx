@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { formatError } from "../../lib/errorMessages";
 
 interface FolderScanEntry {
   path: string;
@@ -73,7 +74,7 @@ export function FolderSubsetGrid({ folderPath, onSelectionChange }: FolderSubset
     try {
       await invoke<number>("scan_folder", { source, withThumbnails });
     } catch (e) {
-      setError(`Scan failed: ${e}`);
+      setError(`Couldn't scan folder — ${formatError(e)}`);
       setEntries([]);
     } finally {
       unlisten();
