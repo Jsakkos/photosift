@@ -336,6 +336,11 @@ pub fn run() {
             commands::curator::record_curator_override,
             commands::testing::seed_test_fixtures,
             commands::testing::set_screenshot_state,
+            commands::benchmark::benchmark_list_sets,
+            commands::benchmark::benchmark_load_set,
+            commands::benchmark::benchmark_save_set,
+            commands::benchmark::benchmark_delete_set,
+            commands::benchmark::benchmark_export_markdown,
         ]);
 
         #[cfg(not(debug_assertions))]

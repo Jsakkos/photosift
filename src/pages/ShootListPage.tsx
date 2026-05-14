@@ -337,6 +337,24 @@ export function ShootListPage() {
               color: "var(--color-fg)",
             }}
           />
+          {/* Dev-only entry to the AI quality evaluation tool. The page
+              is gated behind `import.meta.env.DEV` in App.tsx, so this
+              link literally cannot render in a release build. */}
+          {import.meta.env.DEV && (
+            <button
+              type="button"
+              onClick={() => navigate("/benchmark")}
+              title="AI quality evaluation (dev only)"
+              className="px-3 py-1.5 rounded-md text-xs cursor-pointer font-mono"
+              style={{
+                background: "transparent",
+                border: "1px dashed var(--color-border)",
+                color: "var(--color-fg-mute)",
+              }}
+            >
+              🧪 Benchmark
+            </button>
+          )}
           <button
             type="button"
             onClick={openSettings}
