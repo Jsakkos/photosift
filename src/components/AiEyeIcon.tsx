@@ -10,7 +10,9 @@ import { IconBadge } from "./primitives";
 /// doesn't self-position anymore.
 ///
 /// Only meaningful when backed by a real classifier — callers should
-/// gate on `eyeProvider === "onnx"` to avoid surfacing mock values.
+/// gate on `eyeProvider === "onnx"`. When the classifier is absent
+/// (`"absent"`), `leftOpen`/`rightOpen` come from NULL DB columns and
+/// would coerce to false; the gate hides the icon entirely instead.
 export function AiEyeIcon({
   leftOpen,
   rightOpen,

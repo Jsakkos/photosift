@@ -32,7 +32,7 @@ Top-level modules:
 - `folder_template.rs` — configurable path template + bucket names
 
 Module directories:
-- `ai/` — on-device AI: YuNet face detection, eye state (`eye_onnx`), mouth state (`mouth_onnx`), cat heuristic, sharpness (Laplacian variance), mock fallbacks, background `worker`
+- `ai/` — on-device AI: YuNet face detection, eye state (`eye_onnx`), mouth state (`mouth_onnx`), cat heuristic, sharpness (Laplacian variance), background `worker`. Optional classifiers (eye/mouth/cat) are wired as `Option<Box<dyn ...>>` — absent ⇒ NULL columns, never a mock fallback. The `mock.rs` / `MockMouthProvider` types still exist as test doubles only.
 - `curator/` — cloud LLM aesthetic judgment: providers (Anthropic, Gemini, local OpenAI-compatible) behind `CuratorProvider` trait, cost estimation, prompts, worker
 - `commands/` — thin Tauri command wrappers by domain (one file per domain: `shoots`, `import`, `scan`, `drives`, `image`, `rating`, `culling`, `settings`, `export`, `ai`, `layout`, `curator`)
 - `db/` — `schema.rs` is the authoritative table list (idempotent additive migrations) + typed CRUD
@@ -111,7 +111,7 @@ Two pHash tiers for clustering: near-duplicate (hamming ≤4, collapsed by defau
 Runs at import as optional enrichment; suggest-only (never auto-applies a verdict).
 
 - **Face detection** — YuNet (bundled), via `face::YuNetProvider`. Returns boxes + landmarks.
-- **Eye state, mouth state, cat detection** — drop-in ONNX classifiers. Place `eye_state.onnx`, `mouth_state.onnx`, `cat_detector.onnx` into `~/.photosift/models/` to enable; falls back to mocks (`ai/mock.rs`) if absent or if ORT init fails. Contracts in `reference_eye_mouth_onnx_integration.md` (user memory).
+- **Eye state, mouth state, cat detection** — drop-in ONNX classifiers. Place `eye_state.onnx`, `mouth_state.onnx`, `cat_detector.onnx` into `~/.photosift/models/` to enable; if absent (or ORT init fails), the worker writes NULL into the corresponding face columns. UI hides those signals via `eyeProvider === "onnx"` / `mouthProvider === "onnx"` gates. No mock fallbacks at runtime — fake alternating-0/1 / constant-0.5 outputs used to corrupt the DB and were removed. Contracts in `reference_eye_mouth_onnx_integration.md` (user memory).
 - **Sharpness** — Laplacian variance via `ai/sharpness.rs`; per-shoot percentiles computed for relative scoring (a 60th-percentile shot in a shoot of soft glass is still the sharpest available).
 - **CUDA** — `ort` is compiled with the `cuda` feature. ORT ships the provider DLL but not cuBLAS/cuDNN; extract those from `pip nvidia-cublas-cu12` / `pip nvidia-cudnn-cu12` wheels into `target/debug/` if face inference is ~2s instead of ~500ms. See `reference_cuda_dll_setup.md`.
 - **Worker** — `ai/worker.rs` runs in the background with cancel/progress atomics on `AppState`. Graceful fallback on init failure: app boots, AI panel shows "unavailable", no crash.

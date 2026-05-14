@@ -440,8 +440,12 @@ fn face_row_for(photo_id: i64, f: &SeedFace) -> FaceRow {
         left_eye_y: f.bbox_y + f.bbox_h * 0.35,
         right_eye_x: f.bbox_x + f.bbox_w * 0.7,
         right_eye_y: f.bbox_y + f.bbox_h * 0.35,
-        left_eye_open: f.left_eye_open,
-        right_eye_open: f.right_eye_open,
+        // Seed JSON keeps the plain i32 ergonomics on the JS side
+        // (eyesOpen: 1 vs 0). Wrap into Some(_) for the now-nullable
+        // FaceRow column. None is reserved for "no classifier loaded at
+        // analysis time", which fixtures don't model.
+        left_eye_open: Some(f.left_eye_open),
+        right_eye_open: Some(f.right_eye_open),
         left_eye_sharpness: 1.0,
         right_eye_sharpness: 1.0,
         detection_confidence: 0.95,

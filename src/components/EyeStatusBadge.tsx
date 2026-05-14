@@ -5,8 +5,10 @@
 /// red if none, yellow if mixed. Null when there are no faces or the
 /// photo hasn't been analyzed — a grayed eye would look like an error.
 ///
-/// Callers should gate on `eyeProvider === "onnx"` so the mock
-/// alternating-0-1 values don't leak through.
+/// Callers should gate on `eyeProvider === "onnx"`. When the eye
+/// classifier is absent, `eyes_open_count` is NULL on the photo row
+/// (the worker writes NULL rather than fabricating a count), so this
+/// badge would render as gray-zero — better to hide it entirely.
 import { IconBadge } from "./primitives";
 
 interface EyeStatusBadgeProps {
