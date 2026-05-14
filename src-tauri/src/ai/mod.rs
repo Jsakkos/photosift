@@ -18,24 +18,31 @@ pub enum AiProviderStatus {
     Disabled,
 }
 
-/// Which eye open/closed classifier is in use. `Mock` means deterministic
-/// alternating 0/1 — not a real signal. The frontend checks this to hide
-/// eye indicators and drop the `(1 + eyes_open)` weighting from the
-/// AI-pick score so mock values don't corrupt ranking.
+/// Which eye open/closed classifier is in use. `Absent` means no
+/// classifier is loaded — the AI worker skips eye classification for
+/// every face and writes NULL into `left_eye_open` / `right_eye_open`.
+/// The frontend gates eye indicators and the eye term of the AI-pick
+/// score on `Onnx` so the absent state surfaces as "no data" rather
+/// than silently scoring as zero-eyes-open.
+///
+/// Mock providers existed historically to keep the app booting when
+/// the optional `eye_state.onnx` model wasn't on disk. Those wrote
+/// alternating 0/1 noise that looked real but wasn't. Removed in favor
+/// of honest NULL.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EyeProviderKind {
-    Mock,
+    Absent,
     Onnx,
 }
 
 /// Which mouth/smile classifier is in use. Mirrors `EyeProviderKind`.
-/// UI must gate mouth indicators on `Onnx` so the mock's alternating
-/// output doesn't surface to users.
+/// `Absent` means no `mouth_state.onnx` on disk; the worker writes
+/// NULL into `smile_score` and the UI hides smile indicators.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MouthProviderKind {
-    Mock,
+    Absent,
     Onnx,
 }
 
@@ -51,8 +58,10 @@ pub use worker::{process_job, run_loop, WorkerHandle};
 const YUNET_BYTES: &[u8] = include_bytes!("models/yunet.onnx");
 
 /// Extract bundled ONNX models to ~/.photosift/models/ on first run.
-/// Currently only YuNet is bundled; eye-state classifier is mock-backed
-/// pending model sourcing (see docs/phase2-ai-qa.md).
+/// Only YuNet (face detection) is bundled. The eye-state and
+/// mouth-state classifiers are user-supplied drops; the worker writes
+/// NULL into the corresponding face columns when they're absent. See
+/// `EyeProviderKind` for the rationale (no mock fallbacks).
 pub fn ensure_models_on_disk() -> anyhow::Result<std::path::PathBuf> {
     let dir = crate::db::schema::photosift_home().join("models");
     std::fs::create_dir_all(&dir)?;
@@ -82,10 +91,15 @@ pub struct SpawnedWorker {
 /// processing happens on the spawned thread.
 pub fn spawn_worker(
     db_path: std::path::PathBuf,
-    faces_provider: Box<dyn FaceProvider>,
-    eyes_provider: Box<dyn EyeStateProvider>,
-    mouth_provider: Box<dyn MouthStateProvider>,
-    cat_provider: Box<dyn crate::ai::cat::CatDetectorProvider>,
+    // `None` for `faces_provider` disables face detection entirely
+    // (no faces written, no eye/smile classification possible) but
+    // sharpness analysis still runs. `None` for eye / mouth / cat
+    // skips that specific classifier; faces still get detected and
+    // logged with NULL for the missing fields.
+    faces_provider: Option<Box<dyn FaceProvider>>,
+    eyes_provider: Option<Box<dyn EyeStateProvider>>,
+    mouth_provider: Option<Box<dyn MouthStateProvider>>,
+    cat_provider: Option<Box<dyn crate::ai::cat::CatDetectorProvider>>,
     cancel: Arc<AtomicBool>,
     analyzed: Arc<AtomicUsize>,
     failed: Arc<AtomicUsize>,

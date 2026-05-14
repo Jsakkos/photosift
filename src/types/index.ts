@@ -99,8 +99,11 @@ export interface Face {
   bboxX: number; bboxY: number; bboxW: number; bboxH: number;
   leftEyeX: number; leftEyeY: number;
   rightEyeX: number; rightEyeY: number;
-  leftEyeOpen: 0 | 1;
-  rightEyeOpen: 0 | 1;
+  /// 0 = closed, 1 = open, null = no eye classifier was loaded at
+  /// analysis time. Distinct from "all eyes closed". UI should treat
+  /// null as "no data" rather than zero.
+  leftEyeOpen: 0 | 1 | null;
+  rightEyeOpen: 0 | 1 | null;
   leftEyeSharpness: number;
   rightEyeSharpness: number;
   detectionConfidence: number;
@@ -115,15 +118,18 @@ export interface Face {
 
 export type AiProviderStatus = "cuda" | "cpu" | "disabled";
 
-/// Which eye open/closed classifier the backend is running. `mock`
-/// alternates deterministic 0/1 — not real signal, so the UI hides eye
-/// indicators and ranks groups by sharpness alone until a real model ships.
-export type EyeProviderKind = "mock" | "onnx";
+/// Which eye open/closed classifier the backend is running. `absent`
+/// means no `eye_state.onnx` is loaded — the worker writes NULL for
+/// `left_eye_open` / `right_eye_open`. The UI gates eye indicators on
+/// `onnx` so the absent state shows up as "no data".
+///
+/// `mock` existed historically — it wrote alternating 0/1 noise that
+/// looked real but wasn't. Removed; "absent" replaces it.
+export type EyeProviderKind = "absent" | "onnx";
 
 /// Which mouth/smile classifier the backend is running. Mirrors
-/// `EyeProviderKind`. UI gates smile icons + pick-formula smile factor
-/// on `onnx` so the mock's fixed 0.5 output doesn't drive rankings.
-export type MouthProviderKind = "mock" | "onnx";
+/// `EyeProviderKind`. `absent` → smile_score is NULL on every face.
+export type MouthProviderKind = "absent" | "onnx";
 
 export interface AiStatusResponse {
   provider: AiProviderStatus;

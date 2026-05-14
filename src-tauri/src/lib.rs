@@ -62,8 +62,7 @@ pub fn run() {
             use crate::ai::eye::EyeStateProvider;
             use crate::ai::eye_onnx::OnnxEyeProvider;
             use crate::ai::face::{FaceProvider, YuNetProvider};
-            use crate::ai::mock::{MockEyeProvider, MockFaceProvider};
-            use crate::ai::mouth::{MockMouthProvider, MouthStateProvider};
+            use crate::ai::mouth::MouthStateProvider;
             use crate::ai::mouth_onnx::OnnxMouthProvider;
             use crate::ai::{
                 ensure_models_on_disk, AiProviderStatus, EyeProviderKind, MouthProviderKind,
@@ -84,9 +83,10 @@ pub fn run() {
                 )
             };
 
-            // Extract bundled models (YuNet is always present; eye
-            // classifier is optional and drops in if the user places
-            // an `eye_state.onnx` in the same dir).
+            // Extract bundled models. YuNet is always present (compiled
+            // into the binary); the optional ONNX classifiers — eye,
+            // mouth, cat — are user-supplied drops under
+            // `~/.photosift/models/`.
             let models_dir = match ensure_models_on_disk() {
                 Ok(d) => Some(d),
                 Err(e) => {
@@ -95,138 +95,129 @@ pub fn run() {
                 }
             };
 
-            // Real face provider via YuNet with graceful fallback to mock if
-            // model extraction or ORT init fails (e.g. onnxruntime dylib
-            // missing). Surface the actual backend via ai_status so the UI
-            // can badge it.
-            let (face_provider, face_status): (Box<dyn FaceProvider>, AiProviderStatus) =
-                match models_dir.as_ref() {
-                    Some(dir) => match YuNetProvider::load(&dir.join("yunet.onnx"), true) {
-                        Ok((yunet, status)) => (Box::new(yunet), status),
-                        Err(e) => {
-                            log::error!(
-                                "YuNet load failed; disabling real face detection: {}",
-                                e
-                            );
-                            (
-                                Box::new(MockFaceProvider::default()),
-                                AiProviderStatus::Disabled,
-                            )
-                        }
-                    },
-                    None => (
-                        Box::new(MockFaceProvider::default()),
-                        AiProviderStatus::Disabled,
-                    ),
-                };
-
-            // Eye provider: drop in a real ONNX classifier the moment
-            // a user places `eye_state.onnx` under ~/.photosift/models/.
-            // Until then, the mock stays live and the UI hides its
-            // alternating-0/1 signal via the eyeProvider === "mock" gate.
-            let (eye_provider, eye_kind): (Box<dyn EyeStateProvider>, EyeProviderKind) =
-                match models_dir.as_ref() {
-                    Some(dir) => {
-                        let eye_path = dir.join("eye_state.onnx");
-                        if eye_path.exists() {
-                            match OnnxEyeProvider::load(&eye_path) {
-                                Ok(p) => (Box::new(p), EyeProviderKind::Onnx),
-                                Err(e) => {
-                                    log::error!(
-                                        "Eye ONNX load failed at {}; falling back to mock: {}",
-                                        eye_path.display(),
-                                        e
-                                    );
-                                    (
-                                        Box::new(MockEyeProvider::default()),
-                                        EyeProviderKind::Mock,
-                                    )
-                                }
-                            }
-                        } else {
-                            log::info!(
-                                "No eye classifier at {} — using mock (drop in an ONNX file and restart to enable)",
-                                eye_path.display()
-                            );
-                            (Box::new(MockEyeProvider::default()), EyeProviderKind::Mock)
-                        }
+            // Face provider: load YuNet, or `None` if model extraction
+            // or ORT init failed. The worker handles `None` by skipping
+            // face detection entirely (whole-image sharpness still
+            // runs). Previous code constructed a `MockFaceProvider`
+            // that emitted a canned face per photo — removed, because
+            // synthetic face data corrupted every downstream count.
+            let (face_provider, face_status): (
+                Option<Box<dyn FaceProvider>>,
+                AiProviderStatus,
+            ) = match models_dir.as_ref() {
+                Some(dir) => match YuNetProvider::load(&dir.join("yunet.onnx"), true) {
+                    Ok((yunet, status)) => (Some(Box::new(yunet)), status),
+                    Err(e) => {
+                        log::error!("YuNet load failed; face detection disabled: {}", e);
+                        (None, AiProviderStatus::Disabled)
                     }
-                    None => (Box::new(MockEyeProvider::default()), EyeProviderKind::Mock),
-                };
+                },
+                None => (None, AiProviderStatus::Disabled),
+            };
+
+            // Eye provider: load `eye_state.onnx` if present, otherwise
+            // `None`. The worker writes NULL for `left_eye_open` /
+            // `right_eye_open` when this is absent — distinct from
+            // "classifier ran and said closed". Previously this fell
+            // back to a `MockEyeProvider` that alternated 0/1 per call,
+            // which polluted the DB with synthetic eye-state values.
+            let (eye_provider, eye_kind): (
+                Option<Box<dyn EyeStateProvider>>,
+                EyeProviderKind,
+            ) = match models_dir.as_ref() {
+                Some(dir) => {
+                    let eye_path = dir.join("eye_state.onnx");
+                    if eye_path.exists() {
+                        match OnnxEyeProvider::load(&eye_path) {
+                            Ok(p) => (Some(Box::new(p)), EyeProviderKind::Onnx),
+                            Err(e) => {
+                                log::error!(
+                                    "Eye ONNX load failed at {}; eye state disabled: {}",
+                                    eye_path.display(),
+                                    e
+                                );
+                                (None, EyeProviderKind::Absent)
+                            }
+                        }
+                    } else {
+                        log::info!(
+                            "No eye classifier at {} — eye state disabled (drop in an ONNX file and restart to enable)",
+                            eye_path.display()
+                        );
+                        (None, EyeProviderKind::Absent)
+                    }
+                }
+                None => (None, EyeProviderKind::Absent),
+            };
 
             let app_handle = app.handle().clone();
             let analyzed_for_cb = analyzed.clone();
             let failed_for_cb = failed.clone();
             let total_for_cb = total.clone();
 
-            // Mouth provider: same pattern as eye. Drop a
-            // `mouth_state.onnx` into ~/.photosift/models/ to swap in a
-            // real smile/open-mouth classifier.
-            let (mouth_provider, mouth_kind): (Box<dyn MouthStateProvider>, MouthProviderKind) =
-                match models_dir.as_ref() {
-                    Some(dir) => {
-                        let mouth_path = dir.join("mouth_state.onnx");
-                        if mouth_path.exists() {
-                            match OnnxMouthProvider::load(&mouth_path) {
-                                Ok(p) => (Box::new(p), MouthProviderKind::Onnx),
-                                Err(e) => {
-                                    log::error!(
-                                        "Mouth ONNX load failed at {}; falling back to mock: {}",
-                                        mouth_path.display(),
-                                        e
-                                    );
-                                    (
-                                        Box::new(MockMouthProvider::default()),
-                                        MouthProviderKind::Mock,
-                                    )
-                                }
+            // Mouth provider: same pattern as eye. `None` when no
+            // `mouth_state.onnx` is on disk; the worker writes NULL for
+            // `smile_score`. Previously fell back to a mock that
+            // returned a constant 0.5 — removed.
+            let (mouth_provider, mouth_kind): (
+                Option<Box<dyn MouthStateProvider>>,
+                MouthProviderKind,
+            ) = match models_dir.as_ref() {
+                Some(dir) => {
+                    let mouth_path = dir.join("mouth_state.onnx");
+                    if mouth_path.exists() {
+                        match OnnxMouthProvider::load(&mouth_path) {
+                            Ok(p) => (Some(Box::new(p)), MouthProviderKind::Onnx),
+                            Err(e) => {
+                                log::error!(
+                                    "Mouth ONNX load failed at {}; smile disabled: {}",
+                                    mouth_path.display(),
+                                    e
+                                );
+                                (None, MouthProviderKind::Absent)
                             }
-                        } else {
-                            log::info!(
-                                "No mouth classifier at {} — using mock",
-                                mouth_path.display()
-                            );
-                            (
-                                Box::new(MockMouthProvider::default()),
-                                MouthProviderKind::Mock,
-                            )
                         }
+                    } else {
+                        log::info!(
+                            "No mouth classifier at {} — smile disabled",
+                            mouth_path.display()
+                        );
+                        (None, MouthProviderKind::Absent)
                     }
-                    None => (
-                        Box::new(MockMouthProvider::default()),
-                        MouthProviderKind::Mock,
-                    ),
-                };
+                }
+                None => (None, MouthProviderKind::Absent),
+            };
 
             // Cat detector: Tiny-YOLOv3 (COCO, class 15 = cat) loaded
             // from `~/.photosift/models/cat_detector.onnx` when present.
-            // Falls back to the mock (no cats) if the file is missing or
-            // fails to load, mirroring the eye/mouth hot-swap pattern.
-            let cat_provider: Box<dyn crate::ai::cat::CatDetectorProvider> =
+            // `None` when missing — the worker skips the cat pass
+            // entirely. Previous mock returned empty cats, which is
+            // behaviorally equivalent but cleaner to express as None.
+            let cat_provider: Option<Box<dyn crate::ai::cat::CatDetectorProvider>> =
                 match models_dir.as_ref() {
                     Some(dir) => {
                         let cat_path = dir.join("cat_detector.onnx");
                         if cat_path.exists() {
                             match crate::ai::cat::OnnxCatDetector::load(&cat_path) {
-                                Ok(p) => Box::new(p),
+                                Ok(p) => Some(Box::new(p)),
                                 Err(e) => {
                                     log::error!(
-                                        "Cat detector ONNX load failed at {}; falling back to mock: {}",
+                                        "Cat detector ONNX load failed at {}; cat detection disabled: {}",
                                         cat_path.display(),
                                         e
                                     );
-                                    Box::new(crate::ai::cat::MockCatDetector)
+                                    None
                                 }
                             }
                         } else {
                             log::info!(
-                                "No cat detector at {} — using mock",
+                                "No cat detector at {} — cat detection disabled",
                                 cat_path.display()
                             );
-                            Box::new(crate::ai::cat::MockCatDetector)
+                            None
                         }
                     }
-                    None => Box::new(crate::ai::cat::MockCatDetector),
+                    None => None,
                 };
 
             let spawned = crate::ai::spawn_worker(

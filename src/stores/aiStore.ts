@@ -27,8 +27,8 @@ interface AiState {
 
 export const useAiStore = create<AiState>((set) => ({
   provider: "disabled",
-  eyeProvider: "mock",
-  mouthProvider: "mock",
+  eyeProvider: "absent",
+  mouthProvider: "absent",
   analyzed: 0,
   failed: 0,
   total: 0,

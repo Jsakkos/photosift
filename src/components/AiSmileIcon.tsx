@@ -4,9 +4,10 @@
 /// with an opacity drop so the tile still shows "we tried but couldn't
 /// classify" rather than going blank.
 ///
-/// Gate on `mouthProvider === "onnx"` at the call site — the mock/1-class
-/// variants all return a flat 0.5 that would light up yellow for every
-/// face regardless of actual expression.
+/// Gate on `mouthProvider === "onnx"` at the call site. When the
+/// mouth classifier is absent, `smile_score` is NULL on every face
+/// (the worker writes NULL rather than fabricating a value); the gate
+/// hides the icon rather than rendering every face as "neutral".
 ///
 /// Sized and unpositioned for FaceTile's bottom badge row.
 import { IconBadge } from "./primitives";

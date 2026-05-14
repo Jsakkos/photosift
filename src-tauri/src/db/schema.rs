@@ -353,7 +353,17 @@ pub struct FaceRow {
     pub bbox_x: f64, pub bbox_y: f64, pub bbox_w: f64, pub bbox_h: f64,
     pub left_eye_x: f64, pub left_eye_y: f64,
     pub right_eye_x: f64, pub right_eye_y: f64,
-    pub left_eye_open: i32, pub right_eye_open: i32,
+    /// 0 = closed, 1 = open. NULL when no eye classifier was loaded at
+    /// analysis time, or for non-human species where eye state isn't
+    /// classified (cats today). The previous mock fallback wrote
+    /// deterministic alternating values; that's been removed — a missing
+    /// eye_state.onnx now correctly produces NULL, not noise.
+    pub left_eye_open: Option<i32>,
+    pub right_eye_open: Option<i32>,
+    /// Laplacian variance on the eye crop, normalized 0–100. Computed
+    /// independently of the eye classifier (it's pixel statistics, not
+    /// model output) so this is real signal even when no classifier is
+    /// loaded. Kept NOT NULL.
     pub left_eye_sharpness: f64, pub right_eye_sharpness: f64,
     pub detection_confidence: f64,
     /// 0.0–1.0 from the mouth classifier; None when no mouth model is loaded
@@ -361,8 +371,8 @@ pub struct FaceRow {
     /// the AI panel and contributes to the pick score via the smile factor.
     pub smile_score: Option<f64>,
     /// Subject species — `"human"` (from YuNet) or `"cat"` (from a YOLO-family
-    /// detector). Eye landmarks and `smile_score` are only meaningful for
-    /// humans today; cats carry bbox + confidence and placeholder eye data.
+    /// detector). Eye state and `smile_score` are only meaningful for humans;
+    /// cats carry bbox + confidence with NULL eye/smile fields.
     pub species: String,
 }
 
@@ -533,6 +543,10 @@ impl Database {
         self.ensure_column("faces", "smile_score", "REAL")?;
         self.ensure_column("settings", "immich_ingest_path", "TEXT")?;
         self.ensure_column("faces", "species", "TEXT NOT NULL DEFAULT 'human'")?;
+        // Drop NOT NULL on left_eye_open / right_eye_open + wipe any
+        // mock-classifier values that pre-existing rows still carry.
+        // See `migrate_faces_eye_open_nullable` for the why.
+        self.migrate_faces_eye_open_nullable()?;
         // Auto-reorganize-on-pass-complete tracking.
         // `photos.select_visited_at` gates the "all picks visited" check
         // that's half of the Select→Route sync trigger.
@@ -767,6 +781,11 @@ impl Database {
     }
 
     fn create_faces_table(&self) -> Result<()> {
+        // `left_eye_open` / `right_eye_open` are nullable: NULL means
+        // "no eye-state classifier was loaded at analysis time".
+        // The previous mock fallback wrote deterministic 0/1 values
+        // that looked real but weren't — that codepath has been
+        // removed in favor of honest nulls.
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS faces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -779,13 +798,91 @@ impl Database {
                 left_eye_y REAL NOT NULL,
                 right_eye_x REAL NOT NULL,
                 right_eye_y REAL NOT NULL,
-                left_eye_open INTEGER NOT NULL,
-                right_eye_open INTEGER NOT NULL,
+                left_eye_open INTEGER,
+                right_eye_open INTEGER,
                 left_eye_sharpness REAL NOT NULL,
                 right_eye_sharpness REAL NOT NULL,
                 detection_confidence REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);",
+        )?;
+        Ok(())
+    }
+
+    /// SQLite can't `ALTER COLUMN` nullability, so to relax the
+    /// `NOT NULL` constraint on `left_eye_open` / `right_eye_open`
+    /// we recreate the table. Runs once per upgraded DB and is a
+    /// no-op on databases that already have the relaxed schema.
+    ///
+    /// While we're at it we **wipe** existing eye-open and smile
+    /// values, because any rows currently in the table were written
+    /// by the now-removed mock classifier fallback and contain
+    /// alternating-0/1 / constant-0.5 noise rather than real signal.
+    /// Re-analyzing a shoot under the real classifier (or no
+    /// classifier) repopulates them correctly.
+    fn migrate_faces_eye_open_nullable(&self) -> Result<()> {
+        // Probe existing NOT NULL constraints. If left_eye_open is
+        // still notnull=1, this DB hasn't been migrated yet.
+        let needs_migration: bool = {
+            let mut stmt = self.conn.prepare("PRAGMA table_info(faces)")?;
+            let rows = stmt.query_map([], |row| {
+                let name: String = row.get(1)?;
+                let notnull: i32 = row.get(3)?;
+                Ok((name, notnull))
+            })?;
+            let mut still_notnull = false;
+            for r in rows {
+                let (name, notnull) = r?;
+                if name == "left_eye_open" && notnull == 1 {
+                    still_notnull = true;
+                    break;
+                }
+            }
+            still_notnull
+        };
+        if !needs_migration {
+            return Ok(());
+        }
+
+        self.conn.execute_batch(
+            "BEGIN;
+            CREATE TABLE faces_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+                bbox_x REAL NOT NULL,
+                bbox_y REAL NOT NULL,
+                bbox_w REAL NOT NULL,
+                bbox_h REAL NOT NULL,
+                left_eye_x REAL NOT NULL,
+                left_eye_y REAL NOT NULL,
+                right_eye_x REAL NOT NULL,
+                right_eye_y REAL NOT NULL,
+                left_eye_open INTEGER,
+                right_eye_open INTEGER,
+                left_eye_sharpness REAL NOT NULL,
+                right_eye_sharpness REAL NOT NULL,
+                detection_confidence REAL NOT NULL,
+                smile_score REAL,
+                species TEXT NOT NULL DEFAULT 'human'
+            );
+            INSERT INTO faces_new (
+                id, photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+                left_eye_open, right_eye_open,
+                left_eye_sharpness, right_eye_sharpness,
+                detection_confidence, smile_score, species
+            )
+            SELECT
+                id, photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+                NULL, NULL,
+                left_eye_sharpness, right_eye_sharpness,
+                detection_confidence, NULL, species
+            FROM faces;
+            DROP TABLE faces;
+            ALTER TABLE faces_new RENAME TO faces;
+            CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
+            COMMIT;",
         )?;
         Ok(())
     }
@@ -2777,7 +2874,7 @@ pub(crate) mod tests {
             bbox_x: 0.1, bbox_y: 0.1, bbox_w: 0.2, bbox_h: 0.3,
             left_eye_x: 0.15, left_eye_y: 0.18,
             right_eye_x: 0.22, right_eye_y: 0.18,
-            left_eye_open: 1, right_eye_open: 1,
+            left_eye_open: Some(1), right_eye_open: Some(1),
             left_eye_sharpness: 78.0, right_eye_sharpness: 81.0,
             detection_confidence: 0.92,
             smile_score: Some(0.73),
@@ -2788,7 +2885,7 @@ pub(crate) mod tests {
         let got = db.get_faces_for_photo(ids[0]).unwrap();
         assert_eq!(got.len(), 1);
         assert!((got[0].bbox_x - 0.1).abs() < 1e-6);
-        assert_eq!(got[0].left_eye_open, 1);
+        assert_eq!(got[0].left_eye_open, Some(1));
         assert!((got[0].detection_confidence - 0.92).abs() < 1e-6);
         assert!((got[0].smile_score.unwrap() - 0.73).abs() < 1e-6);
 
@@ -2975,7 +3072,15 @@ pub(crate) mod tests {
                     photo_id: *id,
                     preview_path: preview.to_string_lossy().into_owned(),
                 };
-                process_job(&mut db, &job, &face_p, &eye_p, &mouth_p, &cat_p).unwrap();
+                process_job(
+                    &mut db,
+                    &job,
+                    Some(&face_p),
+                    Some(&eye_p),
+                    Some(&mouth_p),
+                    Some(&cat_p),
+                )
+                .unwrap();
             }
             ids
         };
