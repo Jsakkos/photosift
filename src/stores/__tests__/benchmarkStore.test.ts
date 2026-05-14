@@ -19,7 +19,10 @@ function face(
   return {
     faceIndex: index,
     bboxSnapshot: null,
+    leftEyeSnapshot: null,
+    rightEyeSnapshot: null,
     detectionCorrect: null,
+    landmarkCorrect: null,
     leftEyeCorrect: null,
     rightEyeCorrect: null,
     smileCorrect: null,
@@ -59,7 +62,9 @@ describe("benchmarkStore — summary math", () => {
     expect(summary.faceOverall.precision).toBeNull();
     expect(summary.faceOverall.recall).toBeNull();
     expect(summary.faceOverall.f1).toBeNull();
+    expect(summary.landmark).toEqual({ correct: 0, total: 0 });
     expect(summary.leftEye).toEqual({ correct: 0, total: 0 });
+    expect(summary.leftEyeGivenLandmarkOk).toEqual({ correct: 0, total: 0 });
     expect(summary.facePerCamera).toEqual([]);
     for (const g of summary.sharpnessGroups) {
       expect(g.count).toBe(0);
@@ -207,6 +212,58 @@ describe("benchmarkStore — summary math", () => {
     expect(empty.globalScore.mean).toBeNull();
   });
 
+  it("landmark accuracy + conditional eye accuracy stratify classifier vs landmark errors", () => {
+    // 4 faces total, all with both eye-state verdicts filled:
+    //   face A: landmark ok,    L ✓, R ✓
+    //   face B: landmark ok,    L ✓, R ✕      ← classifier missed a real eye
+    //   face C: landmark wrong, L ✕, R ✕      ← landmark on eyebrow, classifier said "closed"
+    //   face D: landmark wrong, L ✓, R ✕      ← rare: classifier still right despite bad crop
+    //
+    // Global left-eye:   3/4 = 75%
+    // Global right-eye:  1/4 = 25%
+    // landmark ok only L: 2/2 = 100%   ← fair classifier score on good crops
+    // landmark ok only R: 1/2 = 50%
+    // Landmark accuracy: 2/4 = 50%
+    const photos: BenchmarkPhotoRecord[] = [
+      photo(1, {
+        faces: [
+          face(0, { landmarkCorrect: true, leftEyeCorrect: true, rightEyeCorrect: true }),
+          face(1, { landmarkCorrect: true, leftEyeCorrect: true, rightEyeCorrect: false }),
+        ],
+      }),
+      photo(2, {
+        faces: [
+          face(0, { landmarkCorrect: false, leftEyeCorrect: false, rightEyeCorrect: false }),
+          face(1, { landmarkCorrect: false, leftEyeCorrect: true, rightEyeCorrect: false }),
+        ],
+      }),
+    ];
+    const s = computeSummary(setOf(photos));
+    expect(s.landmark).toEqual({ correct: 2, total: 4 });
+    expect(s.leftEye).toEqual({ correct: 3, total: 4 });
+    expect(s.rightEye).toEqual({ correct: 1, total: 4 });
+    expect(s.leftEyeGivenLandmarkOk).toEqual({ correct: 2, total: 2 });
+    expect(s.rightEyeGivenLandmarkOk).toEqual({ correct: 1, total: 2 });
+  });
+
+  it("conditional eye accuracy skips faces where landmark is null (not yet judged)", () => {
+    // landmarkCorrect=null means "user hasn't judged the landmark" —
+    // those faces should not contribute to the conditional accuracy
+    // because we can't tell whether the eye result was a classifier
+    // win or a lucky landmark.
+    const photos: BenchmarkPhotoRecord[] = [
+      photo(1, {
+        faces: [
+          face(0, { landmarkCorrect: null, leftEyeCorrect: true }),
+          face(1, { landmarkCorrect: true, leftEyeCorrect: false }),
+        ],
+      }),
+    ];
+    const s = computeSummary(setOf(photos));
+    expect(s.leftEye).toEqual({ correct: 1, total: 2 }); // both face-judgments count
+    expect(s.leftEyeGivenLandmarkOk).toEqual({ correct: 0, total: 1 }); // only the one with confirmed landmark
+  });
+
   it("judgedPhotos counts any photo with at least one filled field", () => {
     const photos: BenchmarkPhotoRecord[] = [
       photo(1, {}),
@@ -214,10 +271,11 @@ describe("benchmarkStore — summary math", () => {
       photo(3, { subjectSharpnessVerdict: "all_sharp" }),
       photo(4, { faces: [face(0, { detectionCorrect: true })] }),
       photo(5, { faces: [face(0, {})] }), // all-null faces → still unjudged
+      photo(6, { faces: [face(0, { landmarkCorrect: true })] }), // landmark verdict alone counts
     ];
     const s = computeSummary(setOf(photos));
-    expect(s.totalPhotos).toBe(5);
-    expect(s.judgedPhotos).toBe(3);
+    expect(s.totalPhotos).toBe(6);
+    expect(s.judgedPhotos).toBe(4);
   });
 });
 

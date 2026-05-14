@@ -62,8 +62,22 @@ pub struct BenchmarkFaceJudgment {
     /// detector is re-run.
     #[serde(default)]
     pub bbox_snapshot: Option<[f64; 4]>,
+    /// Snapshot of the eye landmark coordinates (normalized 0–1) at
+    /// judgment time. Captured so the JSON records *exactly* what crop
+    /// the eye classifier saw — a "landmark on eyebrow" diagnosis can
+    /// be confirmed after the fact without re-running AI.
+    #[serde(default)]
+    pub left_eye_snapshot: Option<[f64; 2]>,
+    #[serde(default)]
+    pub right_eye_snapshot: Option<[f64; 2]>,
     #[serde(default)]
     pub detection_correct: Option<bool>,
+    /// Are both eye landmarks placed on the actual eyes (not on
+    /// eyebrows, cheeks, or skin)? Single bool because the common
+    /// failure mode is bilateral (YuNet's regression is consistent).
+    /// Asymmetric errors can be flagged in `notes`.
+    #[serde(default)]
+    pub landmark_correct: Option<bool>,
     #[serde(default)]
     pub left_eye_correct: Option<bool>,
     #[serde(default)]
@@ -192,6 +206,7 @@ fn count_judged(set: &BenchmarkSet) -> usize {
                 || p.missed_face_count > 0
                 || p.faces.iter().any(|f| {
                     f.detection_correct.is_some()
+                        || f.landmark_correct.is_some()
                         || f.left_eye_correct.is_some()
                         || f.right_eye_correct.is_some()
                         || f.smile_correct.is_some()
@@ -347,7 +362,10 @@ mod tests {
                 faces: vec![BenchmarkFaceJudgment {
                     face_index: 0,
                     bbox_snapshot: Some([0.1, 0.2, 0.3, 0.4]),
+                    left_eye_snapshot: Some([0.18, 0.30]),
+                    right_eye_snapshot: Some([0.28, 0.30]),
                     detection_correct: Some(true),
+                    landmark_correct: Some(false),
                     left_eye_correct: Some(true),
                     right_eye_correct: None,
                     smile_correct: Some(false),
@@ -405,7 +423,10 @@ mod tests {
             faces: vec![BenchmarkFaceJudgment {
                 face_index: 0,
                 bbox_snapshot: None,
+                left_eye_snapshot: None,
+                right_eye_snapshot: None,
                 detection_correct: Some(true),
+                landmark_correct: None,
                 left_eye_correct: None,
                 right_eye_correct: None,
                 smile_correct: None,

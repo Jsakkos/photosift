@@ -68,15 +68,36 @@ function buildMarkdown(summary: BenchmarkSummary, slug: string): string {
     );
   }
   lines.push("");
+  lines.push("## Landmark placement");
+  lines.push("");
+  lines.push(
+    "_YuNet's eye landmarks must land on the actual eyes, not eyebrows or skin. " +
+      "When the landmark misses, the 15%-face-width eye crop is fed an eyebrow patch, " +
+      "and even a perfect classifier returns \"closed\" because no eye is visible. " +
+      "The conditional rows below isolate the classifier's contribution from this upstream error._",
+  );
+  lines.push("");
+  lines.push("| Signal | Correct | Total | Accuracy |");
+  lines.push("|---|---:|---:|---:|");
+  lines.push(
+    `| Landmark on eyes | ${summary.landmark.correct} | ${summary.landmark.total} | ${accuracyPct(summary.landmark.correct, summary.landmark.total)} |`,
+  );
+  lines.push("");
   lines.push("## Per-face classifiers");
   lines.push("");
   lines.push("| Signal | Correct | Total | Accuracy |");
   lines.push("|---|---:|---:|---:|");
   lines.push(
-    `| Left eye open | ${summary.leftEye.correct} | ${summary.leftEye.total} | ${accuracyPct(summary.leftEye.correct, summary.leftEye.total)} |`,
+    `| Left eye open (all) | ${summary.leftEye.correct} | ${summary.leftEye.total} | ${accuracyPct(summary.leftEye.correct, summary.leftEye.total)} |`,
   );
   lines.push(
-    `| Right eye open | ${summary.rightEye.correct} | ${summary.rightEye.total} | ${accuracyPct(summary.rightEye.correct, summary.rightEye.total)} |`,
+    `| Left eye open (landmark ok) | ${summary.leftEyeGivenLandmarkOk.correct} | ${summary.leftEyeGivenLandmarkOk.total} | ${accuracyPct(summary.leftEyeGivenLandmarkOk.correct, summary.leftEyeGivenLandmarkOk.total)} |`,
+  );
+  lines.push(
+    `| Right eye open (all) | ${summary.rightEye.correct} | ${summary.rightEye.total} | ${accuracyPct(summary.rightEye.correct, summary.rightEye.total)} |`,
+  );
+  lines.push(
+    `| Right eye open (landmark ok) | ${summary.rightEyeGivenLandmarkOk.correct} | ${summary.rightEyeGivenLandmarkOk.total} | ${accuracyPct(summary.rightEyeGivenLandmarkOk.correct, summary.rightEyeGivenLandmarkOk.total)} |`,
   );
   lines.push(
     `| Smile | ${summary.smile.correct} | ${summary.smile.total} | ${accuracyPct(summary.smile.correct, summary.smile.total)} |`,
@@ -221,6 +242,42 @@ export function BenchmarkSummaryView({ onClose }: Props) {
         </section>
 
         <section>
+          <h2 className="text-[13px] font-medium mb-2">Landmark placement</h2>
+          <p className="text-[11px] mb-2" style={{ color: "var(--color-fg-mute)" }}>
+            YuNet's eye landmarks must land on the actual eyes, not eyebrows or skin.
+            If a landmark misses, the 15%-face-width eye crop is fed an eyebrow patch,
+            and even a perfect classifier returns "closed" because no eye is visible.
+            The conditional rows below isolate the classifier's contribution from this upstream error.
+          </p>
+          <table
+            className="w-full text-[11px] rounded-md overflow-hidden"
+            style={{
+              background: "var(--color-bg2)",
+              border: "1px solid var(--color-border)",
+            }}
+          >
+            <thead style={{ background: "var(--color-bg3)" }}>
+              <tr>
+                <th className="px-2 py-1 text-left">Signal</th>
+                <th className="px-2 py-1 text-right">Correct</th>
+                <th className="px-2 py-1 text-right">Total</th>
+                <th className="px-2 py-1 text-right">Accuracy</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="px-2 py-1">Landmark on eyes (not eyebrows)</td>
+                <td className="px-2 py-1 font-mono">{summary.landmark.correct}</td>
+                <td className="px-2 py-1 font-mono">{summary.landmark.total}</td>
+                <td className="px-2 py-1 font-mono">
+                  {accuracyPct(summary.landmark.correct, summary.landmark.total)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section>
           <h2 className="text-[13px] font-medium mb-2">Per-face classifiers</h2>
           <table
             className="w-full text-[11px] rounded-md overflow-hidden"
@@ -239,19 +296,45 @@ export function BenchmarkSummaryView({ onClose }: Props) {
             </thead>
             <tbody>
               <tr>
-                <td className="px-2 py-1">Left eye open</td>
+                <td className="px-2 py-1">Left eye open (all faces)</td>
                 <td className="px-2 py-1 font-mono">{summary.leftEye.correct}</td>
                 <td className="px-2 py-1 font-mono">{summary.leftEye.total}</td>
                 <td className="px-2 py-1 font-mono">
                   {accuracyPct(summary.leftEye.correct, summary.leftEye.total)}
                 </td>
               </tr>
+              <tr style={{ color: "var(--color-fg-mute)" }}>
+                <td className="px-2 py-1 pl-4">
+                  ↳ Left eye, landmark ok only (fair classifier score)
+                </td>
+                <td className="px-2 py-1 font-mono">{summary.leftEyeGivenLandmarkOk.correct}</td>
+                <td className="px-2 py-1 font-mono">{summary.leftEyeGivenLandmarkOk.total}</td>
+                <td className="px-2 py-1 font-mono">
+                  {accuracyPct(
+                    summary.leftEyeGivenLandmarkOk.correct,
+                    summary.leftEyeGivenLandmarkOk.total,
+                  )}
+                </td>
+              </tr>
               <tr>
-                <td className="px-2 py-1">Right eye open</td>
+                <td className="px-2 py-1">Right eye open (all faces)</td>
                 <td className="px-2 py-1 font-mono">{summary.rightEye.correct}</td>
                 <td className="px-2 py-1 font-mono">{summary.rightEye.total}</td>
                 <td className="px-2 py-1 font-mono">
                   {accuracyPct(summary.rightEye.correct, summary.rightEye.total)}
+                </td>
+              </tr>
+              <tr style={{ color: "var(--color-fg-mute)" }}>
+                <td className="px-2 py-1 pl-4">
+                  ↳ Right eye, landmark ok only (fair classifier score)
+                </td>
+                <td className="px-2 py-1 font-mono">{summary.rightEyeGivenLandmarkOk.correct}</td>
+                <td className="px-2 py-1 font-mono">{summary.rightEyeGivenLandmarkOk.total}</td>
+                <td className="px-2 py-1 font-mono">
+                  {accuracyPct(
+                    summary.rightEyeGivenLandmarkOk.correct,
+                    summary.rightEyeGivenLandmarkOk.total,
+                  )}
                 </td>
               </tr>
               <tr>

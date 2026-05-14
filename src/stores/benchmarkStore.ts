@@ -51,8 +51,21 @@ export interface BenchmarkSummary {
   judgedPhotos: number;
   faceOverall: FaceDetectionStats;
   facePerCamera: { cameraModel: string; stats: FaceDetectionStats }[];
+  /// YuNet's eye-landmark placement accuracy — measured separately from
+  /// the eye-state classifier because a landmark on an eyebrow yields a
+  /// classifier verdict of "closed" that is *correct given the input*,
+  /// even though the underlying signal is wrong. Stratifying landmark
+  /// vs. classifier errors is the whole reason this exists.
+  landmark: BinaryAccuracy;
   leftEye: BinaryAccuracy;
   rightEye: BinaryAccuracy;
+  /// Eye accuracy restricted to faces where the user marked the
+  /// landmark correct. Lets us answer "given a good crop, how often
+  /// does the classifier get it right?" — closer to a fair classifier
+  /// score than the global numbers, which are landmark+classifier
+  /// compounded.
+  leftEyeGivenLandmarkOk: BinaryAccuracy;
+  rightEyeGivenLandmarkOk: BinaryAccuracy;
   smile: BinaryAccuracy;
   species: BinaryAccuracy;
   sharpnessGroups: SharpnessVerdictGroup[];
@@ -82,6 +95,7 @@ function f1From(precision: number | null, recall: number | null): number | null 
 function judgmentIsEmpty(j: BenchmarkFaceJudgment): boolean {
   return (
     j.detectionCorrect === null &&
+    j.landmarkCorrect === null &&
     j.leftEyeCorrect === null &&
     j.rightEyeCorrect === null &&
     j.smileCorrect === null &&
@@ -116,13 +130,39 @@ function binaryAccuracyFor(
   photos: BenchmarkPhotoRecord[],
   field: keyof Pick<
     BenchmarkFaceJudgment,
-    "leftEyeCorrect" | "rightEyeCorrect" | "smileCorrect" | "speciesCorrect"
+    | "landmarkCorrect"
+    | "leftEyeCorrect"
+    | "rightEyeCorrect"
+    | "smileCorrect"
+    | "speciesCorrect"
   >,
 ): BinaryAccuracy {
   let correct = 0;
   let total = 0;
   for (const p of photos) {
     for (const f of p.faces) {
+      const v = f[field];
+      if (v === null) continue;
+      total += 1;
+      if (v === true) correct += 1;
+    }
+  }
+  return { correct, total };
+}
+
+/// Like `binaryAccuracyFor` but only counts faces where the user
+/// confirmed the landmark was placed correctly. This isolates the
+/// classifier's contribution from the landmark's contribution to any
+/// eye-state error.
+function eyeAccuracyGivenLandmarkOk(
+  photos: BenchmarkPhotoRecord[],
+  field: "leftEyeCorrect" | "rightEyeCorrect",
+): BinaryAccuracy {
+  let correct = 0;
+  let total = 0;
+  for (const p of photos) {
+    for (const f of p.faces) {
+      if (f.landmarkCorrect !== true) continue;
       const v = f[field];
       if (v === null) continue;
       total += 1;
@@ -177,8 +217,14 @@ export function computeSummary(set: BenchmarkSet): BenchmarkSummary {
     judgedPhotos: set.photos.filter(photoIsJudged).length,
     faceOverall: faceStatsFor(set.photos),
     facePerCamera,
+    landmark: binaryAccuracyFor(set.photos, "landmarkCorrect"),
     leftEye: binaryAccuracyFor(set.photos, "leftEyeCorrect"),
     rightEye: binaryAccuracyFor(set.photos, "rightEyeCorrect"),
+    leftEyeGivenLandmarkOk: eyeAccuracyGivenLandmarkOk(set.photos, "leftEyeCorrect"),
+    rightEyeGivenLandmarkOk: eyeAccuracyGivenLandmarkOk(
+      set.photos,
+      "rightEyeCorrect",
+    ),
     smile: binaryAccuracyFor(set.photos, "smileCorrect"),
     species: binaryAccuracyFor(set.photos, "speciesCorrect"),
     sharpnessGroups,
@@ -189,6 +235,7 @@ export function computeSummary(set: BenchmarkSet): BenchmarkSummary {
 
 type FaceVerdictField =
   | "detectionCorrect"
+  | "landmarkCorrect"
   | "leftEyeCorrect"
   | "rightEyeCorrect"
   | "smileCorrect"
@@ -222,8 +269,15 @@ interface BenchmarkState {
   /// Initialize an empty face judgment list when the evaluator first
   /// receives the face data for a photo. Idempotent — re-running
   /// preserves existing judgments while padding/truncating to match
-  /// the new face count.
-  ensureFaceJudgments: (faceCount: number, bboxes: [number, number, number, number][]) => void;
+  /// the new face count. Records the bbox and eye landmarks at this
+  /// moment so the JSON pins each judgment to the exact AI output
+  /// that was visible.
+  ensureFaceJudgments: (
+    faceCount: number,
+    bboxes: [number, number, number, number][],
+    leftEyes: [number, number][],
+    rightEyes: [number, number][],
+  ) => void;
 
   setFaceVerdict: (
     faceIndex: number,
@@ -373,7 +427,7 @@ export const useBenchmarkStore = create<BenchmarkState>((set, get) => ({
 
   setFaceIndex: (index: number) => set({ currentFaceIndex: Math.max(0, index) }),
 
-  ensureFaceJudgments: (faceCount, bboxes) => {
+  ensureFaceJudgments: (faceCount, bboxes, leftEyes, rightEyes) => {
     set((state) =>
       withPhotoMutation(state, (photo) => {
         // Idempotent: keep existing judgments, pad with empties to match
@@ -383,15 +437,25 @@ export const useBenchmarkStore = create<BenchmarkState>((set, get) => ({
         for (let i = 0; i < faceCount; i += 1) {
           const existing = photo.faces.find((f) => f.faceIndex === i);
           const bbox = bboxes[i] ?? null;
+          const lEye = leftEyes[i] ?? null;
+          const rEye = rightEyes[i] ?? null;
           if (existing) {
-            // Keep the user's existing judgment; refresh the bbox snapshot
-            // to the current AI output (only if we don't already have one).
+            // Keep the user's existing judgment; backfill any missing
+            // snapshot from the current AI output without overwriting
+            // a snapshot that was already captured.
             next.push({
               ...existing,
               bboxSnapshot: existing.bboxSnapshot ?? bbox,
+              leftEyeSnapshot: existing.leftEyeSnapshot ?? lEye,
+              rightEyeSnapshot: existing.rightEyeSnapshot ?? rEye,
             });
           } else {
-            next.push({ ...emptyFaceJudgment(i), bboxSnapshot: bbox });
+            next.push({
+              ...emptyFaceJudgment(i),
+              bboxSnapshot: bbox,
+              leftEyeSnapshot: lEye,
+              rightEyeSnapshot: rEye,
+            });
           }
         }
         return { ...photo, faces: next };

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useBenchmarkStore } from "../../stores/benchmarkStore";
-import { sharpnessBadgeScore } from "../../stores/aiStore";
+import { sharpnessBadgeScore, useAiStore } from "../../stores/aiStore";
 import { imageUrl } from "../../hooks/useImageLoader";
 import { BenchmarkFaceOverlay } from "./BenchmarkFaceOverlay";
+import { EyeCrop } from "./EyeCrop";
 import { useBenchmarkKeyboard } from "./useBenchmarkKeyboard";
 import type { Face, SharpnessPercentiles } from "../../types";
 import type {
@@ -92,6 +93,16 @@ export function BenchmarkEvaluatorView({ onClose, onOpenSummary }: Props) {
   const setFaceIndex = useBenchmarkStore((s) => s.setFaceIndex);
   const ensureFaceJudgments = useBenchmarkStore((s) => s.ensureFaceJudgments);
   const toggleFaceVerdict = useBenchmarkStore((s) => s.toggleFaceVerdict);
+
+  // Live provider kinds — if the user has not installed the ONNX
+  // classifiers, the mock providers produce deterministic
+  // not-real-signal output (alternating 0/1 for eyes, constant 0.5 for
+  // smile). Judging those teaches us nothing about the real models, so
+  // we hide those verdict rows entirely when on mock.
+  const eyeProvider = useAiStore((s) => s.eyeProvider);
+  const mouthProvider = useAiStore((s) => s.mouthProvider);
+  const showEyeVerdict = eyeProvider === "onnx";
+  const showSmileVerdict = mouthProvider === "onnx";
   const setMissedFaceCount = useBenchmarkStore((s) => s.setMissedFaceCount);
   const setSharpnessVerdict = useBenchmarkStore((s) => s.setSharpnessVerdict);
   const setPhotoNotes = useBenchmarkStore((s) => s.setPhotoNotes);
@@ -189,7 +200,8 @@ export function BenchmarkEvaluatorView({ onClose, onOpenSummary }: Props) {
     setSharpnessSnapshot(sharpnessSignals);
   }, [photo, sharpnessSignals, faces, setSharpnessSnapshot]);
 
-  // Ensure the photo record has one judgment slot per detected face.
+  // Ensure the photo record has one judgment slot per detected face,
+  // and snapshot the landmark coords as well as the bbox.
   useEffect(() => {
     if (!faces) return;
     const bboxes: [number, number, number, number][] = faces.map((f) => [
@@ -198,7 +210,12 @@ export function BenchmarkEvaluatorView({ onClose, onOpenSummary }: Props) {
       f.bboxW,
       f.bboxH,
     ]);
-    ensureFaceJudgments(faces.length, bboxes);
+    const leftEyes: [number, number][] = faces.map((f) => [f.leftEyeX, f.leftEyeY]);
+    const rightEyes: [number, number][] = faces.map((f) => [
+      f.rightEyeX,
+      f.rightEyeY,
+    ]);
+    ensureFaceJudgments(faces.length, bboxes, leftEyes, rightEyes);
   }, [faces, ensureFaceJudgments]);
 
   // Auto-save after a short debounce on dirty state. Keeps work safe
@@ -228,12 +245,23 @@ export function BenchmarkEvaluatorView({ onClose, onOpenSummary }: Props) {
     onPrevFace: () => setFaceIndex(Math.max(0, currentFaceIndex - 1)),
     onToggleDetection: () =>
       faces && faces.length > 0 && toggleFaceVerdict(currentFaceIndex, "detectionCorrect"),
+    onToggleLandmark: () =>
+      faces && faces.length > 0 && toggleFaceVerdict(currentFaceIndex, "landmarkCorrect"),
     onToggleLeftEye: () =>
-      faces && faces.length > 0 && toggleFaceVerdict(currentFaceIndex, "leftEyeCorrect"),
+      faces &&
+      faces.length > 0 &&
+      showEyeVerdict &&
+      toggleFaceVerdict(currentFaceIndex, "leftEyeCorrect"),
     onToggleRightEye: () =>
-      faces && faces.length > 0 && toggleFaceVerdict(currentFaceIndex, "rightEyeCorrect"),
+      faces &&
+      faces.length > 0 &&
+      showEyeVerdict &&
+      toggleFaceVerdict(currentFaceIndex, "rightEyeCorrect"),
     onToggleSmile: () =>
-      faces && faces.length > 0 && toggleFaceVerdict(currentFaceIndex, "smileCorrect"),
+      faces &&
+      faces.length > 0 &&
+      showSmileVerdict &&
+      toggleFaceVerdict(currentFaceIndex, "smileCorrect"),
     onToggleSpecies: () =>
       faces && faces.length > 0 && toggleFaceVerdict(currentFaceIndex, "speciesCorrect"),
     onSharpnessVerdict: (v) => setSharpnessVerdict(v),
@@ -406,6 +434,38 @@ export function BenchmarkEvaluatorView({ onClose, onOpenSummary }: Props) {
                           {Math.round(f.detectionConfidence * 100)}% · {f.species}
                         </span>
                       </div>
+
+                      {/* The exact pixel patches the eye classifier sees.
+                          If you see eyebrow/skin here, the landmark is
+                          wrong — judge `Landmark` below as ✕ regardless
+                          of what the classifier said. */}
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <EyeCrop
+                          photoId={photoId!}
+                          eyeXNormalized={f.leftEyeX}
+                          eyeYNormalized={f.leftEyeY}
+                          bboxWNormalized={f.bboxW}
+                          sizePx={48}
+                          label="Left-eye crop (15% of face width, what the classifier sees)"
+                        />
+                        <EyeCrop
+                          photoId={photoId!}
+                          eyeXNormalized={f.rightEyeX}
+                          eyeYNormalized={f.rightEyeY}
+                          bboxWNormalized={f.bboxW}
+                          sizePx={48}
+                          label="Right-eye crop"
+                        />
+                        <span
+                          className="font-mono text-2xs leading-tight ml-1"
+                          style={{ color: "var(--color-fg-mute)" }}
+                        >
+                          Eye crops
+                          <br />
+                          (15% face)
+                        </span>
+                      </div>
+
                       <div className="flex flex-col gap-1.5">
                         <VerdictButton
                           value={j?.detectionCorrect ?? null}
@@ -413,31 +473,65 @@ export function BenchmarkEvaluatorView({ onClose, onOpenSummary }: Props) {
                           hotkey={selected ? "Y" : undefined}
                           onClick={() => toggleFaceVerdict(i, "detectionCorrect")}
                         />
+                        <VerdictButton
+                          value={j?.landmarkCorrect ?? null}
+                          label="Landmark on eyes"
+                          hotkey={selected ? "P" : undefined}
+                          onClick={() => toggleFaceVerdict(i, "landmarkCorrect")}
+                        />
+                        {showEyeVerdict ? (
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <VerdictButton
+                              value={j?.leftEyeCorrect ?? null}
+                              label={`L eye ${f.leftEyeOpen ? "○ open" : "— closed"}`}
+                              hotkey={selected ? "L" : undefined}
+                              onClick={() => toggleFaceVerdict(i, "leftEyeCorrect")}
+                            />
+                            <VerdictButton
+                              value={j?.rightEyeCorrect ?? null}
+                              label={`R eye ${f.rightEyeOpen ? "○ open" : "— closed"}`}
+                              hotkey={selected ? "R" : undefined}
+                              onClick={() => toggleFaceVerdict(i, "rightEyeCorrect")}
+                            />
+                          </div>
+                        ) : (
+                          <div
+                            className="text-[10px] italic px-2 py-1 rounded-sm"
+                            style={{
+                              background: "var(--color-bg)",
+                              color: "var(--color-fg-mute)",
+                              border: "1px dashed var(--color-border)",
+                            }}
+                          >
+                            Eye state: <span className="font-mono">mock</span> — drop{" "}
+                            <span className="font-mono">eye_state.onnx</span> into{" "}
+                            <span className="font-mono">~/.photosift-dev/models/</span> and restart to benchmark.
+                          </div>
+                        )}
                         <div className="grid grid-cols-2 gap-1.5">
-                          <VerdictButton
-                            value={j?.leftEyeCorrect ?? null}
-                            label={`L eye ${f.leftEyeOpen ? "○" : "—"}`}
-                            hotkey={selected ? "L" : undefined}
-                            onClick={() => toggleFaceVerdict(i, "leftEyeCorrect")}
-                          />
-                          <VerdictButton
-                            value={j?.rightEyeCorrect ?? null}
-                            label={`R eye ${f.rightEyeOpen ? "○" : "—"}`}
-                            hotkey={selected ? "R" : undefined}
-                            onClick={() => toggleFaceVerdict(i, "rightEyeCorrect")}
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-1.5">
-                          <VerdictButton
-                            value={j?.smileCorrect ?? null}
-                            label={`Smile ${
-                              f.smileScore == null
-                                ? "—"
-                                : Math.round(f.smileScore * 100) + "%"
-                            }`}
-                            hotkey={selected ? "S" : undefined}
-                            onClick={() => toggleFaceVerdict(i, "smileCorrect")}
-                          />
+                          {showSmileVerdict ? (
+                            <VerdictButton
+                              value={j?.smileCorrect ?? null}
+                              label={`Smile ${
+                                f.smileScore == null
+                                  ? "—"
+                                  : Math.round(f.smileScore * 100) + "%"
+                              }`}
+                              hotkey={selected ? "S" : undefined}
+                              onClick={() => toggleFaceVerdict(i, "smileCorrect")}
+                            />
+                          ) : (
+                            <div
+                              className="text-[10px] italic px-2 py-1 rounded-sm flex items-center"
+                              style={{
+                                background: "var(--color-bg)",
+                                color: "var(--color-fg-mute)",
+                                border: "1px dashed var(--color-border)",
+                              }}
+                            >
+                              Smile: mock (0.5)
+                            </div>
+                          )}
                           <VerdictButton
                             value={j?.speciesCorrect ?? null}
                             label="Species"

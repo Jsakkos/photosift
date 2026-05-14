@@ -47,7 +47,17 @@ export interface BenchmarkFaceJudgment {
   faceIndex: number;
   /// Snapshot bbox at judgment time (normalized 0–1, [x, y, w, h]).
   bboxSnapshot: [number, number, number, number] | null;
+  /// Snapshot eye landmark coordinates (normalized 0–1, [x, y]) at
+  /// judgment time. Captured so the JSON records exactly what crop
+  /// the eye classifier saw — diagnoses "landmark on eyebrow" after
+  /// the fact, without re-running AI.
+  leftEyeSnapshot: [number, number] | null;
+  rightEyeSnapshot: [number, number] | null;
   detectionCorrect: boolean | null;
+  /// Are both eye landmarks placed on the actual eyes (not on
+  /// eyebrows, cheeks, etc.)? Single bool because YuNet's regression
+  /// errors are usually bilateral; asymmetric cases can go in notes.
+  landmarkCorrect: boolean | null;
   leftEyeCorrect: boolean | null;
   rightEyeCorrect: boolean | null;
   smileCorrect: boolean | null;
@@ -94,7 +104,10 @@ export function emptyFaceJudgment(faceIndex: number): BenchmarkFaceJudgment {
   return {
     faceIndex,
     bboxSnapshot: null,
+    leftEyeSnapshot: null,
+    rightEyeSnapshot: null,
     detectionCorrect: null,
+    landmarkCorrect: null,
     leftEyeCorrect: null,
     rightEyeCorrect: null,
     smileCorrect: null,

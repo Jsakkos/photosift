@@ -9,6 +9,7 @@ interface Bindings {
   onPrevFace: () => void;
   onNextFace: () => void;
   onToggleDetection: () => void;
+  onToggleLandmark: () => void;
   onToggleLeftEye: () => void;
   onToggleRightEye: () => void;
   onToggleSmile: () => void;
@@ -27,8 +28,9 @@ interface Bindings {
 ///
 /// Bindings (mirrored in the footer chip + per-button kbd labels):
 ///   `Y`        toggle detection-correct on current face
-///   `L` / `R`  toggle left / right eye
-///   `S`        toggle smile
+///   `P`        toggle landmark placement (eyes vs. eyebrows)
+///   `L` / `R`  toggle left / right eye (hidden on mock provider)
+///   `S`        toggle smile (hidden on mock provider)
 ///   `C`        toggle species (cat vs human)
 ///   `[` / `]`  prev / next face
 ///   `Space`    next photo
@@ -84,6 +86,10 @@ export function useBenchmarkKeyboard(b: Bindings) {
         case "y":
           e.preventDefault();
           b.onToggleDetection();
+          break;
+        case "p":
+          e.preventDefault();
+          b.onToggleLandmark();
           break;
         case "l":
           e.preventDefault();
