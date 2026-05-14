@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ShootListPage } from "./pages/ShootListPage";
 import { CullPage } from "./pages/CullPage";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
+import { BenchmarkPage } from "./pages/BenchmarkPage";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { OnboardingWizard } from "./components/OnboardingWizard";
 import { Toast } from "./components/Toast";
@@ -80,6 +81,13 @@ function App() {
         <Route path="/shoots" element={<ShootListPage />} />
         <Route path="/shoots/:id" element={<CullPage />} />
         <Route path="/primitives" element={<PrimitivesPage />} />
+        {/* Dev-only AI quality evaluation tool. The route renders on all
+            builds (so the link doesn't 404 if someone follows it in a
+            release binary), but the page's commands are gated behind
+            `#[cfg(debug_assertions)]` and will return an error. */}
+        {import.meta.env.DEV && (
+          <Route path="/benchmark" element={<BenchmarkPage />} />
+        )}
       </Routes>
       <SettingsDialog />
       {showWizard && <OnboardingWizard replay={wizardReplay} onClose={closeWizardTour} />}
