@@ -67,6 +67,20 @@ pub trait CuratorProvider: Send + Sync {
         cluster: &Stage2Cluster<'_>,
     ) -> Result<ClusterJudgmentBatch>;
 
+    /// Triage stage — a fast on-import first pass that flags only
+    /// technically-unusable frames. Reuses the Stage 2 request path with
+    /// a synthetic, triage-steering summary, so providers get this for
+    /// free without implementing a separate code path.
+    async fn run_triage(
+        &self,
+        batch: &Stage2Cluster<'_>,
+    ) -> Result<ClusterJudgmentBatch> {
+        let summary = crate::curator::prompts::triage_summary();
+        let mut result = self.run_stage2_cluster(&summary, batch).await?;
+        result.prompt_version = crate::curator::prompts::TRIAGE_PROMPT_VERSION;
+        Ok(result)
+    }
+
     /// Stable identifier persisted to `curator_judgments.provider`.
     /// "anthropic" | "gemini" | "local".
     fn provider_id(&self) -> &'static str;

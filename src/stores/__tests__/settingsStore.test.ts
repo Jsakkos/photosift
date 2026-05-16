@@ -27,6 +27,8 @@ beforeEach(() => {
       onboardedSelect: true,
       onboardedRoute: true,
       onboardedWizard: true,
+      curatorTriageOnImport: true,
+      onboardedReview: true,
     },
     isLoaded: false,
     isOpen: false,
@@ -92,5 +94,24 @@ describe("settingsStore", () => {
     const call = spy.mock.calls.find((c) => c[0] === "recluster_shoot");
     expect(call).toBeDefined();
     expect((call![1] as { shootId: number }).shootId).toBe(42);
+  });
+
+  test("reclusterShootWith passes explicit thresholds through to IPC", async () => {
+    const spy = vi.fn();
+    setupMockIpc({ recluster_shoot_with: 7 }, spy);
+
+    const count = await useSettingsStore
+      .getState()
+      .reclusterShootWith(42, 8, 20, 60);
+
+    expect(count).toBe(7);
+    const call = spy.mock.calls.find((c) => c[0] === "recluster_shoot_with");
+    expect(call).toBeDefined();
+    expect(call![1]).toEqual({
+      shootId: 42,
+      nearDupThreshold: 8,
+      relatedThreshold: 20,
+      timeWindowS: 60,
+    });
   });
 });

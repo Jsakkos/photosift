@@ -44,11 +44,12 @@ describe("createGroupFromPhotos", () => {
     expect((createCall![1] as { shootId: number; photoIds: number[] }).photoIds).toEqual([1, 2, 3]);
 
     expect(useProjectStore.getState().groups).toHaveLength(1);
-    // Triage now collapses to the cover
+    // Triage shows every photo flat — grouping no longer collapses the
+    // list. All 3 members appear, each carrying the new group id.
     const di = useProjectStore.getState().displayItems;
-    expect(di).toHaveLength(1);
-    expect(di[0].isGroupCover).toBe(true);
-    expect(di[0].groupMemberCount).toBe(3);
+    expect(di).toHaveLength(3);
+    expect(di.every((d) => d.groupId === newGroup.id)).toBe(true);
+    expect(di.every((d) => d.isGroupCover === undefined)).toBe(true);
   });
 
   test("refuses selections of fewer than 2 photos", async () => {
@@ -109,10 +110,13 @@ describe("ungroupPhotos", () => {
 });
 
 describe("setActiveInnerGroup", () => {
-  test("activating opens the inner strip; passing null closes it; repeating same id is a no-op", () => {
-    const img1 = makeImage({ id: 1, flag: "unreviewed" });
-    const img2 = makeImage({ id: 2, flag: "unreviewed" });
-    const img3 = makeImage({ id: 3, flag: "unreviewed" });
+  test("drilling into a group filters Select's displayItems to its members", () => {
+    // Group drill-in is a Select-view feature (Triage is a flat per-photo
+    // pass). Drilling narrows the list to one group; null restores it.
+    const g1 = makeImage({ id: 1, flag: "pick" });
+    const g2 = makeImage({ id: 2, flag: "pick" });
+    const g3 = makeImage({ id: 3, flag: "pick" });
+    const solo = makeImage({ id: 4, flag: "pick" });
     const group = makeGroup([
       { photoId: 1, isCover: true },
       { photoId: 2 },
@@ -120,114 +124,27 @@ describe("setActiveInnerGroup", () => {
     ]);
 
     useProjectStore.setState({
-      images: [img1, img2, img3],
+      images: [g1, g2, g3, solo],
       groups: [group],
-      displayItems: computeDisplayItems([img1, img2, img3], "triage", [group]),
-      currentView: "triage",
+      displayItems: computeDisplayItems([g1, g2, g3, solo], "select", [group]),
+      currentView: "select",
       currentIndex: 0,
       activeInnerGroupId: null,
     });
 
-    // Collapsed: one cover item
-    expect(useProjectStore.getState().displayItems).toHaveLength(1);
+    // Select expands all members inline: 3 grouped + 1 standalone = 4.
+    expect(useProjectStore.getState().displayItems).toHaveLength(4);
 
+    // Drilling in narrows to just that group's members.
     useProjectStore.getState().setActiveInnerGroup(group.id);
     expect(useProjectStore.getState().activeInnerGroupId).toBe(group.id);
-    // Drilled-in: 3 member rows
-    expect(useProjectStore.getState().displayItems).toHaveLength(3);
+    const drilled = useProjectStore.getState().displayItems;
+    expect(drilled).toHaveLength(3);
+    expect(drilled.every((d) => d.groupId === group.id)).toBe(true);
 
-    // Calling with the SAME id is a no-op (supports single-click-to-expand
-    // without a repeated click accidentally collapsing).
-    useProjectStore.getState().setActiveInnerGroup(group.id);
-    expect(useProjectStore.getState().activeInnerGroupId).toBe(group.id);
-    expect(useProjectStore.getState().displayItems).toHaveLength(3);
-
-    // Passing null explicitly contracts.
+    // Passing null restores the full expanded list.
     useProjectStore.getState().setActiveInnerGroup(null);
     expect(useProjectStore.getState().activeInnerGroupId).toBeNull();
-    expect(useProjectStore.getState().displayItems).toHaveLength(1);
-  });
-
-  test("drilling in snaps currentIndex to the top-ranked member, not the cover", () => {
-    // The drill-down sorts by quality score desc, so displayItems[0] is
-    // the best frame. Before this fix, setActiveInnerGroup preserved
-    // the clicked cover photo's position — which for a mediocre cover
-    // meant the user landed mid-list and had to arrow-up before P/X.
-    // The fix forces newIndex=0 when drilling in (groupId != null).
-    const cover = makeImage({ id: 1, qualityScore: 30 });
-    const best = makeImage({ id: 2, qualityScore: 90 });
-    const mid = makeImage({ id: 3, qualityScore: 60 });
-    // Mark all three as analyzed so quality_score sorting kicks in.
-    cover.aiAnalyzedAt = "2026-01-01T00:00:00Z";
-    best.aiAnalyzedAt = "2026-01-01T00:00:00Z";
-    mid.aiAnalyzedAt = "2026-01-01T00:00:00Z";
-    const group = makeGroup([
-      { photoId: 1, isCover: true },
-      { photoId: 2 },
-      { photoId: 3 },
-    ]);
-
-    useProjectStore.setState({
-      images: [cover, best, mid],
-      groups: [group],
-      displayItems: computeDisplayItems([cover, best, mid], "triage", [group]),
-      currentView: "triage",
-      // Simulate user focused on the cover before drilling in.
-      currentIndex: 0,
-      activeInnerGroupId: null,
-    });
-
-    useProjectStore.getState().setActiveInnerGroup(group.id);
-
-    const state = useProjectStore.getState();
-    // The top-ranked frame (id=2, quality 90) should be at index 0
-    // AND currentIndex should point to it — no extra click needed.
-    expect(state.displayItems[0].image.id).toBe(2);
-    expect(state.currentIndex).toBe(0);
-  });
-
-  test("drilled-in displayItems contains ONLY that group's members — standalone photos and other groups are filtered out", () => {
-    // Three groups, one standalone photo. Drilling into group 1 should
-    // produce displayItems with exactly group 1's members, nothing else.
-    const g1a = makeImage({ id: 1, flag: "unreviewed" });
-    const g1b = makeImage({ id: 2, flag: "unreviewed" });
-    const g2a = makeImage({ id: 3, flag: "unreviewed" });
-    const g2b = makeImage({ id: 4, flag: "unreviewed" });
-    const solo = makeImage({ id: 5, flag: "unreviewed" });
-    const group1 = makeGroup([
-      { photoId: 1, isCover: true },
-      { photoId: 2 },
-    ]);
-    const group2 = makeGroup([
-      { photoId: 3, isCover: true },
-      { photoId: 4 },
-    ]);
-    // Force distinct ids (makeGroup uses a shared counter).
-    (group2 as { id: number }).id = (group1 as { id: number }).id + 1;
-
-    useProjectStore.setState({
-      images: [g1a, g1b, g2a, g2b, solo],
-      groups: [group1, group2],
-      displayItems: computeDisplayItems(
-        [g1a, g1b, g2a, g2b, solo],
-        "triage",
-        [group1, group2],
-      ),
-      currentView: "triage",
-      currentIndex: 0,
-      activeInnerGroupId: null,
-    });
-
-    // Collapsed: two covers + one standalone = 3 items.
-    expect(useProjectStore.getState().displayItems).toHaveLength(3);
-
-    useProjectStore.getState().setActiveInnerGroup(group1.id);
-    const drilled = useProjectStore.getState().displayItems;
-    // Drilled-in: exactly group 1's two members, no cover for group 2,
-    // no standalone photo.
-    expect(drilled).toHaveLength(2);
-    expect(drilled.every((d) => d.groupId === group1.id)).toBe(true);
-    expect(drilled.every((d) => !d.isGroupCover)).toBe(true);
-    expect(drilled.map((d) => d.image.id).sort()).toEqual([1, 2]);
+    expect(useProjectStore.getState().displayItems).toHaveLength(4);
   });
 });

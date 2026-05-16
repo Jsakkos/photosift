@@ -154,5 +154,12 @@ function copy(
           "Every pick has a destination. Press Ctrl+E to export XMP sidecars for this shoot, or switch back to Select to pick more.",
       };
     }
+    // Review renders its own bracket history and is never routed through
+    // EmptyViewState — this case only satisfies the exhaustiveness check.
+    case "review":
+      return {
+        title: "Review",
+        body: "Tournament history for this shoot.",
+      };
   }
 }

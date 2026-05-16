@@ -81,19 +81,8 @@ export function GridView() {
           break;
         case "Enter":
           e.preventDefault();
-          {
-            const focused = displayItems[focusIndex];
-            if (
-              focused?.isGroupCover &&
-              focused.groupId !== undefined &&
-              (currentView === "triage" || currentView === "select")
-            ) {
-              setActiveInnerGroup(focused.groupId);
-            } else {
-              setCurrentIndex(focusIndex);
-              setViewMode("sequential");
-            }
-          }
+          setCurrentIndex(focusIndex);
+          setViewMode("sequential");
           break;
         case "=":
         case "+": {
@@ -229,12 +218,12 @@ export function GridView() {
         const index = rowIndex * columnCount + columnIndex;
         if (index >= displayItems.length) return null;
         const item = displayItems[index];
-        // An expanded-group member: has a groupId but isn't the cover.
-        // These get a shared background tint so adjacent members read as
-        // belonging to one group; alternating tints keep neighboring
-        // groups distinguishable.
+        // An expanded-group member gets a shared background tint so
+        // adjacent members read as belonging to one group; alternating
+        // tints keep neighboring groups distinguishable. Triage is a
+        // flat per-photo pass — group affiliation is not surfaced there.
         const isGroupMember =
-          item.groupId !== undefined && !item.isGroupCover;
+          currentView === "select" && item.groupId !== undefined;
         const tintClass = isGroupMember
           ? item.groupId! % 2 === 0
             ? "bg-accent/[0.06]"
@@ -253,22 +242,9 @@ export function GridView() {
               showGroupBar={isGroupMember}
               onClick={handleClick}
               onDoubleClick={() => {
-                // Symmetric toggle: clicking a collapsed group cover
-                // expands it; clicking any expanded-group member
-                // collapses it back. Non-group photos open loupe.
-                const inExpandableView =
-                  currentView === "triage" || currentView === "select";
-                const isExpandedMember =
-                  inExpandableView &&
-                  item.groupId !== undefined &&
-                  !item.isGroupCover;
-                if (
-                  item.isGroupCover &&
-                  item.groupId !== undefined &&
-                  inExpandableView
-                ) {
-                  setActiveInnerGroup(item.groupId);
-                } else if (isExpandedMember && item.groupId !== undefined) {
+                // In Select, double-clicking a grouped photo drills into
+                // that group's inner strip; everything else opens loupe.
+                if (currentView === "select" && item.groupId !== undefined) {
                   setActiveInnerGroup(item.groupId);
                 } else {
                   setCurrentIndex(index);
@@ -480,9 +456,6 @@ function GridThumb({
     image.flag !== "unreviewed" ? image.flag : null,
     image.destination !== "unrouted" ? image.destination.replace("_", " ") : null,
     image.starRating > 0 ? `${image.starRating} star${image.starRating === 1 ? "" : "s"}` : null,
-    item.isGroupCover && item.groupMemberCount
-      ? `group of ${item.groupMemberCount}`
-      : null,
   ]
     .filter(Boolean)
     .join(", ");
@@ -561,18 +534,6 @@ function GridThumb({
           }
         >
           {image.destination === "edit" ? "→ C1" : "→ Exp"}
-        </Badge>
-      )}
-      {/* Group stack indicator */}
-      {item.isGroupCover && item.groupMemberCount && (
-        <Badge
-          tone="neutral"
-          variant="glass"
-          className="absolute bottom-1 right-1 font-semibold pointer-events-none"
-          title={`Group cover · ${item.groupMemberCount} photos total\n${item.groupMemberCount - 1} similar photos hidden.\nDouble-click or press Enter to drill in.`}
-          aria-label={`Group cover, ${item.groupMemberCount} photos total`}
-        >
-          +{item.groupMemberCount - 1}
         </Badge>
       )}
       {/* Filename on hover */}

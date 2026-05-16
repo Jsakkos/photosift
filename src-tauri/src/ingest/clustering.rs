@@ -1,7 +1,12 @@
 use super::phash::hamming_distance;
 
-pub const DEFAULT_NEAR_DUP_THRESHOLD: u32 = 4;
-pub const DEFAULT_RELATED_THRESHOLD: u32 = 12;
+// Raised from 4/12 after real-shoot testing: the conservative defaults
+// reliably grouped near-identical frames but missed similar-but-slightly-
+// varying ones, leaving the user to compare them one-by-one instead of in
+// the Select tournament. Existing DBs keep their stored values — the
+// inline regroup control in Select is how those shoots retune.
+pub const DEFAULT_NEAR_DUP_THRESHOLD: u32 = 6;
+pub const DEFAULT_RELATED_THRESHOLD: u32 = 16;
 /// Default capture-time gap (seconds) allowed between two pHash-similar
 /// photos before they stop being considered part of the same burst.
 /// 60s comfortably covers typical D750 burst sequences plus a beat of

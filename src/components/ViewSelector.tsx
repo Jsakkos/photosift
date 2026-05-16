@@ -5,6 +5,7 @@ const VIEWS: { key: CullView; label: string; tooltip: string }[] = [
   { key: "triage", label: "Triage", tooltip: "Triage — pick or reject each photo" },
   { key: "select", label: "Select", tooltip: "Select — choose the best of similar shots" },
   { key: "route", label: "Route", tooltip: "Route — mark for edit or publish" },
+  { key: "review", label: "Review", tooltip: "Review — walk back your tournament picks" },
 ];
 
 function useViewStats() {

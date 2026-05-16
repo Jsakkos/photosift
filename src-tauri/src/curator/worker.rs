@@ -35,7 +35,16 @@ pub enum CuratorJob {
     /// Stage 2 prompt is unchanged but the model is told to leave
     /// `cluster_rank` null.
     Stage2Singletons { shoot_id: i64, photo_ids: Vec<i64> },
+    /// A batch of photos for the on-import triage stage. Independent of
+    /// Stage 1 / groups — needs neither. Writes `triage_judgments` rows
+    /// and emits `curator:triage_done`.
+    TriageBatch { shoot_id: i64, photo_ids: Vec<i64> },
 }
+
+/// Photos per `TriageBatch` job. Larger than `SINGLETONS_PER_JOB` — the
+/// triage prompt is cheap (reject/keep only) so bigger batches cut the
+/// per-call overhead without crowding the vision budget.
+pub const TRIAGE_BATCH_SIZE: usize = 8;
 
 // Stage 2 concurrency is per-provider — cloud=4, local=1. See
 // `CuratorProvider::concurrency_limit()` and consumers in `run_loop`.
@@ -182,6 +191,18 @@ async fn run_loop(
             CuratorJob::Stage2Singletons { shoot_id, photo_ids } => {
                 let permit = semaphore.clone().acquire_owned().await.ok();
                 tokio::spawn(handle_stage2_singletons(
+                    permit,
+                    Arc::clone(&provider),
+                    db_path_from_db(&db),
+                    shoot_id,
+                    photo_ids,
+                    progress.clone(),
+                    app.clone(),
+                ));
+            }
+            CuratorJob::TriageBatch { shoot_id, photo_ids } => {
+                let permit = semaphore.clone().acquire_owned().await.ok();
+                tokio::spawn(handle_triage_batch(
                     permit,
                     Arc::clone(&provider),
                     db_path_from_db(&db),
@@ -400,6 +421,25 @@ fn finalize_stage2(
                         batch.prompt_version,
                     );
                 }
+                // Express the cluster ranking as a tournament bracket so
+                // the Review tab can show the Curator's pairwise picks
+                // alongside the user's own. Derived, not re-prompted —
+                // each judgment's `reason` is the rationale. Only real
+                // clusters (group_id present) get a bracket.
+                if let Some(gid) = group_id {
+                    let ranked_ids = rank_judgments(&batch.judgments);
+                    if ranked_ids.len() >= 2 {
+                        let _ = db.delete_bracket_decisions_for_group(gid, "curator");
+                        for (round, pair, left, right, decision) in
+                            derive_curator_bracket(&ranked_ids)
+                        {
+                            let _ = db.insert_bracket_decision(
+                                shoot_id, gid, round, pair, left, right, decision,
+                                "curator",
+                            );
+                        }
+                    }
+                }
                 let _ = db.add_curator_cost_cents(shoot_id, cents);
 
                 // If everything is now judged, mark complete.
@@ -543,6 +583,80 @@ async fn run_stage2_singletons(
     Ok((batch, photo_ids.to_vec()))
 }
 
+async fn handle_triage_batch(
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    provider: Arc<dyn CuratorProvider>,
+    db_path: PathBuf,
+    shoot_id: i64,
+    photo_ids: Vec<i64>,
+    progress: ProgressCounters,
+    app: AppHandle,
+) {
+    let provider_id = provider.provider_id();
+    match run_triage_batch(provider.as_ref(), &db_path, shoot_id, &photo_ids).await {
+        Ok(batch) => {
+            let cents = actual_cost_cents_for_usage(provider_id, &batch.model, &batch.usage);
+            progress.cost_cents.fetch_add(cents as usize, Ordering::SeqCst);
+            let mut rejects: Vec<i64> = Vec::new();
+            if let Ok(db) = Database::open(&crate::db::schema::global_db_path()) {
+                let _ = db.add_curator_cost_cents(shoot_id, cents);
+                for j in &batch.judgments {
+                    // Triage never auto-picks: 'pick' and 'keep' both leave
+                    // the photo unreviewed. Only 'reject' is acted on.
+                    let flag = if j.suggested_flag
+                        == crate::curator::types::SuggestedFlag::Reject
+                    {
+                        rejects.push(j.photo_id);
+                        "reject"
+                    } else {
+                        "keep"
+                    };
+                    let _ = db.upsert_triage_judgment(
+                        j.photo_id,
+                        shoot_id,
+                        flag,
+                        &j.reason,
+                        &batch.model,
+                        batch.prompt_version,
+                    );
+                }
+            }
+            let _ = app.emit(
+                "curator:triage_done",
+                json!({ "shootId": shoot_id, "rejectPhotoIds": rejects }),
+            );
+        }
+        Err(e) => {
+            // Triage runs unprompted on import; a failure is logged but
+            // not surfaced as a curator error toast.
+            log::warn!("curator triage batch failed (shoot {}): {:#}", shoot_id, e);
+        }
+    }
+}
+
+async fn run_triage_batch(
+    provider: &dyn CuratorProvider,
+    db_path: &std::path::Path,
+    shoot_id: i64,
+    photo_ids: &[i64],
+) -> Result<ClusterJudgmentBatch> {
+    let db = Database::open(db_path).context("open db in triage task")?;
+    let frames = build_stage2_frames(&db, shoot_id, photo_ids)?;
+    let frame_refs: Vec<Stage2Frame<'_>> = frames
+        .iter()
+        .map(|f| Stage2Frame {
+            photo_id: f.photo_id,
+            thumb_path: &f.thumb_path,
+            sharpness_1_10: f.sharpness_1_10,
+            face_count: f.face_count,
+            eyes_open_count: f.eyes_open_count,
+            smile_score: f.smile_score,
+        })
+        .collect();
+    let cluster = Stage2Cluster { frames: &frame_refs };
+    provider.run_triage(&cluster).await
+}
+
 /// Pre-computed frame info for building Stage 2 calls.
 struct Stage2FrameInfo {
     photo_id: i64,
@@ -622,6 +736,60 @@ fn coerce_singleton_to_pick_keep(
     Ok((batch, photo_ids))
 }
 
+/// Photo IDs of a cluster's judgments ordered best-first by
+/// `cluster_rank` (1 = strongest). Missing ranks sort last; photo_id
+/// breaks ties so the ordering is deterministic.
+fn rank_judgments(judgments: &[crate::curator::types::CuratorJudgment]) -> Vec<i64> {
+    let mut ranked: Vec<(Option<i32>, i64)> = judgments
+        .iter()
+        .map(|j| (j.cluster_rank, j.photo_id))
+        .collect();
+    ranked.sort_by(|a, b| {
+        let rank_cmp = match (a.0, b.0) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        };
+        rank_cmp.then(a.1.cmp(&b.1))
+    });
+    ranked.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Build a single-elimination bracket from a rank-ordered photo list.
+/// Each round pairs consecutive survivors; the better-ranked (left)
+/// always advances, so the tournament expresses the Curator's ranking as
+/// the same pairwise tree the user's own Select tournament produces.
+/// Returns `(round, pair, left, right, decision)` tuples.
+fn derive_curator_bracket(
+    ranked: &[i64],
+) -> Vec<(i32, i32, i64, Option<i64>, &'static str)> {
+    let mut out = Vec::new();
+    let mut survivors: Vec<i64> = ranked.to_vec();
+    let mut round = 0i32;
+    while survivors.len() > 1 {
+        let mut next = Vec::new();
+        let mut pair = 0i32;
+        let mut i = 0;
+        while i < survivors.len() {
+            let left = survivors[i];
+            if i + 1 < survivors.len() {
+                // Left is the better-ranked of the pair, so it wins.
+                out.push((round, pair, left, Some(survivors[i + 1]), "L"));
+            } else {
+                // Odd survivor — a bye straight into the next round.
+                out.push((round, pair, left, None, "bye"));
+            }
+            next.push(left);
+            pair += 1;
+            i += 2;
+        }
+        survivors = next;
+        round += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,5 +811,39 @@ mod tests {
         assert_eq!(map_sharpness_to_1_10(60.0, &p), 7);
         assert_eq!(map_sharpness_to_1_10(80.0, &p), 9);
         assert_eq!(map_sharpness_to_1_10(95.0, &p), 10);
+    }
+
+    #[test]
+    fn derive_curator_bracket_even_field() {
+        // Four ranked photos → 2 first-round pairs + 1 final = 3 nodes.
+        let b = derive_curator_bracket(&[10, 20, 30, 40]);
+        assert_eq!(
+            b,
+            vec![
+                (0, 0, 10, Some(20), "L"),
+                (0, 1, 30, Some(40), "L"),
+                (1, 0, 10, Some(30), "L"),
+            ]
+        );
+    }
+
+    #[test]
+    fn derive_curator_bracket_odd_field_gets_a_bye() {
+        // Three photos: one first-round pair + a bye, then the final.
+        let b = derive_curator_bracket(&[10, 20, 30]);
+        assert_eq!(
+            b,
+            vec![
+                (0, 0, 10, Some(20), "L"),
+                (0, 1, 30, None, "bye"),
+                (1, 0, 10, Some(30), "L"),
+            ]
+        );
+    }
+
+    #[test]
+    fn derive_curator_bracket_trivial_fields_are_empty() {
+        assert!(derive_curator_bracket(&[]).is_empty());
+        assert!(derive_curator_bracket(&[10]).is_empty());
     }
 }

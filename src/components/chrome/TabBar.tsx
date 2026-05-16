@@ -10,6 +10,7 @@ const TABS: readonly Tab[] = [
   { id: "triage", label: "Triage", number: 2 },
   { id: "select", label: "Select", number: 3 },
   { id: "route", label: "Route", number: 4 },
+  { id: "review", label: "Review", number: 5 },
 ] as const;
 
 type TabBarProps = {

@@ -8,6 +8,8 @@ import { ComparisonView } from "../ComparisonView";
 import { Kbd, Stars } from "../primitives";
 import { StarGroupedStrip } from "./StarGroupedStrip";
 import { DetailRail } from "./DetailRail";
+import { RegroupControl } from "./RegroupControl";
+import { RunCuratorButton } from "./RunCuratorButton";
 
 function HeatmapHost() {
   const current = useProjectStore((s) => s.displayItems[s.currentIndex] ?? null);
@@ -126,6 +128,8 @@ function TopBar() {
       </span>
       <div className="flex-1" />
       <PassPills />
+      <RegroupControl />
+      <RunCuratorButton />
       <button
         type="button"
         tabIndex={-1}

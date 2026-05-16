@@ -68,6 +68,10 @@ pub fn start_import(
             Ok(shoot_id) => {
                 log::info!("Import completed: shoot_id={}", shoot_id);
                 enqueue_ai_for_shoot(&app_for_ai, shoot_id);
+                // Triage runs after the AI jobs are queued so most local
+                // signals are usually ready by the time the LLM sees a
+                // frame — but it never blocks on AI completion.
+                enqueue_curator_triage_for_shoot(&app_for_ai, shoot_id);
             }
             Err(e) => {
                 log::error!("Import failed: {}", e);
@@ -171,4 +175,76 @@ fn enqueue_ai_for_shoot(app: &AppHandle, shoot_id: i64) {
     }
     guard.ai_total.fetch_add(sent, Ordering::SeqCst);
     log::info!("Enqueued {} photos for AI analysis in shoot {}", sent, shoot_id);
+}
+
+/// After a successful import, enqueue all new photos into the Curator
+/// triage stage — an on-import LLM first pass that auto-rejects
+/// technically-unusable frames. Best-effort: a disabled toggle or a
+/// missing provider key just skips triage; import already succeeded.
+fn enqueue_curator_triage_for_shoot(app: &AppHandle, shoot_id: i64) {
+    let state: tauri::State<'_, Mutex<AppState>> = app.state::<Mutex<AppState>>();
+
+    let settings = {
+        let guard = match state.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("enqueue_curator_triage: state lock poisoned: {}", e);
+                return;
+            }
+        };
+        match guard.db.as_ref().and_then(|db| db.get_settings().ok()) {
+            Some(s) => s,
+            None => return,
+        }
+    };
+    if !settings.curator_triage_on_import {
+        log::info!("Curator triage-on-import disabled; skipping shoot {}", shoot_id);
+        return;
+    }
+
+    // Spawn the shared curator worker. Fails when no provider key is
+    // configured — triage then silently no-ops, the intended behaviour
+    // for the default-on toggle.
+    if let Err(e) = crate::commands::curator::ensure_worker_spawned(app, &state) {
+        log::info!("Curator triage skipped (no provider configured): {}", e);
+        return;
+    }
+
+    let guard = match state.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let ids = match guard
+        .db
+        .as_ref()
+        .and_then(|db| db.photos_needing_triage(shoot_id).ok())
+    {
+        Some(v) if !v.is_empty() => v,
+        _ => return,
+    };
+    let sender = match guard.curator_worker.as_ref() {
+        Some(w) => w.sender.clone(),
+        None => return,
+    };
+    // Clear any stale cancel flag so the worker doesn't drain our jobs.
+    guard.curator_cancel.store(false, Ordering::SeqCst);
+    drop(guard);
+
+    let mut sent = 0usize;
+    for chunk in ids.chunks(crate::curator::worker::TRIAGE_BATCH_SIZE) {
+        if sender
+            .send(crate::curator::CuratorJob::TriageBatch {
+                shoot_id,
+                photo_ids: chunk.to_vec(),
+            })
+            .is_ok()
+        {
+            sent += 1;
+        }
+    }
+    log::info!(
+        "Enqueued {} curator triage batches for shoot {}",
+        sent,
+        shoot_id
+    );
 }

@@ -87,6 +87,9 @@ export function SettingsDialog() {
   const [curatorRunOnImport, setCuratorRunOnImport] = useState(
     settings.curatorDefaultRunOnImport,
   );
+  const [triageOnImport, setTriageOnImport] = useState(
+    settings.curatorTriageOnImport,
+  );
   const [curatorProvider, setCuratorProvider] = useState<CuratorProvider>(
     settings.curatorProvider,
   );
@@ -149,6 +152,7 @@ export function SettingsDialog() {
       setEnableAi(settings.enableAiOnImport);
       setEyeConfidence(settings.eyeOpenConfidence);
       setCuratorRunOnImport(settings.curatorDefaultRunOnImport);
+      setTriageOnImport(settings.curatorTriageOnImport);
       setCuratorProvider(settings.curatorProvider);
       setModelAnthropic(settings.curatorModelAnthropic);
       setModelGemini(settings.curatorModelGemini);
@@ -239,6 +243,7 @@ export function SettingsDialog() {
         enableAiOnImport: enableAi,
         eyeOpenConfidence: eyeConfidence,
         curatorDefaultRunOnImport: curatorRunOnImport,
+        curatorTriageOnImport: triageOnImport,
         // Keep the legacy single-model field in sync with whichever
         // model the active provider uses, so any code path still
         // reading `curator_model` sees a sensible value.
@@ -913,6 +918,23 @@ export function SettingsDialog() {
             {curatorProvider === "local"
               ? " Disabled until a model name is set."
               : " Disabled until an API key is configured."}
+          </p>
+
+          <label className="flex items-center gap-2 text-sm text-fg cursor-pointer mt-1 mb-1">
+            <input
+              type="checkbox"
+              checked={triageOnImport}
+              onChange={(e) => setTriageOnImport(e.target.checked)}
+              className="w-4 h-4"
+              disabled={!activeKeyStatus?.configured}
+            />
+            AI triage on import
+          </label>
+          <p className="text-xs text-fg-dim -mt-1 ml-6 mb-3">
+            A fast first pass that auto-rejects only clearly-unusable frames
+            (severe blur, closed eyes, blown exposure). Rejects are reviewable
+            with the Triage "AI rejects" filter and undoable with Z. Spends a
+            small amount of LLM budget per import.
           </p>
 
           <label className="block text-sm text-fg-dim mb-1">

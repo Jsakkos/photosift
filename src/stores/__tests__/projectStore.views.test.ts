@@ -31,6 +31,8 @@ beforeEach(() => {
       onboardedSelect: true,
       onboardedRoute: true,
       onboardedWizard: true,
+      curatorTriageOnImport: true,
+      onboardedReview: true,
     },
   });
 });

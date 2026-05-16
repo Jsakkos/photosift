@@ -52,7 +52,15 @@ export function setupMockIpc(
           groupTimeWindowS: 60,
         };
       case "recluster_shoot":
+      case "recluster_shoot_with":
         return 0;
+      case "get_triage_judgments_for_shoot":
+      case "apply_triage_rejects":
+      case "get_bracket_decisions_for_shoot":
+        return [];
+      case "record_bracket_decision":
+      case "delete_bracket_decision":
+        return undefined;
       case "export_xmp":
         return 0;
       default:

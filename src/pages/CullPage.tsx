@@ -10,11 +10,13 @@ import { EmptyViewState } from "../components/EmptyViewState";
 import { TriageShell } from "../components/triage/TriageShell";
 import { SelectShell } from "../components/select/SelectShell";
 import { RouteShell } from "../components/route/RouteShell";
+import { ReviewShell } from "../components/review/ReviewShell";
 import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 import { FirstRunModal } from "../components/FirstRunModal";
 import { logFocus } from "../lib/debugFocus";
 import { classifyError, formatError } from "../lib/errorMessages";
 import {
+  applyTriageRejects,
   resumeCuratorForShoot,
   startCuratorForShoot,
 } from "../lib/curatorApi";
@@ -175,6 +177,7 @@ export function CullPage() {
     let unlistenCuratorCluster: (() => void) | null = null;
     let unlistenCuratorCompleted: (() => void) | null = null;
     let unlistenCuratorFailed: (() => void) | null = null;
+    let unlistenCuratorTriage: (() => void) | null = null;
     const refreshCuratorJudgments =
       useProjectStore.getState().refreshCuratorJudgments;
     const setToast = useProjectStore.getState().setToast;
@@ -250,6 +253,26 @@ export function CullPage() {
       },
     ).then((fn) => { unlistenCuratorFailed = fn; });
 
+    // Curator triage stage: the worker has judged a batch of on-import
+    // photos. Apply any new auto-rejects (server-side, idempotent), fold
+    // them into local state as one batch undo entry, and refresh the
+    // triage-judgment map so the "AI rejects" filter can surface them.
+    listen<{ shootId: number }>("curator:triage_done", (event) => {
+      if (event.payload.shootId !== shootId) return;
+      applyTriageRejects(shootId)
+        .then((flagged) => {
+          const store = useProjectStore.getState();
+          store.applyTriageRejectResults(flagged);
+          void store.refreshTriageJudgments();
+          if (flagged.length > 0) {
+            store.setToast(
+              `AI triage rejected ${flagged.length} photo${flagged.length === 1 ? "" : "s"} — review with the AI-rejects filter, or Z to undo`,
+            );
+          }
+        })
+        .catch((e) => console.debug("applyTriageRejects failed:", e));
+    }).then((fn) => { unlistenCuratorTriage = fn; });
+
     return () => {
       unlistenReady?.();
       unlistenGroups?.();
@@ -257,6 +280,7 @@ export function CullPage() {
       unlistenCuratorCluster?.();
       unlistenCuratorCompleted?.();
       unlistenCuratorFailed?.();
+      unlistenCuratorTriage?.();
     };
   }, [id, loadShoot]);
 
@@ -320,7 +344,11 @@ export function CullPage() {
     >
       <Toolbar />
       <main id="cull-main" aria-label="Cull" className="flex-1 min-h-0 flex flex-col">
-        {viewMode === "grid" ? (
+        {currentView === "review" ? (
+          // Review renders its own bracket history — no display queue, so
+          // it sidesteps the grid / empty-state branches entirely.
+          <ReviewShell />
+        ) : viewMode === "grid" ? (
           displayCount === 0 ? (
             <EmptyViewState view={currentView} />
           ) : (

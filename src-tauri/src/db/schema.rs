@@ -261,6 +261,12 @@ pub struct Settings {
     /// or skipped it. Migrated to true for pre-existing DBs (a library root
     /// configured, or any shoots) so an upgrade doesn't re-trigger it.
     pub onboarded_wizard: bool,
+    /// Curator triage stage: whether the import pipeline runs an LLM
+    /// first-pass that auto-rejects clearly-unusable frames. On by default;
+    /// a no-op when no curator provider key is configured.
+    pub curator_triage_on_import: bool,
+    /// First-run guidance modal for the Review tab.
+    pub onboarded_review: bool,
 }
 
 impl Default for Settings {
@@ -289,6 +295,8 @@ impl Default for Settings {
             onboarded_select: false,
             onboarded_route: false,
             onboarded_wizard: false,
+            curator_triage_on_import: true,
+            onboarded_review: false,
         }
     }
 }
@@ -335,6 +343,40 @@ pub struct CuratorJudgmentRow {
     pub provider: String,
     pub model: String,
     pub prompt_version: i32,
+}
+
+/// One row from `triage_judgments` — the Curator's on-import first-pass
+/// verdict. Only ever `reject` or `keep`; `applied` records whether the
+/// reject flag has been written to `photos.flag` yet.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageJudgmentRow {
+    pub photo_id: i64,
+    pub shoot_id: i64,
+    pub suggested_flag: String,
+    pub reason: String,
+    pub applied: bool,
+    pub judged_at: String,
+    pub model: String,
+    pub prompt_version: i32,
+}
+
+/// One row from `bracket_decisions` — a persisted tournament-bracket
+/// decision. `source` is `"user"` (made in the Select tournament) or
+/// `"curator"` (derived from the Curator's cluster ranking).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BracketDecisionRow {
+    pub id: i64,
+    pub shoot_id: i64,
+    pub group_id: i64,
+    pub round_index: i32,
+    pub pair_index: i32,
+    pub left_photo_id: i64,
+    pub right_photo_id: Option<i64>,
+    pub decision: String,
+    pub decided_at: String,
+    pub source: String,
 }
 
 /// Aggregate counts for the agreement-rate badge.
@@ -627,6 +669,17 @@ impl Database {
         self.ensure_column("settings", "onboarded_triage", "INTEGER NOT NULL DEFAULT 0")?;
         self.ensure_column("settings", "onboarded_select", "INTEGER NOT NULL DEFAULT 0")?;
         self.ensure_column("settings", "onboarded_route", "INTEGER NOT NULL DEFAULT 0")?;
+        // Curator triage stage (on-import LLM first-pass) — on by default,
+        // gated at runtime on a configured provider key.
+        self.ensure_column(
+            "settings",
+            "curator_triage_on_import",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        self.ensure_column("settings", "onboarded_review", "INTEGER NOT NULL DEFAULT 0")?;
+        // Triage-stage curator judgments + persisted tournament brackets.
+        self.create_triage_judgments_table()?;
+        self.create_bracket_decisions_table()?;
         // First-run onboarding wizard (#9). New column: seed it true for
         // pre-existing DBs (a library root configured, or any shoots) so an
         // upgrade doesn't re-trigger first-run. Brand-new installs leave it
@@ -776,6 +829,57 @@ impl Database {
             );
             CREATE INDEX IF NOT EXISTS idx_curator_judgments_shoot ON curator_judgments(shoot_id);
             CREATE INDEX IF NOT EXISTS idx_curator_judgments_keeper ON curator_judgments(shoot_id, is_keeper);",
+        )?;
+        Ok(())
+    }
+
+    /// Curator *triage-stage* judgments. Kept in a separate table from
+    /// `curator_judgments` (whose PK is a bare `photo_id`) so a photo can
+    /// carry both an on-import triage verdict and a later selection-stage
+    /// judgment without a destructive primary-key migration. Triage only
+    /// ever emits `reject` or `keep`; `applied` records whether the reject
+    /// flag was actually written (it is skipped for photos the user has
+    /// already triaged by hand).
+    fn create_triage_judgments_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS triage_judgments (
+                photo_id INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+                shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE,
+                suggested_flag TEXT NOT NULL CHECK(suggested_flag IN ('reject','keep')),
+                reason TEXT NOT NULL,
+                applied INTEGER NOT NULL DEFAULT 0,
+                judged_at TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_version INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_triage_judgments_shoot ON triage_judgments(shoot_id);",
+        )?;
+        Ok(())
+    }
+
+    /// Persisted tournament-bracket decisions. One row per decided pair.
+    /// `right_photo_id` is NULL for a bye. `source` distinguishes the
+    /// user's own picks from curator-derived ones (Feature 4). The unique
+    /// index makes undo→redo and curator reruns idempotent upserts; the
+    /// `group_id` FK cascades, so a regroup auto-purges stale rows.
+    fn create_bracket_decisions_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS bracket_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE,
+                group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                round_index INTEGER NOT NULL,
+                pair_index INTEGER NOT NULL,
+                left_photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+                right_photo_id INTEGER REFERENCES photos(id) ON DELETE CASCADE,
+                decision TEXT NOT NULL CHECK(decision IN ('L','R','both','bye')),
+                decided_at TEXT NOT NULL DEFAULT (datetime('now')),
+                source TEXT NOT NULL DEFAULT 'user' CHECK(source IN ('user','curator'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_bracket_decisions_coord
+                ON bracket_decisions(group_id, round_index, pair_index, source);
+            CREATE INDEX IF NOT EXISTS idx_bracket_decisions_group
+                ON bracket_decisions(shoot_id, group_id);",
         )?;
         Ok(())
     }
@@ -1833,6 +1937,200 @@ impl Database {
         rows.collect()
     }
 
+    // ---- Curator triage stage ----
+
+    /// Insert or replace one triage-stage judgment. `applied` is reset to
+    /// 0 on re-judgment so the new verdict can be acted on afresh.
+    pub fn upsert_triage_judgment(
+        &self,
+        photo_id: i64,
+        shoot_id: i64,
+        suggested_flag: &str,
+        reason: &str,
+        model: &str,
+        prompt_version: i32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO triage_judgments
+                (photo_id, shoot_id, suggested_flag, reason, applied,
+                 judged_at, model, prompt_version)
+             VALUES (?1, ?2, ?3, ?4, 0, datetime('now'), ?5, ?6)
+             ON CONFLICT(photo_id) DO UPDATE SET
+                shoot_id = excluded.shoot_id,
+                suggested_flag = excluded.suggested_flag,
+                reason = excluded.reason,
+                applied = 0,
+                judged_at = excluded.judged_at,
+                model = excluded.model,
+                prompt_version = excluded.prompt_version",
+            params![photo_id, shoot_id, suggested_flag, reason, model, prompt_version],
+        )?;
+        Ok(())
+    }
+
+    /// All triage judgments for a shoot, bulk-loaded by the frontend so
+    /// the Triage AI-rejects filter has a local map to read from.
+    pub fn triage_judgments_for_shoot(
+        &self,
+        shoot_id: i64,
+    ) -> Result<Vec<TriageJudgmentRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT photo_id, shoot_id, suggested_flag, reason, applied,
+                    judged_at, model, prompt_version
+             FROM triage_judgments WHERE shoot_id = ?1 ORDER BY photo_id",
+        )?;
+        let rows = stmt.query_map(params![shoot_id], |r| {
+            Ok(TriageJudgmentRow {
+                photo_id: r.get(0)?,
+                shoot_id: r.get(1)?,
+                suggested_flag: r.get(2)?,
+                reason: r.get(3)?,
+                applied: r.get::<_, i32>(4)? != 0,
+                judged_at: r.get(5)?,
+                model: r.get(6)?,
+                prompt_version: r.get(7)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Photo IDs in this shoot with a `reject` triage judgment that has
+    /// not yet been applied to `photos.flag`.
+    pub fn pending_triage_rejects(&self, shoot_id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT photo_id FROM triage_judgments
+             WHERE shoot_id = ?1 AND suggested_flag = 'reject' AND applied = 0
+             ORDER BY photo_id",
+        )?;
+        let rows = stmt.query_map(params![shoot_id], |r| r.get::<_, i64>(0))?;
+        rows.collect()
+    }
+
+    /// Mark a triage judgment as applied so `apply_triage_rejects` is
+    /// idempotent across repeated calls.
+    pub fn mark_triage_judgment_applied(&self, photo_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE triage_judgments SET applied = 1 WHERE photo_id = ?1",
+            params![photo_id],
+        )?;
+        Ok(())
+    }
+
+    /// Photo IDs in this shoot that still need a triage judgment — used
+    /// by the on-import enqueue so re-imports don't re-judge old photos.
+    pub fn photos_needing_triage(&self, shoot_id: i64) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.id FROM photos p
+             LEFT JOIN triage_judgments t ON t.photo_id = p.id
+             WHERE p.shoot_id = ?1 AND t.photo_id IS NULL
+             ORDER BY p.id",
+        )?;
+        let rows = stmt.query_map(params![shoot_id], |r| r.get::<_, i64>(0))?;
+        rows.collect()
+    }
+
+    // ---- Tournament bracket decisions ----
+
+    /// Insert or replace one bracket decision. Keyed on
+    /// `(group_id, round, pair, source)` so undo→redo and curator
+    /// re-derivation are idempotent upserts.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_bracket_decision(
+        &self,
+        shoot_id: i64,
+        group_id: i64,
+        round_index: i32,
+        pair_index: i32,
+        left_photo_id: i64,
+        right_photo_id: Option<i64>,
+        decision: &str,
+        source: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO bracket_decisions
+                (shoot_id, group_id, round_index, pair_index,
+                 left_photo_id, right_photo_id, decision, decided_at, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), ?8)
+             ON CONFLICT(group_id, round_index, pair_index, source) DO UPDATE SET
+                shoot_id = excluded.shoot_id,
+                left_photo_id = excluded.left_photo_id,
+                right_photo_id = excluded.right_photo_id,
+                decision = excluded.decision,
+                decided_at = excluded.decided_at",
+            params![
+                shoot_id,
+                group_id,
+                round_index,
+                pair_index,
+                left_photo_id,
+                right_photo_id,
+                decision,
+                source,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// All bracket decisions for a shoot, ordered for deterministic
+    /// rendering by the Review tab.
+    pub fn bracket_decisions_for_shoot(
+        &self,
+        shoot_id: i64,
+    ) -> Result<Vec<BracketDecisionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, shoot_id, group_id, round_index, pair_index,
+                    left_photo_id, right_photo_id, decision, decided_at, source
+             FROM bracket_decisions WHERE shoot_id = ?1
+             ORDER BY group_id, source, round_index, pair_index",
+        )?;
+        let rows = stmt.query_map(params![shoot_id], |r| {
+            Ok(BracketDecisionRow {
+                id: r.get(0)?,
+                shoot_id: r.get(1)?,
+                group_id: r.get(2)?,
+                round_index: r.get(3)?,
+                pair_index: r.get(4)?,
+                left_photo_id: r.get(5)?,
+                right_photo_id: r.get(6)?,
+                decision: r.get(7)?,
+                decided_at: r.get(8)?,
+                source: r.get(9)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Delete one bracket decision — used by undo of a user tournament pick.
+    pub fn delete_bracket_decision(
+        &self,
+        group_id: i64,
+        round_index: i32,
+        pair_index: i32,
+        source: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM bracket_decisions
+             WHERE group_id = ?1 AND round_index = ?2
+               AND pair_index = ?3 AND source = ?4",
+            params![group_id, round_index, pair_index, source],
+        )?;
+        Ok(())
+    }
+
+    /// Drop every decision of one `source` for a group — used to clear a
+    /// group's curator-derived bracket before re-deriving it on rerun.
+    pub fn delete_bracket_decisions_for_group(
+        &self,
+        group_id: i64,
+        source: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM bracket_decisions WHERE group_id = ?1 AND source = ?2",
+            params![group_id, source],
+        )?;
+        Ok(())
+    }
+
     /// Compute 10/30/50/70/90 percentile cutoffs for `sharpness_score` across
     /// all analyzed photos in a shoot. Returns zeros when no photos have been
     /// analyzed; callers should check `analyzed_count` before trusting the
@@ -2003,7 +2301,7 @@ impl Database {
                         curator_provider, curator_model_anthropic, curator_model_gemini,
                         curator_model_local, curator_local_base_url, folder_template,
                         onboarded_triage, onboarded_select, onboarded_route,
-                        onboarded_wizard
+                        onboarded_wizard, curator_triage_on_import, onboarded_review
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
@@ -2036,6 +2334,8 @@ impl Database {
                         onboarded_select: row.get::<_, i32>(20)? != 0,
                         onboarded_route: row.get::<_, i32>(21)? != 0,
                         onboarded_wizard: row.get::<_, i32>(22)? != 0,
+                        curator_triage_on_import: row.get::<_, i32>(23)? != 0,
+                        onboarded_review: row.get::<_, i32>(24)? != 0,
                     })
                 },
             )
@@ -2053,9 +2353,9 @@ impl Database {
                                    curator_provider, curator_model_anthropic, curator_model_gemini,
                                    curator_model_local, curator_local_base_url, folder_template,
                                    onboarded_triage, onboarded_select, onboarded_route,
-                                   onboarded_wizard)
+                                   onboarded_wizard, curator_triage_on_import, onboarded_review)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
              ON CONFLICT(id) DO UPDATE SET
                 near_dup_threshold = excluded.near_dup_threshold,
                 related_threshold = excluded.related_threshold,
@@ -2079,7 +2379,9 @@ impl Database {
                 onboarded_triage = excluded.onboarded_triage,
                 onboarded_select = excluded.onboarded_select,
                 onboarded_route = excluded.onboarded_route,
-                onboarded_wizard = excluded.onboarded_wizard",
+                onboarded_wizard = excluded.onboarded_wizard,
+                curator_triage_on_import = excluded.curator_triage_on_import,
+                onboarded_review = excluded.onboarded_review",
             params![
                 s.near_dup_threshold,
                 s.related_threshold,
@@ -2105,6 +2407,8 @@ impl Database {
                 s.onboarded_select as i32,
                 s.onboarded_route as i32,
                 s.onboarded_wizard as i32,
+                s.curator_triage_on_import as i32,
+                s.onboarded_review as i32,
             ],
         )?;
         Ok(())
@@ -3103,5 +3407,97 @@ pub(crate) mod tests {
             let faces = db.get_faces_for_photo(*id).unwrap();
             assert_eq!(faces.len(), 1, "photo {} face row should survive", id);
         }
+    }
+
+    #[test]
+    fn triage_judgments_pending_and_applied() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("T", "2026-05-15", "/s", "/d", "copy")
+            .unwrap();
+        let ids = db
+            .insert_photos_batch(
+                shoot_id,
+                &[
+                    sample_insert(1, "a.nef"),
+                    sample_insert(2, "b.nef"),
+                    sample_insert(3, "c.nef"),
+                ],
+            )
+            .unwrap();
+
+        db.upsert_triage_judgment(ids[0], shoot_id, "reject", "blurry", "m", 1)
+            .unwrap();
+        db.upsert_triage_judgment(ids[1], shoot_id, "keep", "fine", "m", 1)
+            .unwrap();
+        db.upsert_triage_judgment(ids[2], shoot_id, "reject", "eyes closed", "m", 1)
+            .unwrap();
+
+        // All three judged; only the two rejects are pending application.
+        assert_eq!(db.triage_judgments_for_shoot(shoot_id).unwrap().len(), 3);
+        assert_eq!(
+            db.pending_triage_rejects(shoot_id).unwrap(),
+            vec![ids[0], ids[2]]
+        );
+        // photos_needing_triage excludes already-judged photos.
+        assert!(db.photos_needing_triage(shoot_id).unwrap().is_empty());
+
+        // Marking one applied removes it from the pending set.
+        db.mark_triage_judgment_applied(ids[0]).unwrap();
+        assert_eq!(db.pending_triage_rejects(shoot_id).unwrap(), vec![ids[2]]);
+
+        // Re-judging resets `applied` so a fresh verdict can be acted on.
+        db.upsert_triage_judgment(ids[0], shoot_id, "reject", "still blurry", "m", 1)
+            .unwrap();
+        assert_eq!(
+            db.pending_triage_rejects(shoot_id).unwrap(),
+            vec![ids[0], ids[2]]
+        );
+    }
+
+    #[test]
+    fn bracket_decisions_upsert_query_and_cascade() {
+        let (mut db, _dir) = test_db();
+        let shoot_id = db
+            .insert_shoot("T", "2026-05-15", "/s", "/d", "copy")
+            .unwrap();
+        let ids = db
+            .insert_photos_batch(
+                shoot_id,
+                &[sample_insert(1, "a.nef"), sample_insert(2, "b.nef")],
+            )
+            .unwrap();
+        let group_id = db.create_group(shoot_id, "related").unwrap();
+
+        db.insert_bracket_decision(
+            shoot_id, group_id, 0, 0, ids[0], Some(ids[1]), "L", "user",
+        )
+        .unwrap();
+        // Same coordinates, different decision → upsert replaces.
+        db.insert_bracket_decision(
+            shoot_id, group_id, 0, 0, ids[0], Some(ids[1]), "R", "user",
+        )
+        .unwrap();
+        // A curator-source row at the same coords coexists (source is
+        // part of the unique key).
+        db.insert_bracket_decision(
+            shoot_id, group_id, 0, 0, ids[0], Some(ids[1]), "L", "curator",
+        )
+        .unwrap();
+
+        let rows = db.bracket_decisions_for_shoot(shoot_id).unwrap();
+        assert_eq!(rows.len(), 2, "user upsert + distinct curator row");
+        let user = rows.iter().find(|r| r.source == "user").unwrap();
+        assert_eq!(user.decision, "R", "upsert kept the latest decision");
+
+        // Deleting the user decision leaves the curator one.
+        db.delete_bracket_decision(group_id, 0, 0, "user").unwrap();
+        let rows = db.bracket_decisions_for_shoot(shoot_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source, "curator");
+
+        // Removing the group cascades away its remaining decisions.
+        db.delete_all_groups_for_shoot(shoot_id).unwrap();
+        assert!(db.bracket_decisions_for_shoot(shoot_id).unwrap().is_empty());
     }
 }

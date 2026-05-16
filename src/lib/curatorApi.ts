@@ -10,6 +10,7 @@ import type {
   CuratorProvider,
   CuratorRunStatus,
   CuratorShootSummary,
+  TriageJudgment,
 } from "../types";
 
 // ---- Generic per-provider API key management ----
@@ -129,6 +130,24 @@ export async function acceptCuratorSuggestion(photoId: number): Promise<string> 
 /// silently no-op when no judgment exists for the photo.
 export async function recordCuratorOverride(photoId: number): Promise<void> {
   await invoke("record_curator_override", { photoId });
+}
+
+// ---- Triage stage ----
+
+/// Bulk-load every triage-stage judgment for a shoot.
+export async function getTriageJudgmentsForShoot(
+  shootId: number,
+): Promise<TriageJudgment[]> {
+  return await invoke<TriageJudgment[]>("get_triage_judgments_for_shoot", {
+    shootId,
+  });
+}
+
+/// Apply pending triage-stage rejects. Writes `flag = 'reject'` for every
+/// photo the triage stage flagged that is still unreviewed; returns the
+/// photo IDs actually flagged so the caller can build one batch undo.
+export async function applyTriageRejects(shootId: number): Promise<number[]> {
+  return await invoke<number[]>("apply_triage_rejects", { shootId });
 }
 
 // ---- Helpers ----

@@ -175,16 +175,6 @@ export function LoupeView() {
         </div>
       )}
       <FlagFlash />
-      {currentView === "triage" && displayItems[currentIndex]?.isGroupCover && (
-        <div className="absolute top-4 right-4 px-3 py-1.5 rounded-md bg-accent/15 border border-accent/30 text-accent text-xs font-medium pointer-events-none flex items-center gap-2">
-          <span className="flex flex-col gap-0.5">
-            <span className="block w-2.5 h-0.5 bg-current rounded-sm" />
-            <span className="block w-2.5 h-0.5 bg-current rounded-sm" />
-            <span className="block w-2.5 h-0.5 bg-current rounded-sm" />
-          </span>
-          Group · {displayItems[currentIndex]?.groupMemberCount} photos
-        </div>
-      )}
       {/* Flag overlay: green "PICK" or red "REJECT" pill in the loupe.
           Suppressed in Select — every photo in Select is already a pick,
           so the PICK badge is always-on and carries no information. In

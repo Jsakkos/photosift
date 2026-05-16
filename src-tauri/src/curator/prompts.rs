@@ -13,6 +13,42 @@ use crate::curator::types::ShootSummary;
 /// `prompt_version < CURRENT_PROMPT_VERSION`.
 pub const CURRENT_PROMPT_VERSION: i32 = 1;
 
+/// Version stamped on every `triage_judgments` row. Bumped independently
+/// of `CURRENT_PROMPT_VERSION` when the triage steering text below changes.
+pub const TRIAGE_PROMPT_VERSION: i32 = 1;
+
+/// Synthetic shoot summary used by the Curator *triage stage*. The triage
+/// stage reuses the Stage 2 request path (`run_stage2_cluster`) but feeds
+/// it this summary instead of a real Stage 1 characterization — so triage
+/// needs no extra LLM call and no separate prompt plumbing per provider.
+///
+/// The `story` and `watch_for` fields are inlined verbatim into the
+/// Stage 2 system prompt; they steer the model toward a conservative
+/// technical-only first pass. The Stage 2 rubric's own "when in doubt,
+/// prefer 'keep' over 'reject'" rule does the rest. The worker only ever
+/// acts on a `reject` verdict; `pick`/`keep` leave the photo unreviewed.
+pub fn triage_summary() -> ShootSummary {
+    ShootSummary {
+        shoot_type: "first-pass-triage".to_string(),
+        subjects: vec![],
+        story: "This is a fast first-pass technical triage that runs before any \
+                detailed culling. Judge each frame entirely on its own merits — \
+                there is no real cluster here and nothing to rank against. Your \
+                ONLY job is to flag frames that are technically unusable. Anything \
+                that is merely ordinary, repetitive, or imperfectly composed must \
+                NOT be rejected — that is the photographer's decision later."
+            .to_string(),
+        dominant_style: "n/a".to_string(),
+        watch_for: vec![
+            "severe motion blur or camera shake".to_string(),
+            "the intended subject clearly out of focus".to_string(),
+            "badly blown-out or crushed exposure with no recoverable detail".to_string(),
+            "every human subject in frame has fully closed eyes".to_string(),
+            "obvious mis-fire — lens cap, floor, ceiling, accidental shutter".to_string(),
+        ],
+    }
+}
+
 /// Rubric inlined into the Stage 2 system prompt. Kept short on purpose:
 /// a long rubric crowds out vision tokens at fixed `max_tokens`.
 const STAGE2_RUBRIC: &str = "\

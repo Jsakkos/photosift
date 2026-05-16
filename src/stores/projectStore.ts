@@ -9,8 +9,17 @@ import type {
   Group,
   SyncReport,
   CuratorJudgment,
+  TriageJudgment,
+  BracketDecisionValue,
 } from "../types";
-import { getCuratorJudgmentsForShoot } from "../lib/curatorApi";
+import {
+  getCuratorJudgmentsForShoot,
+  getTriageJudgmentsForShoot,
+} from "../lib/curatorApi";
+import {
+  recordBracketDecision,
+  deleteBracketDecision,
+} from "../lib/bracketApi";
 import { formatError } from "../lib/errorMessages";
 import { useSettingsStore } from "./settingsStore";
 import { useAiStore } from "./aiStore";
@@ -34,6 +43,9 @@ function selectRequiresPick(): boolean {
 /// by `passesSelectGate` and the Route view so this stays honest as those
 /// evolve.
 function computeActivePass(images: ImageEntry[], start: CullView): CullView {
+  // Review is a retrospective tab with no "work" — if the user left off
+  // there, keep them there rather than cascading into a cull pass.
+  if (start === "review") return "review";
   const hasTriageWork = images.some((i) => i.flag === "unreviewed");
   const hasSelectWork = images.some(
     (i) => i.flag === "pick" && i.starRating === 0,
@@ -59,6 +71,9 @@ function computeActivePass(images: ImageEntry[], start: CullView): CullView {
 /// picks into edit/export. Returning to a pass view never finalizes —
 /// that would move files back prematurely.
 function resolveSyncTrigger(from: CullView, to: CullView): string | null {
+  // Review is a retrospective tab — entering or leaving it never
+  // finalizes a pass or moves files.
+  if (from === "review" || to === "review") return null;
   if (from === "triage" && to !== "triage") return "triage_complete";
   if (from === "select" && to === "route") return "select_complete";
   if (from === "route" && to !== "route") return "route_complete";
@@ -108,6 +123,9 @@ function currentSelectMinStar(): number {
 /// store hasn't initialized yet.
 function currentCuratorJudgments(): Map<number, CuratorJudgment> {
   return useProjectStore.getState().curatorJudgments ?? new Map();
+}
+function currentTriageJudgments(): Map<number, TriageJudgment> {
+  return useProjectStore.getState().triageJudgments ?? new Map();
 }
 function currentTriageOnlyAiRejects(): boolean {
   return useProjectStore.getState().triageOnlyAiRejects ?? false;
@@ -188,6 +206,18 @@ interface UndoEntry {
     // `field` otherwise.
     field?: "starRating" | "flag" | "destination";
   }[];
+  /// When set, this entry also persisted a tournament-bracket decision.
+  /// Undo deletes that row and redo re-inserts it, so the Review tab
+  /// stays consistent with the user's actual choices.
+  bracketDecision?: {
+    shootId: number;
+    groupId: number;
+    roundIndex: number;
+    pairIndex: number;
+    leftPhotoId: number;
+    rightPhotoId: number | null;
+    decision: BracketDecisionValue;
+  };
 }
 
 function describeUndoRedoEntry(action: "Undo" | "Redo", entry: UndoEntry): string {
@@ -452,7 +482,10 @@ export function computeDisplayItems(
   images: ImageEntry[],
   currentView: CullView,
   groups: Group[],
-  expandedGroupIds: Set<number> = new Set(),
+  // Triage no longer collapses groups and Select always expands them, so
+  // no view consults this set anymore. The positional slot is retained so
+  // existing callers don't have to be rewritten.
+  _expandedGroupIds: Set<number> = new Set(),
   selectRequiresPickFilter: boolean = false,
   routeMinStarGate: number = 0,
   aiOptions: AiDisplayOptions = DEFAULT_AI_OPTIONS,
@@ -460,25 +493,36 @@ export function computeDisplayItems(
   selectMinStar: number = 0,
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
+  // Review is a retrospective tab — it renders bracket history, not a
+  // photo queue, so it has no display items.
+  if (currentView === "review") return items;
   const photoGroupMap = buildPhotoGroupMap(groups);
 
   if (currentView === "triage") {
-    const seenGroups = new Set<number>();
+    // Triage reviews every photo individually — the user goes through
+    // each frame regardless, so cluster-cover collapsing and a drill-in
+    // panel only cost screen space without changing the work. Every
+    // passing photo is its own list item. `groupId` is still attached so
+    // "keep group" (Shift+P) keeps working off the flat list.
+    //
     // AI-rejects filter: when on, surface every photo the AI suggested
-    // rejecting, regardless of user flag. The chip's accepted /
-    // overridden badge tells the user which ones they've already
-    // decided on, so they can revisit. Read lazily so the filter cuts
-    // in immediately on toggle without threading the flag through
-    // every caller of computeDisplayItems.
+    // rejecting, regardless of user flag, so the user can revisit those
+    // decisions. Read lazily so the filter cuts in immediately on toggle
+    // without threading the flag through every caller.
     const onlyAiRejects = currentTriageOnlyAiRejects();
-    const judgments = onlyAiRejects ? currentCuratorJudgments() : null;
+    const triageJ = onlyAiRejects ? currentTriageJudgments() : null;
+    const curatorJ = onlyAiRejects ? currentCuratorJudgments() : null;
     const passesTriage = (img: ImageEntry): boolean => {
       if (onlyAiRejects) {
         // The AI-rejects view is its own scope — overrides both the
         // standard "unreviewed only" default and the show-all toggle,
-        // since the user explicitly asked for this slice.
-        const j = judgments!.get(img.id);
-        return !!j && j.suggestedFlag === "reject";
+        // since the user explicitly asked for this slice. A photo
+        // matches if either AI stage suggested rejecting it: the
+        // on-import triage stage or the later selection-stage Curator.
+        const tj = triageJ!.get(img.id);
+        if (tj && tj.suggestedFlag === "reject") return true;
+        const cj = curatorJ!.get(img.id);
+        return !!cj && cj.suggestedFlag === "reject";
       }
       // Default triage: a photo passes unless it's already picked /
       // rejected — unless the user flipped Show-all in ViewSelector,
@@ -489,62 +533,12 @@ export function computeDisplayItems(
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
       if (!passesTriage(img)) continue;
-
-      // AI-rejects view bypasses cluster-cover collapsing — the user
-      // is reviewing specific reject candidates, not clusters. Each
-      // matching photo is its own list item, so 12 reject suggestions
-      // = 12 list items (vs the standard view, which would fold them
-      // into ~5 cluster covers + a few standalones).
-      if (onlyAiRejects) {
-        const group = photoGroupMap.get(img.id);
-        items.push({
-          imageIndex: i,
-          image: img,
-          ...(group ? { groupId: group.id } : {}),
-        });
-        continue;
-      }
-
       const group = photoGroupMap.get(img.id);
-      if (group) {
-        if (seenGroups.has(group.id)) continue;
-        seenGroups.add(group.id);
-        if (expandedGroupIds.has(group.id)) {
-          // Drill-down inline: emit each member whose flag still passes.
-          // No AI-pick pinning — picked/rejected photos leave the list
-          // so the user sees their action take effect.
-          for (const member of group.members) {
-            const mi = images.findIndex((im) => im.id === member.photoId);
-            if (mi < 0) continue;
-            const memImg = images[mi];
-            if (!passesTriage(memImg)) continue;
-            items.push({
-              imageIndex: mi,
-              image: memImg,
-              groupId: group.id,
-            });
-          }
-          continue;
-        }
-        const coverId = getGroupCover(group);
-        const coverIdx = images.findIndex((im) => im.id === coverId);
-        const coverImg = coverIdx >= 0 ? images[coverIdx] : img;
-        const actualIdx = coverIdx >= 0 ? coverIdx : i;
-        const visibleCount = group.members.filter((m) => {
-          const mi = images.find((im) => im.id === m.photoId);
-          return mi && passesTriage(mi);
-        }).length;
-        if (visibleCount === 0) continue;
-        items.push({
-          imageIndex: actualIdx,
-          image: coverImg,
-          groupId: group.id,
-          isGroupCover: true,
-          groupMemberCount: group.members.length,
-        });
-      } else {
-        items.push({ imageIndex: i, image: img });
-      }
+      items.push({
+        imageIndex: i,
+        image: img,
+        ...(group ? { groupId: group.id } : {}),
+      });
     }
   } else if (currentView === "select") {
     const seenGroups = new Set<number>();
@@ -707,6 +701,17 @@ interface ProjectState {
   /// Refresh judgments from the DB for the current shoot. Called from
   /// curator event listeners on `cluster_done`.
   refreshCuratorJudgments: () => Promise<void>;
+  /// Curator triage-stage judgments for the current shoot, keyed by
+  /// photo id. Bulk-loaded at `loadShoot` and refreshed when a
+  /// `curator:triage_done` event fires. Drives the Triage "AI rejects"
+  /// filter so the user can review what the on-import pass rejected.
+  triageJudgments: Map<number, TriageJudgment>;
+  /// Refresh triage judgments from the DB for the current shoot.
+  refreshTriageJudgments: () => Promise<void>;
+  /// Fold a batch of triage-stage rejects into local state: set each
+  /// photo's flag to `reject` and push ONE batch undo entry so a single
+  /// `Z` reverts the whole on-import auto-reject pass.
+  applyTriageRejectResults: (photoIds: number[]) => void;
   /// Triage-only bulk keep. Picks every member of the currently-focused
   /// photo's burst group, persists via `bulk_set_flag`, and records a
   /// single batch undo entry so one Z undoes the whole group.
@@ -846,6 +851,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   showAllStrip: readBoolLS("photosift.rail.allStrip", false),
   showFaces: readBoolLS("photosift.rail.faces", true),
   curatorJudgments: new Map<number, CuratorJudgment>(),
+  triageJudgments: new Map<number, TriageJudgment>(),
   triageOnlyAiRejects: false,
 
   currentImage: () => {
@@ -920,6 +926,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         // will populate it; meanwhile, an empty map is the right
         // default so the chip / filter / rank functions all no-op.
         curatorJudgments: new Map(),
+        triageJudgments: new Map(),
         triageOnlyAiRejects: false,
       });
       get().autoDrillIfOnCover();
@@ -935,6 +942,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       // simply degrades to "no judgments" until refreshed.
       getCuratorJudgmentsForShoot(shoot.id)
         .then((list) => get().setCuratorJudgments(list))
+        .catch(() => {});
+
+      // Triage-stage judgments — feeds the Triage "AI rejects" filter.
+      getTriageJudgmentsForShoot(shoot.id)
+        .then((list) => {
+          const next = new Map<number, TriageJudgment>();
+          for (const j of list) next.set(j.photoId, j);
+          set({ triageJudgments: next });
+        })
         .catch(() => {});
     } catch (e) {
       console.error("Failed to load shoot:", e);
@@ -1497,6 +1513,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         "error",
       );
     }
+
+    // Undo a tournament pick → drop its persisted bracket row so the
+    // Review tab doesn't show a choice the user reverted.
+    if (entry.bracketDecision) {
+      const b = entry.bracketDecision;
+      deleteBracketDecision(b.groupId, b.roundIndex, b.pairIndex).catch((e) =>
+        console.debug("deleteBracketDecision failed:", e),
+      );
+    }
   },
 
   redo: async () => {
@@ -1575,6 +1600,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         `Redo partial — ${failed} photo${failed === 1 ? "" : "s"} couldn't be re-applied`,
         "error",
       );
+    }
+
+    // Redo a tournament pick → re-insert its bracket row.
+    if (entry.bracketDecision) {
+      const b = entry.bracketDecision;
+      recordBracketDecision(
+        b.shootId,
+        b.groupId,
+        b.roundIndex,
+        b.pairIndex,
+        b.leftPhotoId,
+        b.rightPhotoId,
+        b.decision,
+      ).catch((e) => console.debug("recordBracketDecision (redo) failed:", e));
     }
   },
 
@@ -1731,6 +1770,44 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     } catch (e) {
       console.debug("refreshCuratorJudgments failed:", e);
     }
+  },
+
+  refreshTriageJudgments: async () => {
+    const shoot = get().currentShoot;
+    if (!shoot) return;
+    try {
+      const list = await getTriageJudgmentsForShoot(shoot.id);
+      const next = new Map<number, TriageJudgment>();
+      for (const j of list) next.set(j.photoId, j);
+      set({ triageJudgments: next });
+      get().refreshDisplay();
+    } catch (e) {
+      console.debug("refreshTriageJudgments failed:", e);
+    }
+  },
+
+  applyTriageRejectResults: (photoIds: number[]) => {
+    if (photoIds.length === 0) return;
+    const { images, undoStack } = get();
+    const idSet = new Set(photoIds);
+    const updated = images.map((img) =>
+      idSet.has(img.id) ? { ...img, flag: "reject" } : img,
+    );
+    // One batch undo entry: a single Z reverts the whole auto-reject pass.
+    const undoEntry: UndoEntry = {
+      imageId: photoIds[0],
+      field: "flag",
+      oldValue: "unreviewed",
+      newValue: "reject",
+      batch: photoIds.map((id) => ({
+        imageId: id,
+        field: "flag" as const,
+        oldValue: "unreviewed",
+        newValue: "reject",
+      })),
+    };
+    set({ images: updated, undoStack: [...undoStack.slice(-49), undoEntry] });
+    get().refreshDisplay();
   },
 
   keepAllInCurrentGroup: async () => {
@@ -2107,6 +2184,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const pair = currentPair(selectBracket);
     if (!pair || pair.right === null) return;
 
+    // Snapshot the pair coordinates from the *current* bracket before
+    // applyDecision advances them — this is what gets persisted so the
+    // Review tab can replay the tournament.
+    const shootId = get().currentShoot?.id ?? null;
+    const decisionRecord =
+      shootId !== null
+        ? {
+            shootId,
+            groupId: selectBracket.groupId,
+            roundIndex: selectBracket.currentRound,
+            pairIndex: selectBracket.currentPairIndex,
+            leftPhotoId: pair.left,
+            rightPhotoId: pair.right,
+            decision: decision as BracketDecisionValue,
+          }
+        : null;
+
     const nextBracket = applyDecision(selectBracket, decision);
     const promoted = nextBracket.lastPromoted;
 
@@ -2149,6 +2243,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           oldValue: batchEntries[0].oldValue,
           newValue: batchEntries[0].newValue,
           batch: batchEntries,
+          ...(decisionRecord ? { bracketDecision: decisionRecord } : {}),
         },
       ];
       undoPatch.redoStack = [];
@@ -2210,6 +2305,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     } catch (e) {
       console.error("Failed bracket decision:", e);
       get().setToast(`Couldn't save bracket pick — ${formatError(e)}`, "error");
+    }
+
+    // Persist the decision for the Review tab. Fire-and-forget — a
+    // failure here must never block or fail the cull flow.
+    if (decisionRecord) {
+      recordBracketDecision(
+        decisionRecord.shootId,
+        decisionRecord.groupId,
+        decisionRecord.roundIndex,
+        decisionRecord.pairIndex,
+        decisionRecord.leftPhotoId,
+        decisionRecord.rightPhotoId,
+        decisionRecord.decision,
+      ).catch((e) => console.debug("recordBracketDecision failed:", e));
     }
 
     // After the bracket completed and we advance out of the group,

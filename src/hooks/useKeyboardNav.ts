@@ -381,19 +381,6 @@ export function useKeyboardNav() {
         case "?":
           toggleShortcutHints();
           break;
-        case "Enter":
-          {
-            const focused = displayItems[currentIndex];
-            if (
-              focused?.isGroupCover &&
-              focused.groupId !== undefined &&
-              (currentView === "triage" || currentView === "select")
-            ) {
-              e.preventDefault();
-              setActiveInnerGroup(focused.groupId);
-            }
-          }
-          break;
         case "Escape":
           // Esc closes the inner strip if one is open. Doesn't compete
           // with the Grid-mode ExitPlanMode-ish escapes elsewhere.
