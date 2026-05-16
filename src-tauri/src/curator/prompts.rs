@@ -15,37 +15,29 @@ pub const CURRENT_PROMPT_VERSION: i32 = 1;
 
 /// Version stamped on every `triage_judgments` row. Bumped independently
 /// of `CURRENT_PROMPT_VERSION` when the triage steering text below changes.
-pub const TRIAGE_PROMPT_VERSION: i32 = 1;
+/// v2: replaced the editorial Stage-2 rubric with a technical-only triage
+/// prompt — the v1 path rejected ~40% of shoots on expression/composition.
+pub const TRIAGE_PROMPT_VERSION: i32 = 2;
 
-/// Synthetic shoot summary used by the Curator *triage stage*. The triage
-/// stage reuses the Stage 2 request path (`run_stage2_cluster`) but feeds
-/// it this summary instead of a real Stage 1 characterization — so triage
-/// needs no extra LLM call and no separate prompt plumbing per provider.
-///
-/// The `story` and `watch_for` fields are inlined verbatim into the
-/// Stage 2 system prompt; they steer the model toward a conservative
-/// technical-only first pass. The Stage 2 rubric's own "when in doubt,
-/// prefer 'keep' over 'reject'" rule does the rest. The worker only ever
-/// acts on a `reject` verdict; `pick`/`keep` leave the photo unreviewed.
+/// Sentinel `shoot_type` that marks a `ShootSummary` as the triage-stage
+/// placeholder. `stage2_system` keys off this to emit the conservative
+/// technical-triage prompt instead of the editorial selection rubric —
+/// the triage stage shares `run_stage2_cluster` with the selection stage,
+/// and the summary is the only value that flows through to distinguish
+/// them. A real Stage-1 `shoot_type` never collides with this string.
+pub const TRIAGE_SHOOT_TYPE: &str = "__photosift_triage__";
+
+/// Placeholder shoot summary used by the Curator *triage stage*. The
+/// triage stage reuses the Stage 2 request path (`run_stage2_cluster`);
+/// `stage2_system` detects `TRIAGE_SHOOT_TYPE` and swaps in the triage
+/// prompt, so triage needs no extra LLM call and no per-provider code.
 pub fn triage_summary() -> ShootSummary {
     ShootSummary {
-        shoot_type: "first-pass-triage".to_string(),
+        shoot_type: TRIAGE_SHOOT_TYPE.to_string(),
         subjects: vec![],
-        story: "This is a fast first-pass technical triage that runs before any \
-                detailed culling. Judge each frame entirely on its own merits — \
-                there is no real cluster here and nothing to rank against. Your \
-                ONLY job is to flag frames that are technically unusable. Anything \
-                that is merely ordinary, repetitive, or imperfectly composed must \
-                NOT be rejected — that is the photographer's decision later."
-            .to_string(),
-        dominant_style: "n/a".to_string(),
-        watch_for: vec![
-            "severe motion blur or camera shake".to_string(),
-            "the intended subject clearly out of focus".to_string(),
-            "badly blown-out or crushed exposure with no recoverable detail".to_string(),
-            "every human subject in frame has fully closed eyes".to_string(),
-            "obvious mis-fire — lens cap, floor, ceiling, accidental shutter".to_string(),
-        ],
+        story: String::new(),
+        dominant_style: String::new(),
+        watch_for: vec![],
     }
 }
 
@@ -92,11 +84,56 @@ pub fn stage1_system() -> String {
     )
 }
 
+/// Triage-stage system prompt. The triage stage shares `run_stage2_cluster`
+/// with the selection stage, so it arrives here too — but it must NOT use
+/// the editorial rubric above. Triage rejects ONLY frames with a hard,
+/// visible technical defect; everything subjective (expression, closed
+/// eyes, composition, "best of a group") is the photographer's call in
+/// the later Triage/Select passes, not this one.
+const TRIAGE_SYSTEM: &str = "\
+You are a first-pass technical triage assistant for a photo cull. You see a \
+batch of frames from one shoot. Your ONLY job is to flag frames that are \
+TECHNICALLY UNUSABLE so the photographer never has to look at them.
+
+Set suggested_flag='reject' ONLY when the frame has a hard technical defect \
+you can clearly SEE in the image:
+- severe motion blur or camera shake across the whole subject
+- the intended subject grossly out of focus
+- exposure so blown out or so black that detail is unrecoverable
+- an obvious misfire — lens cap, the floor, the ceiling, a wild blurred pan
+
+Set suggested_flag='keep' for EVERYTHING ELSE. Do NOT reject for any of these:
+- closed or blinking eyes, looking away, or any facial expression
+- ordinary, repetitive, or imperfect composition; an unconventional angle
+- a busy or distracting background
+- a face turned away, partly hidden, or small in the frame
+- mild softness — many perfectly good frames are slightly soft
+- simply being weaker than a similar frame — that is the later Select pass
+
+When in doubt, KEEP. Wrongly rejecting a usable frame is far worse than \
+keeping a weak one. A shoot of competent photos should have almost no rejects.
+
+A technical-signals line may include `sharpness=N/10`. That number is a \
+RELATIVE rank within this shoot, not an absolute quality score — a low value \
+does NOT by itself justify a reject. Judge blur from the image itself.
+
+Always call the `record_judgments` tool, one entry per frame. Only \
+`suggested_flag` ('reject' or 'keep') and `reason` are used. `reason`: ONE \
+short sentence — name the specific visible defect for a reject, or say \
+'no technical defect' for a keep.";
+
 /// Build the Stage 2 system prompt. Inlines the Stage 1 summary so each
 /// per-cluster call shares the shoot context. The full system block is
 /// returned; the caller wraps it with `cache_control: ephemeral` so
 /// subsequent Stage 2 calls in the same shoot hit the prompt cache.
+///
+/// When `summary.shoot_type` is the `TRIAGE_SHOOT_TYPE` sentinel this is a
+/// triage-stage call — return the conservative technical-only prompt
+/// instead of the editorial selection rubric.
 pub fn stage2_system(summary: &ShootSummary) -> String {
+    if summary.shoot_type == TRIAGE_SHOOT_TYPE {
+        return TRIAGE_SYSTEM.to_string();
+    }
     format!(
         "{role}\n\n\
         SHOOT CONTEXT (apply to every cluster you evaluate):\n\
@@ -205,5 +242,31 @@ mod tests {
         let s = stage1_user_text(1247, 152);
         assert!(s.contains("1247"));
         assert!(s.contains("152"));
+    }
+
+    #[test]
+    fn triage_summary_routes_to_conservative_prompt() {
+        let p = stage2_system(&triage_summary());
+        // It's the triage prompt, not the editorial selection rubric.
+        assert!(p.contains("technical triage"));
+        assert!(!p.contains("Composition (0-10)"));
+        assert!(!p.contains("RUBRIC"));
+        // Triage must not reject on closed eyes / expression / composition.
+        assert!(p.contains("Do NOT reject"));
+        assert!(p.to_lowercase().contains("closed or blinking eyes"));
+    }
+
+    #[test]
+    fn selection_summary_still_uses_editorial_rubric() {
+        let sum = ShootSummary {
+            shoot_type: "park_walk".to_string(),
+            subjects: vec![],
+            story: "x".to_string(),
+            dominant_style: "y".to_string(),
+            watch_for: vec![],
+        };
+        let p = stage2_system(&sum);
+        assert!(p.contains("Composition (0-10)"));
+        assert!(p.contains("RUBRIC"));
     }
 }

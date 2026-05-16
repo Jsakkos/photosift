@@ -863,6 +863,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ isLoading: true, loadError: null });
     try {
       const shoot = await invoke<ShootSummary>("get_shoot", { shootId });
+      // Reconcile any pending Curator triage rejects before reading the
+      // photo list. Triage runs on a background worker and its only live
+      // UI hook is the `curator:triage_done` event — which is lost if the
+      // cull page isn't mounted when a batch finishes (normal right after
+      // import). Applying here (idempotent — acts only on not-yet-applied
+      // judgments) means opening or reopening a shoot always reflects the
+      // triage verdicts even when the live event was missed.
+      await invoke("apply_triage_rejects", { shootId }).catch(() => {});
       const images = await invoke<ImageEntry[]>("get_image_list");
 
       const groups = await invoke<Group[]>("get_groups_for_shoot", {

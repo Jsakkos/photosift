@@ -16,13 +16,19 @@ use serde::{Deserialize, Serialize};
 pub struct CuratorJudgment {
     pub photo_id: i64,
     /// 0-10. Framing, balance, leading lines, subject placement.
+    /// `#[serde(default)]`: the triage stage doesn't score composition,
+    /// so its judgments omit this field — it deserializes to 0.
+    #[serde(default)]
     pub composition: i32,
-    /// 0-10. Light, color, mood, overall keeper-quality.
+    /// 0-10. Light, color, mood, overall keeper-quality. Omitted (→0) by
+    /// triage-stage judgments.
+    #[serde(default)]
     pub aesthetic: i32,
     /// 1-based rank within this cluster, 1=best. None for singletons.
     pub cluster_rank: Option<i32>,
     /// Whether Claude considers this a keeper standalone (not just
-    /// best-of-cluster). For singletons this is the only useful field.
+    /// best-of-cluster). Omitted (→false) by triage-stage judgments.
+    #[serde(default)]
     pub is_keeper: bool,
     /// User-action recommendation. Lowercase string so the JSON contract
     /// matches what the model is asked to emit.
@@ -237,9 +243,12 @@ pub fn judgments_tool_schema() -> serde_json::Value {
                         },
                         "reason":      { "type": "string", "maxLength": 220 }
                     },
+                    // composition / aesthetic / is_keeper are NOT required:
+                    // the selection-stage prompt still asks for them, but the
+                    // triage-stage prompt omits them (only suggested_flag +
+                    // reason matter there). cluster_rank was already optional.
                     "required": [
-                        "photo_id", "composition", "aesthetic",
-                        "is_keeper", "suggested_flag", "reason"
+                        "photo_id", "suggested_flag", "reason"
                     ]
                 }
             }
@@ -329,6 +338,21 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    /// A triage-stage judgment only carries `photo_id`, `suggested_flag`,
+    /// and `reason` — composition / aesthetic / is_keeper are omitted and
+    /// must deserialize to their defaults rather than failing.
+    #[test]
+    fn triage_shaped_judgment_omits_scores() {
+        let s = r#"{"photo_id": 7, "suggested_flag": "reject", "reason": "severe motion blur"}"#;
+        let j: CuratorJudgment = serde_json::from_str(s).unwrap();
+        assert_eq!(j.photo_id, 7);
+        assert_eq!(j.composition, 0);
+        assert_eq!(j.aesthetic, 0);
+        assert!(!j.is_keeper);
+        assert_eq!(j.cluster_rank, None);
+        assert_eq!(j.suggested_flag, SuggestedFlag::Reject);
     }
 
     /// `Option<i32>` accepts both omitted *and* null fields as `None`,

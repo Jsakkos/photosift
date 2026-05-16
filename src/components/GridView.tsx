@@ -17,7 +17,6 @@ export function GridView() {
     currentView,
     createGroupFromPhotos,
     ungroupPhotos,
-    setActiveInnerGroup,
   } = useProjectStore();
   const [colWidth, setColWidth] = useState<(typeof SIZES)[number]>(160);
   const [selection, setSelection] = useState<Set<number>>(new Set());
@@ -126,7 +125,7 @@ export function GridView() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, currentView, setActiveInnerGroup, selection]);
+  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, selection]);
 
   const handleClick = useCallback(
     (index: number, e: React.MouseEvent) => {
@@ -242,14 +241,10 @@ export function GridView() {
               showGroupBar={isGroupMember}
               onClick={handleClick}
               onDoubleClick={() => {
-                // In Select, double-clicking a grouped photo drills into
-                // that group's inner strip; everything else opens loupe.
-                if (currentView === "select" && item.groupId !== undefined) {
-                  setActiveInnerGroup(item.groupId);
-                } else {
-                  setCurrentIndex(index);
-                  setViewMode("sequential");
-                }
+                // Double-click always opens the photo in the loupe — the
+                // intuitive gesture, matching Enter.
+                setCurrentIndex(index);
+                setViewMode("sequential");
               }}
               currentView={currentView}
             />
@@ -265,7 +260,6 @@ export function GridView() {
       setCurrentIndex,
       setViewMode,
       currentView,
-      setActiveInnerGroup,
     ],
   );
 

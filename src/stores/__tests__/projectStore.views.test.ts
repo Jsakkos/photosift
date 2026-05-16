@@ -177,3 +177,25 @@ describe("setView — view switching and cursor management", () => {
     expect(useProjectStore.getState().currentIndex).toBe(0);
   });
 });
+
+describe("loadShoot — triage reconciliation", () => {
+  test("applies pending triage rejects before reading the photo list", async () => {
+    const shoot = makeShoot();
+    const calls: { cmd: string; args: unknown }[] = [];
+    setupMockIpc({ get_shoot: shoot }, (cmd, args) =>
+      calls.push({ cmd, args }),
+    );
+
+    await useProjectStore.getState().loadShoot(shoot.id);
+
+    const applyIdx = calls.findIndex((c) => c.cmd === "apply_triage_rejects");
+    const listIdx = calls.findIndex((c) => c.cmd === "get_image_list");
+    expect(applyIdx).toBeGreaterThanOrEqual(0);
+    expect((calls[applyIdx].args as { shootId: number }).shootId).toBe(
+      shoot.id,
+    );
+    // Reconcile must run before the photo list is read so the list
+    // reflects the just-applied reject flags.
+    expect(applyIdx).toBeLessThan(listIdx);
+  });
+});

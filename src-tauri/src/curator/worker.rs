@@ -41,10 +41,13 @@ pub enum CuratorJob {
     TriageBatch { shoot_id: i64, photo_ids: Vec<i64> },
 }
 
-/// Photos per `TriageBatch` job. Larger than `SINGLETONS_PER_JOB` — the
-/// triage prompt is cheap (reject/keep only) so bigger batches cut the
-/// per-call overhead without crowding the vision budget.
-pub const TRIAGE_BATCH_SIZE: usize = 8;
+/// Photos per `TriageBatch` job. Triage judges each frame independently
+/// (no within-cluster ranking), so one big batch is fine — typical
+/// personal shoots land in a single call, which is cheaper (one cached
+/// system prompt) and emits one `curator:triage_done` event. Capped so a
+/// very large import still chunks rather than sending one enormous
+/// request that risks provider limits or an all-or-nothing failure.
+pub const TRIAGE_BATCH_SIZE: usize = 50;
 
 // Stage 2 concurrency is per-provider — cloud=4, local=1. See
 // `CuratorProvider::concurrency_limit()` and consumers in `run_loop`.
