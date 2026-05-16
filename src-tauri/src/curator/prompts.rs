@@ -17,7 +17,9 @@ pub const CURRENT_PROMPT_VERSION: i32 = 1;
 /// of `CURRENT_PROMPT_VERSION` when the triage steering text below changes.
 /// v2: replaced the editorial Stage-2 rubric with a technical-only triage
 /// prompt — the v1 path rejected ~40% of shoots on expression/composition.
-pub const TRIAGE_PROMPT_VERSION: i32 = 2;
+/// v3: single-frame phrasing — triage now sends one image per LLM call so
+/// the model judges each frame reliably (50-image batches misjudged).
+pub const TRIAGE_PROMPT_VERSION: i32 = 3;
 
 /// Sentinel `shoot_type` that marks a `ShootSummary` as the triage-stage
 /// placeholder. `stage2_system` keys off this to emit the conservative
@@ -91,9 +93,10 @@ pub fn stage1_system() -> String {
 /// eyes, composition, "best of a group") is the photographer's call in
 /// the later Triage/Select passes, not this one.
 const TRIAGE_SYSTEM: &str = "\
-You are a first-pass technical triage assistant for a photo cull. You see a \
-batch of frames from one shoot. Your ONLY job is to flag frames that are \
-TECHNICALLY UNUSABLE so the photographer never has to look at them.
+You are a first-pass technical triage assistant for a photo cull. You are \
+shown a single frame from a shoot. Your ONLY job is to decide whether it is \
+TECHNICALLY UNUSABLE — so the photographer never has to look at it. Look \
+carefully at the actual image before deciding.
 
 Set suggested_flag='reject' ONLY when the frame has a hard technical defect \
 you can clearly SEE in the image:
@@ -117,7 +120,7 @@ A technical-signals line may include `sharpness=N/10`. That number is a \
 RELATIVE rank within this shoot, not an absolute quality score — a low value \
 does NOT by itself justify a reject. Judge blur from the image itself.
 
-Always call the `record_judgments` tool, one entry per frame. Only \
+Always call the `record_judgments` tool with one entry for the frame. Only \
 `suggested_flag` ('reject' or 'keep') and `reason` are used. `reason`: ONE \
 short sentence — name the specific visible defect for a reject, or say \
 'no technical defect' for a keep.";

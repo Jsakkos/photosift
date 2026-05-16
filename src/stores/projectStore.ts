@@ -1749,7 +1749,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }),
 
   toggleTriageAiRejectsFilter: () => {
-    set((s) => ({ triageOnlyAiRejects: !s.triageOnlyAiRejects }));
+    const next = !get().triageOnlyAiRejects;
+    // Turning the filter on jumps to grid view so the AI's rejects read as
+    // a contact sheet at a glance; turning it off returns to the loupe.
+    set({ triageOnlyAiRejects: next, viewMode: next ? "grid" : "sequential" });
     get().refreshDisplay();
   },
 

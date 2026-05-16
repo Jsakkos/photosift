@@ -7,6 +7,8 @@ import { Badge, VerdictBadge, type Verdict } from "./primitives";
 
 const SIZES = [100, 160, 240] as const;
 const CELL_GAP = 8;
+/// Window for pairing two clicks into a double-click (see `handleClick`).
+const DOUBLE_CLICK_MS = 350;
 
 export function GridView() {
   const {
@@ -25,6 +27,7 @@ export function GridView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<Grid>(null);
   const lastClickIdx = useRef(0);
+  const lastClickTime = useRef(0);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -135,13 +138,31 @@ export function GridView() {
         const newSel = new Set(selection);
         for (let i = start; i <= end; i++) newSel.add(i);
         setSelection(newSel);
-      } else {
-        setSelection(new Set([index]));
-        lastClickIdx.current = index;
+        setFocusIndex(index);
+        return;
       }
+      // Manual double-click detection. The DOM `dblclick` event never
+      // fires on these cells: the first click's state update remounts
+      // the virtualized grid, so the second click lands on a fresh node
+      // and the browser can't pair them. Two `click` events DO fire
+      // reliably — so we pair them ourselves. A second click on the same
+      // cell within the window opens that photo in the loupe.
+      const now = Date.now();
+      if (
+        index === lastClickIdx.current &&
+        now - lastClickTime.current < DOUBLE_CLICK_MS
+      ) {
+        lastClickTime.current = 0;
+        setCurrentIndex(index);
+        setViewMode("sequential");
+        return;
+      }
+      lastClickTime.current = now;
+      lastClickIdx.current = index;
+      setSelection(new Set([index]));
       setFocusIndex(index);
     },
-    [selection],
+    [selection, setCurrentIndex, setViewMode],
   );
 
   const handleBulkAction = useCallback(
@@ -240,27 +261,12 @@ export function GridView() {
               isSelected={selection.has(index)}
               showGroupBar={isGroupMember}
               onClick={handleClick}
-              onDoubleClick={() => {
-                // Double-click always opens the photo in the loupe — the
-                // intuitive gesture, matching Enter.
-                setCurrentIndex(index);
-                setViewMode("sequential");
-              }}
               currentView={currentView}
             />
           </div>
         );
       },
-    [
-      columnCount,
-      displayItems,
-      focusIndex,
-      selection,
-      handleClick,
-      setCurrentIndex,
-      setViewMode,
-      currentView,
-    ],
+    [columnCount, displayItems, focusIndex, selection, handleClick, currentView],
   );
 
   return (
@@ -428,7 +434,6 @@ function GridThumb({
   isSelected,
   showGroupBar,
   onClick,
-  onDoubleClick,
   currentView,
 }: {
   item: ReturnType<typeof useProjectStore.getState>["displayItems"][0];
@@ -437,7 +442,6 @@ function GridThumb({
   isSelected: boolean;
   showGroupBar: boolean;
   onClick: (index: number, e: React.MouseEvent) => void;
-  onDoubleClick: () => void;
   currentView: string;
 }) {
   const image = item.image;
@@ -476,7 +480,6 @@ function GridThumb({
       } ${isRejected ? "opacity-35" : ""}`}
       style={{ outline, outlineOffset }}
       onClick={(e) => onClick(index, e)}
-      onDoubleClick={onDoubleClick}
     >
       <img
         key={image.id}

@@ -178,6 +178,28 @@ describe("setView — view switching and cursor management", () => {
   });
 });
 
+describe("toggleTriageAiRejectsFilter", () => {
+  test("turning the filter on switches to grid view; off restores the loupe", () => {
+    setupMockIpc();
+    useProjectStore.setState({
+      triageOnlyAiRejects: false,
+      viewMode: "sequential",
+      currentView: "triage",
+      images: [],
+      groups: [],
+      displayItems: [],
+    });
+
+    useProjectStore.getState().toggleTriageAiRejectsFilter();
+    expect(useProjectStore.getState().triageOnlyAiRejects).toBe(true);
+    expect(useProjectStore.getState().viewMode).toBe("grid");
+
+    useProjectStore.getState().toggleTriageAiRejectsFilter();
+    expect(useProjectStore.getState().triageOnlyAiRejects).toBe(false);
+    expect(useProjectStore.getState().viewMode).toBe("sequential");
+  });
+});
+
 describe("loadShoot — triage reconciliation", () => {
   test("applies pending triage rejects before reading the photo list", async () => {
     const shoot = makeShoot();
