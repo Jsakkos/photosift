@@ -8,8 +8,7 @@ beforeEach(() => {
   resetIds();
   useSettingsStore.setState({
     settings: {
-      nearDupThreshold: 4,
-      relatedThreshold: 12,
+      groupThreshold: 12,
       groupTimeWindowS: 60,
       selectRequiresPick: false,
       routeMinStar: 0,

@@ -93,7 +93,6 @@ export interface GroupMemberInfo {
 export interface Group {
   id: number;
   shootId: number;
-  groupType: "near_duplicate" | "related";
   members: GroupMemberInfo[];
 }
 

@@ -2,11 +2,11 @@ import { useState, useRef, useEffect } from "react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 
-/// Inline regroup control for the Select view. The default pHash
-/// thresholds are deliberately conservative; this lets the user retune
-/// burst grouping for the shoot in front of them — without leaving the
-/// cull or touching the global defaults. Tighter grouping means more
-/// 2-up tournaments and fewer lone frames to compare by eye.
+/// Inline regroup control for the Select view. Grouping clusters similar
+/// frames so the tournament can compare them 2-up; a single pHash
+/// hamming-distance threshold drives it. This panel lets the user retune
+/// that threshold for the shoot in front of them — without leaving the
+/// cull or touching the global default. Higher = looser grouping.
 export function RegroupControl() {
   const currentShoot = useProjectStore((s) => s.currentShoot);
   const refetchGroups = useProjectStore((s) => s.refetchGroups);
@@ -15,19 +15,17 @@ export function RegroupControl() {
   const reclusterShootWith = useSettingsStore((s) => s.reclusterShootWith);
 
   const [open, setOpen] = useState(false);
-  const [nearDup, setNearDup] = useState(settings.nearDupThreshold);
-  const [related, setRelated] = useState(settings.relatedThreshold);
+  const [threshold, setThreshold] = useState(settings.groupThreshold);
   const [busy, setBusy] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Re-seed the sliders from the live settings each time the panel opens
-  // so they always reflect the current grouping baseline.
+  // Re-seed the slider from the live settings each time the panel opens
+  // so it always reflects the current grouping baseline.
   useEffect(() => {
     if (open) {
-      setNearDup(settings.nearDupThreshold);
-      setRelated(settings.relatedThreshold);
+      setThreshold(settings.groupThreshold);
     }
-  }, [open, settings.nearDupThreshold, settings.relatedThreshold]);
+  }, [open, settings.groupThreshold]);
 
   useEffect(() => {
     if (!open) return;
@@ -42,18 +40,13 @@ export function RegroupControl() {
 
   if (!currentShoot) return null;
 
-  // The clusterer requires related >= near-duplicate; clamp on apply so a
-  // slider drag can never produce an invalid pair.
-  const relatedEff = Math.max(related, nearDup);
-
   const apply = async () => {
     if (busy) return;
     setBusy(true);
     try {
       const count = await reclusterShootWith(
         currentShoot.id,
-        nearDup,
-        relatedEff,
+        threshold,
         settings.groupTimeWindowS,
       );
       // Group ids are rebuilt — any in-flight tournament and the
@@ -68,56 +61,9 @@ export function RegroupControl() {
       setOpen(false);
     } catch (e) {
       setToast(`Couldn't regroup — ${String(e)}`, "error");
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   };
-
-  const Slider = ({
-    label,
-    hint,
-    value,
-    min,
-    max,
-    onChange,
-  }: {
-    label: string;
-    hint: string;
-    value: number;
-    min: number;
-    max: number;
-    onChange: (n: number) => void;
-  }) => (
-    <label className="flex flex-col gap-1">
-      <span className="flex items-center justify-between">
-        <span
-          className="font-mono text-2xs uppercase tracking-[0.6px]"
-          style={{ color: "var(--color-fg-dim)" }}
-        >
-          {label}
-        </span>
-        <span
-          className="font-mono text-2xs tabular-nums"
-          style={{ color: "var(--color-fg)" }}
-        >
-          {value}
-        </span>
-      </span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        value={value}
-        tabIndex={-1}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full cursor-pointer"
-        style={{ accentColor: "var(--color-accent)" }}
-      />
-      <span className="text-3xs" style={{ color: "var(--color-fg-mute)" }}>
-        {hint}
-      </span>
-    </label>
-  );
 
   return (
     <div ref={wrapRef} className="relative">
@@ -143,28 +89,38 @@ export function RegroupControl() {
           }}
         >
           <p className="text-3xs leading-snug" style={{ color: "var(--color-fg-mute)" }}>
-            Higher thresholds group more loosely-similar frames so the
-            tournament compares them 2-up. Applies to this shoot only.
+            Higher = looser grouping: more frames pulled into each cluster
+            for 2-up comparison. Applies to this shoot only.
           </p>
-          <Slider
-            label="near-duplicate"
-            hint="≤ this pHash distance = same shot"
-            value={nearDup}
-            min={0}
-            max={32}
-            onChange={(n) => {
-              setNearDup(n);
-              if (related < n) setRelated(n);
-            }}
-          />
-          <Slider
-            label="related"
-            hint="≤ this pHash distance = same burst"
-            value={relatedEff}
-            min={0}
-            max={48}
-            onChange={(n) => setRelated(Math.max(n, nearDup))}
-          />
+          <label className="flex flex-col gap-1">
+            <span className="flex items-center justify-between">
+              <span
+                className="font-mono text-2xs uppercase tracking-[0.6px]"
+                style={{ color: "var(--color-fg-dim)" }}
+              >
+                grouping similarity
+              </span>
+              <span
+                className="font-mono text-2xs tabular-nums"
+                style={{ color: "var(--color-fg)" }}
+              >
+                {threshold}
+              </span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={48}
+              value={threshold}
+              tabIndex={-1}
+              onChange={(e) => setThreshold(Number(e.target.value))}
+              className="w-full cursor-pointer"
+              style={{ accentColor: "var(--color-accent)" }}
+            />
+            <span className="text-3xs" style={{ color: "var(--color-fg-mute)" }}>
+              ≤ this pHash distance = same group
+            </span>
+          </label>
           <button
             type="button"
             tabIndex={-1}

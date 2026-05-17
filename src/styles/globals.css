@@ -45,6 +45,19 @@
   --color-label-blue: #4a82d9;
   --color-label-purple: #9c6bd9;
 
+  /* Cluster-indicator palette — categorical hues cycled across groups in
+     the Select filmstrip so members of one cluster share a colored edge.
+     Deliberately distinct from the Lightroom label set above (those carry
+     user-chosen meaning); these are purely structural and dark-bg legible. */
+  --color-group-1: #e06c5a;
+  --color-group-2: #e09a4a;
+  --color-group-3: #d9c24a;
+  --color-group-4: #6fbb7b;
+  --color-group-5: #4ec0c0;
+  --color-group-6: #5a9ce0;
+  --color-group-7: #9c7be0;
+  --color-group-8: #d973b8;
+
   /* Stars */
   --color-star: #e8d37a;
 

@@ -1,12 +1,10 @@
 use super::phash::hamming_distance;
 
-// Raised from 4/12 after real-shoot testing: the conservative defaults
-// reliably grouped near-identical frames but missed similar-but-slightly-
-// varying ones, leaving the user to compare them one-by-one instead of in
-// the Select tournament. Existing DBs keep their stored values — the
-// inline regroup control in Select is how those shoots retune.
-pub const DEFAULT_NEAR_DUP_THRESHOLD: u32 = 6;
-pub const DEFAULT_RELATED_THRESHOLD: u32 = 16;
+/// Default perceptual-hash hamming distance at or under which two photos
+/// are treated as part of the same group. Deliberately loose: grouping
+/// only needs to funnel similar frames into the Select tournament, not be
+/// perfect — the inline regroup control lets the user retune per shoot.
+pub const DEFAULT_GROUP_THRESHOLD: u32 = 16;
 /// Default capture-time gap (seconds) allowed between two pHash-similar
 /// photos before they stop being considered part of the same burst.
 /// 60s comfortably covers typical D750 burst sequences plus a beat of
@@ -63,7 +61,6 @@ impl UnionFind {
 }
 
 pub struct GroupResult {
-    pub group_type: &'static str,
     pub member_indices: Vec<usize>,
 }
 
@@ -77,18 +74,14 @@ pub type PhashRow = (i64, [u8; 8], Option<i64>);
 /// capture-time window to reject pHash collisions across distinct
 /// moments. Every photo belongs to at most one emitted group.
 ///
-/// - A pair forms an edge if `hamming(a, b) <= related_threshold` AND
-///   the capture-time gap is ≤ `time_window_s` (or either side's time
-///   is unknown). `time_window_s == 0` disables the time constraint.
-/// - Groups are the transitive closure of those edges.
-/// - Each emitted group is labelled `"near_duplicate"` when *all* of
-///   its members share the same near-duplicate root (i.e. no
-///   intra-group hop exceeds `near_dup_threshold`). Otherwise it's
-///   labelled `"related"`.
+/// - A pair forms an edge if `hamming(a, b) <= threshold` AND the
+///   capture-time gap is ≤ `time_window_s` (or either side's time is
+///   unknown). `time_window_s == 0` disables the time constraint.
+/// - Groups are the transitive closure of those edges; only components
+///   with at least 2 members are emitted.
 pub fn cluster_phashes(
     rows: &[PhashRow],
-    near_dup_threshold: u32,
-    related_threshold: u32,
+    threshold: u32,
     time_window_s: u32,
 ) -> Vec<GroupResult> {
     let n = rows.len();
@@ -96,8 +89,7 @@ pub fn cluster_phashes(
         return Vec::new();
     }
 
-    let mut nd_uf = UnionFind::new(n);
-    let mut rel_uf = UnionFind::new(n);
+    let mut uf = UnionFind::new(n);
 
     let time_ok = |i: usize, j: usize| -> bool {
         if time_window_s == 0 {
@@ -115,38 +107,16 @@ pub fn cluster_phashes(
             if !time_ok(i, j) {
                 continue;
             }
-            let d = hamming_distance(&rows[i].1, &rows[j].1);
-            if d <= near_dup_threshold {
-                nd_uf.union(i, j);
-                rel_uf.union(i, j);
-            } else if d <= related_threshold {
-                rel_uf.union(i, j);
+            if hamming_distance(&rows[i].1, &rows[j].1) <= threshold {
+                uf.union(i, j);
             }
         }
     }
 
-    let mut results = Vec::new();
-    for component in rel_uf.components() {
-        // Classify by near-dup cohesion: if all members share the same
-        // near-dup root, the cluster is tight enough to call
-        // "near_duplicate". Otherwise it's a broader "related" cluster.
-        let mut nd_roots: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
-        for &idx in &component {
-            nd_roots.insert(nd_uf.find(idx));
-        }
-        let group_type = if nd_roots.len() == 1 {
-            "near_duplicate"
-        } else {
-            "related"
-        };
-        results.push(GroupResult {
-            group_type,
-            member_indices: component,
-        });
-    }
-
-    results
+    uf.components()
+        .into_iter()
+        .map(|member_indices| GroupResult { member_indices })
+        .collect()
 }
 
 #[cfg(test)]
@@ -157,11 +127,11 @@ mod tests {
         // Map the test-friendly 2-tuple to the 3-tuple the production
         // API takes, with no timestamps. Time window = 0 → disabled.
         let rows: Vec<PhashRow> = phashes.iter().map(|(id, h)| (*id, *h, None)).collect();
-        cluster_phashes(&rows, DEFAULT_NEAR_DUP_THRESHOLD, DEFAULT_RELATED_THRESHOLD, 0)
+        cluster_phashes(&rows, DEFAULT_GROUP_THRESHOLD, 0)
     }
 
     #[test]
-    fn test_near_dup_cluster() {
+    fn test_basic_cluster() {
         let phashes = vec![
             (1, [0x00; 8]),
             (2, [0x00; 8]),
@@ -169,18 +139,15 @@ mod tests {
         ];
         let groups = default_cluster(&phashes);
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].group_type, "near_duplicate");
         assert_eq!(groups[0].member_indices.len(), 2);
     }
 
     #[test]
-    fn test_overlap_merges_into_single_related_group() {
-        // Three photos: h0 and h1 are identical (near-dup), h2 is 8 bits
-        // away — within the related threshold (12) but beyond the near-
-        // dup threshold (4). With the old two-tier emit this produced
-        // both a near-dup group {0,1} and a related group {0,1,2}. The
-        // merged scheme emits a single "related" group containing all
-        // three, so no photo lives in two groups at once.
+    fn test_overlap_merges_into_single_group() {
+        // Three photos: h0 and h1 are identical, h2 is 8 bits away —
+        // within the default threshold. They form one connected
+        // component, so all three land in a single group and no photo
+        // lives in two groups at once.
         let h0 = [0x00u8; 8];
         let h1 = [0x00u8; 8];
         let mut h2 = [0x00u8; 8];
@@ -190,22 +157,20 @@ mod tests {
         let groups = default_cluster(&phashes);
 
         assert_eq!(groups.len(), 1, "expected exactly one merged group");
-        assert_eq!(groups[0].group_type, "related");
         assert_eq!(groups[0].member_indices.len(), 3);
     }
 
     #[test]
     fn test_every_photo_belongs_to_at_most_one_group() {
         // Regression guard for the user-reported "a photo appears in
-        // two groups" bug. Constructs a cluster where the tight and
-        // loose tiers overlap, then checks the invariant across the
-        // full output.
+        // two groups" bug. Constructs a cluster with members at varying
+        // distances, then checks the invariant across the full output.
         let h0 = [0x00u8; 8];
         let h1 = [0x00u8; 8];
         let mut h2 = [0x00u8; 8];
-        h2[0] = 0x0F; // 4 bits — right at the near-dup threshold
+        h2[0] = 0x0F; // 4 bits
         let mut h3 = [0x00u8; 8];
-        h3[0] = 0xFF; // 8 bits — related only
+        h3[0] = 0xFF; // 8 bits
 
         let phashes = vec![(1, h0), (2, h1), (3, h2), (4, h3)];
         let groups = default_cluster(&phashes);
@@ -232,20 +197,17 @@ mod tests {
     }
 
     #[test]
-    fn test_tighter_near_dup_threshold_splits_group() {
-        // Two hashes at hamming distance 4 should group together with
-        // default threshold=4, but split apart with threshold=2.
+    fn test_tighter_threshold_splits_group() {
+        // Two hashes at hamming distance 4 group together at threshold 4
+        // but split apart at threshold 2.
         let h0 = [0x00u8; 8];
         let mut h1 = [0x00u8; 8];
         h1[0] = 0x0F; // 4 bits different
 
         let rows = vec![(1, h0, None), (2, h1, None)];
 
-        let loose = cluster_phashes(&rows, 4, 12, 0);
-        assert_eq!(loose.iter().filter(|g| g.group_type == "near_duplicate").count(), 1);
-
-        let tight = cluster_phashes(&rows, 2, 12, 0);
-        assert_eq!(tight.iter().filter(|g| g.group_type == "near_duplicate").count(), 0);
+        assert_eq!(cluster_phashes(&rows, 4, 0).len(), 1);
+        assert!(cluster_phashes(&rows, 2, 0).is_empty());
     }
 
     #[test]
@@ -257,11 +219,11 @@ mod tests {
         let near: Vec<PhashRow> = vec![(1, h, Some(1000)), (2, h, Some(1030))];
         let far: Vec<PhashRow> = vec![(1, h, Some(1000)), (2, h, Some(9999))];
 
-        assert_eq!(cluster_phashes(&near, 4, 12, 60).len(), 1, "30s gap within window");
-        assert!(cluster_phashes(&far, 4, 12, 60).is_empty(), "9000s gap filtered");
+        assert_eq!(cluster_phashes(&near, 12, 60).len(), 1, "30s gap within window");
+        assert!(cluster_phashes(&far, 12, 60).is_empty(), "9000s gap filtered");
 
         // time_window_s=0 disables the filter.
-        assert_eq!(cluster_phashes(&far, 4, 12, 0).len(), 1, "zero window disables check");
+        assert_eq!(cluster_phashes(&far, 12, 0).len(), 1, "zero window disables check");
     }
 
     #[test]
@@ -270,6 +232,6 @@ mod tests {
         // time-compatible so pHash similarity still drives clustering.
         let h = [0x00u8; 8];
         let rows: Vec<PhashRow> = vec![(1, h, Some(1000)), (2, h, None)];
-        assert_eq!(cluster_phashes(&rows, 4, 12, 60).len(), 1);
+        assert_eq!(cluster_phashes(&rows, 12, 60).len(), 1);
     }
 }

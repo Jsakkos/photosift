@@ -32,7 +32,6 @@ describe("aiPickForGroup", () => {
   const group: Group = {
     id: 1,
     shootId: 1,
-    groupType: "near_duplicate",
     members: [
       { photoId: 1, isCover: false },
       { photoId: 2, isCover: false },
@@ -64,7 +63,7 @@ describe("aiPickForGroup", () => {
 
   it("returns null when group has fewer than 2 members total", () => {
     const tinyGroup: Group = {
-      id: 2, shootId: 1, groupType: "near_duplicate",
+      id: 2, shootId: 1,
       members: [{ photoId: 1, isCover: true }],
     };
     expect(aiPickForGroup(tinyGroup, [e(1, 90, 2, 95)])).toBe(null);
@@ -93,7 +92,6 @@ describe("computeDisplayItems — AI pick stays visible in expanded triage", () 
   const baseGroup: Group = {
     id: 7,
     shootId: 1,
-    groupType: "near_duplicate",
     members: [
       { photoId: 10, isCover: true },
       { photoId: 11, isCover: false },

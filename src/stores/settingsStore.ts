@@ -35,8 +35,9 @@ export const DEFAULT_FOLDER_TEMPLATE: FolderTemplate = {
 };
 
 export interface Settings {
-  nearDupThreshold: number;
-  relatedThreshold: number;
+  /// pHash hamming-distance threshold for grouping similar photos into
+  /// clusters — the single knob the Select "regroup" control exposes.
+  groupThreshold: number;
   /// Maximum capture-time gap in seconds between two photos for them
   /// to cluster together. 0 disables the filter. Default 60s targets
   /// the "same burst" mental model.
@@ -93,8 +94,7 @@ export interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  nearDupThreshold: 6,
-  relatedThreshold: 16,
+  groupThreshold: 16,
   groupTimeWindowS: 60,
   selectRequiresPick: true,
   routeMinStar: 3,
@@ -131,12 +131,11 @@ interface SettingsState {
   loadSettings: () => Promise<void>;
   updateSettings: (partial: Partial<Settings>) => Promise<void>;
   reclusterShoot: (shootId: number) => Promise<number>;
-  /// Re-cluster one shoot with explicit thresholds (the inline regroup
-  /// control in Select). Does not touch the global default thresholds.
+  /// Re-cluster one shoot with an explicit threshold (the inline regroup
+  /// control in Select). Does not touch the global default threshold.
   reclusterShootWith: (
     shootId: number,
-    nearDupThreshold: number,
-    relatedThreshold: number,
+    threshold: number,
     timeWindowS: number,
   ) => Promise<number>;
   openDialog: () => void;
@@ -182,14 +181,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   reclusterShootWith: async (
     shootId: number,
-    nearDupThreshold: number,
-    relatedThreshold: number,
+    threshold: number,
     timeWindowS: number,
   ) => {
     return await invoke<number>("recluster_shoot_with", {
       shootId,
-      nearDupThreshold,
-      relatedThreshold,
+      threshold,
       timeWindowS,
     });
   },

@@ -66,8 +66,7 @@ export function SettingsDialog() {
   const { currentShoot, loadShoot, refreshDisplay, setSelectMinStar } =
     useProjectStore();
 
-  const [nearDup, setNearDup] = useState(settings.nearDupThreshold);
-  const [related, setRelated] = useState(settings.relatedThreshold);
+  const [threshold, setThreshold] = useState(settings.groupThreshold);
   const [timeWindow, setTimeWindow] = useState(settings.groupTimeWindowS);
   const [selectPick, setSelectPick] = useState(settings.selectRequiresPick);
   const [routeStar, setRouteStar] = useState(settings.routeMinStar);
@@ -142,8 +141,7 @@ export function SettingsDialog() {
 
   useEffect(() => {
     if (isOpen) {
-      setNearDup(settings.nearDupThreshold);
-      setRelated(settings.relatedThreshold);
+      setThreshold(settings.groupThreshold);
       setTimeWindow(settings.groupTimeWindowS);
       setSelectPick(settings.selectRequiresPick);
       setRouteStar(settings.routeMinStar);
@@ -218,10 +216,8 @@ export function SettingsDialog() {
 
   const folderTemplateErrors = validateFolderTemplate(folderTemplate).all;
   const valid =
-    nearDup >= 0 &&
-    nearDup <= 64 &&
-    related >= nearDup &&
-    related <= 64 &&
+    threshold >= 0 &&
+    threshold <= 64 &&
     routeStar >= 0 &&
     routeStar <= 5 &&
     folderTemplateErrors.length === 0;
@@ -233,8 +229,7 @@ export function SettingsDialog() {
       : settings.curatorMaxCostPerShootCents;
     try {
       await updateSettings({
-        nearDupThreshold: nearDup,
-        relatedThreshold: related,
+        groupThreshold: threshold,
         groupTimeWindowS: timeWindow,
         selectRequiresPick: selectPick,
         routeMinStar: routeStar,
@@ -275,8 +270,7 @@ export function SettingsDialog() {
     setReclusterMsg(null);
     try {
       await updateSettings({
-        nearDupThreshold: nearDup,
-        relatedThreshold: related,
+        groupThreshold: threshold,
         groupTimeWindowS: timeWindow,
       });
       const groupCount = await reclusterShoot(currentShoot.id);
@@ -511,35 +505,19 @@ export function SettingsDialog() {
 
         <div className="mb-4">
           <label className="block text-sm text-fg-dim mb-1">
-            Near-duplicate threshold (hamming distance, 0–8 typical)
+            Grouping similarity (pHash hamming distance)
           </label>
           <input
             type="number"
             min={0}
             max={64}
-            value={nearDup}
-            onChange={(e) => setNearDup(parseInt(e.target.value) || 0)}
+            value={threshold}
+            onChange={(e) => setThreshold(parseInt(e.target.value) || 0)}
             className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm"
           />
           <p className="text-xs text-fg-dim mt-1">
-            Lower = stricter. Default 4.
-          </p>
-        </div>
-
-        <div className="mb-4">
-          <label className="block text-sm text-fg-dim mb-1">
-            Related threshold (hamming distance)
-          </label>
-          <input
-            type="number"
-            min={0}
-            max={64}
-            value={related}
-            onChange={(e) => setRelated(parseInt(e.target.value) || 0)}
-            className="w-full px-3 py-2 rounded-lg bg-bg text-fg border border-white/10 text-sm"
-          />
-          <p className="text-xs text-fg-dim mt-1">
-            Must be ≥ near-duplicate threshold. Default 12.
+            Higher = looser grouping: more frames cluster together for the
+            Select tournament. Default 16.
           </p>
         </div>
 

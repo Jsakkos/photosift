@@ -331,13 +331,10 @@ function computeDisplayItemsFiltered(
     );
   }
 
-  // Drilled in: enumerate the target group's members directly. We can't
-  // reuse `computeDisplayItems` because its photo→group map is lossy —
-  // the Rust two-tier clusterer emits BOTH a tight near_duplicate group
-  // and a broader related group covering the same photos, so a single
-  // photoId resolves to whichever group was registered last. Drilling
-  // into the "losing" group would then return zero members. Walking the
-  // target group's own `members` array avoids the ambiguity entirely.
+  // Drilled in: enumerate the target group's members directly rather
+  // than reusing `computeDisplayItems`. Given a known group id, walking
+  // that group's own `members` array is the simplest correct source —
+  // no need to round-trip through the photo→group map.
   const group = groups.find((g) => g.id === activeInnerGroupId);
   if (!group) return [];
 
@@ -2397,7 +2394,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await invoke("create_group_from_photos", {
         shootId: currentShoot.id,
         photoIds,
-        groupType: "near_duplicate",
       });
       const groups = await invoke<Group[]>("get_groups_for_shoot", {
         shootId: currentShoot.id,

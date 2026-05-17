@@ -184,7 +184,6 @@ pub struct UndoEntry {
 pub struct GroupData {
     pub id: i64,
     pub shoot_id: i64,
-    pub group_type: String,
     pub members: Vec<GroupMemberData>,
 }
 
@@ -198,8 +197,9 @@ pub struct GroupMemberData {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
-    pub near_dup_threshold: i32,
-    pub related_threshold: i32,
+    /// pHash hamming-distance threshold for grouping similar photos into
+    /// clusters — the single knob the Select "regroup" control exposes.
+    pub group_threshold: i32,
     /// Maximum capture-time gap (seconds) allowed between two photos
     /// for them to form an edge in pHash clustering. 0 disables the
     /// time filter (pHash-only). Stops cross-time pHash collisions
@@ -272,8 +272,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            near_dup_threshold: crate::ingest::clustering::DEFAULT_NEAR_DUP_THRESHOLD as i32,
-            related_threshold: crate::ingest::clustering::DEFAULT_RELATED_THRESHOLD as i32,
+            group_threshold: crate::ingest::clustering::DEFAULT_GROUP_THRESHOLD as i32,
             group_time_window_s: crate::ingest::clustering::DEFAULT_TIME_WINDOW_S as i32,
             select_requires_pick: true,
             route_min_star: 3,
@@ -511,8 +510,7 @@ impl Database {
 
             CREATE TABLE IF NOT EXISTS groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE,
-                group_type TEXT NOT NULL CHECK(group_type IN ('near_duplicate','related'))
+                shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_groups_shoot ON groups(shoot_id);
 
@@ -546,8 +544,7 @@ impl Database {
 
             CREATE TABLE IF NOT EXISTS settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                near_dup_threshold INTEGER NOT NULL DEFAULT 4,
-                related_threshold INTEGER NOT NULL DEFAULT 12,
+                group_threshold INTEGER NOT NULL DEFAULT 16,
                 select_requires_pick INTEGER NOT NULL DEFAULT 1,
                 route_min_star INTEGER NOT NULL DEFAULT 3,
                 library_root TEXT
@@ -784,6 +781,45 @@ impl Database {
                 self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
             }
             self.conn.execute_batch("PRAGMA user_version = 3")?;
+        }
+        if version < 4 {
+            // Single-tier clustering cleanup (PR #79): the two-tier pHash
+            // model collapsed to one threshold. Rename the surviving
+            // threshold column to a name that matches its meaning and drop
+            // the two columns the old model left behind. Each step is
+            // guarded on the old column still existing, so a fresh DB
+            // (created from the current base schema) skips them cleanly.
+            if self.column_exists("settings", "near_dup_threshold")? {
+                self.conn
+                    .execute("ALTER TABLE settings DROP COLUMN near_dup_threshold", [])?;
+            }
+            if self.column_exists("settings", "related_threshold")? {
+                self.conn.execute(
+                    "ALTER TABLE settings RENAME COLUMN related_threshold TO group_threshold",
+                    [],
+                )?;
+            }
+            // `groups.group_type` carries an inline CHECK constraint, so it
+            // can't be removed with DROP COLUMN — rebuild the table. Group
+            // ids are copied verbatim so `group_members.group_id` stays
+            // valid. Same table-rebuild dance as the `photos` rebuild above.
+            if self.column_exists("groups", "group_type")? {
+                self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+                self.conn.execute_batch(
+                    "BEGIN;
+                     CREATE TABLE groups_v4 (
+                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                         shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE
+                     );
+                     INSERT INTO groups_v4 (id, shoot_id) SELECT id, shoot_id FROM groups;
+                     DROP TABLE groups;
+                     ALTER TABLE groups_v4 RENAME TO groups;
+                     CREATE INDEX IF NOT EXISTS idx_groups_shoot ON groups(shoot_id);
+                     COMMIT;",
+                )?;
+                self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            }
+            self.conn.execute_batch("PRAGMA user_version = 4")?;
         }
         Ok(())
     }
@@ -1393,10 +1429,10 @@ impl Database {
 
     // ---- Groups ----
 
-    pub fn create_group(&self, shoot_id: i64, group_type: &str) -> Result<i64> {
+    pub fn create_group(&self, shoot_id: i64) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO groups (shoot_id, group_type) VALUES (?1, ?2)",
-            params![shoot_id, group_type],
+            "INSERT INTO groups (shoot_id) VALUES (?1)",
+            params![shoot_id],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -1412,7 +1448,7 @@ impl Database {
 
     pub fn get_groups_for_shoot(&self, shoot_id: i64) -> Result<Vec<GroupData>> {
         let mut stmt = self.conn.prepare(
-            "SELECT g.id, g.shoot_id, g.group_type, gm.photo_id, gm.is_cover
+            "SELECT g.id, g.shoot_id, gm.photo_id, gm.is_cover
              FROM groups g
              JOIN group_members gm ON gm.group_id = g.id
              WHERE g.shoot_id = ?1
@@ -1426,19 +1462,17 @@ impl Database {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, bool>(4)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, bool>(3)?,
             ))
         })?;
 
         for row in rows {
-            let (gid, sid, gtype, pid, is_cover) = row?;
+            let (gid, sid, pid, is_cover) = row?;
             if current_id != Some(gid) {
                 groups.push(GroupData {
                     id: gid,
                     shoot_id: sid,
-                    group_type: gtype,
                     members: Vec::new(),
                 });
                 current_id = Some(gid);
@@ -1473,7 +1507,6 @@ impl Database {
     pub fn create_group_with_members(
         &mut self,
         shoot_id: i64,
-        group_type: &str,
         photo_ids: &[i64],
     ) -> Result<i64> {
         if photo_ids.len() < 2 {
@@ -1486,8 +1519,8 @@ impl Database {
 
         let tx = self.conn.transaction()?;
         tx.execute(
-            "INSERT INTO groups (shoot_id, group_type) VALUES (?1, ?2)",
-            params![shoot_id, group_type],
+            "INSERT INTO groups (shoot_id) VALUES (?1)",
+            params![shoot_id],
         )?;
         let group_id = tx.last_insert_rowid();
         for (i, &pid) in photo_ids.iter().enumerate() {
@@ -2292,7 +2325,7 @@ impl Database {
     pub fn get_settings(&self) -> Result<Settings> {
         self.conn
             .query_row(
-                "SELECT near_dup_threshold, related_threshold, group_time_window_s,
+                "SELECT group_threshold, group_time_window_s,
                         select_requires_pick, route_min_star, library_root,
                         enable_ai_on_import, hide_soft_threshold, eye_open_confidence,
                         immich_ingest_path,
@@ -2305,37 +2338,44 @@ impl Database {
                  FROM settings WHERE id = 1",
                 [],
                 |row| {
+                    // Columns are read by name, not position, so the mapping
+                    // survives future schema changes (added or reordered
+                    // columns) without a fragile index renumber.
                     Ok(Settings {
-                        near_dup_threshold: row.get(0)?,
-                        related_threshold: row.get(1)?,
-                        group_time_window_s: row.get(2)?,
-                        select_requires_pick: row.get::<_, i32>(3)? != 0,
-                        route_min_star: row.get(4)?,
-                        library_root: row.get(5)?,
-                        enable_ai_on_import: row.get::<_, i32>(6)? != 0,
-                        hide_soft_threshold: row.get(7)?,
-                        eye_open_confidence: row.get(8)?,
-                        immich_ingest_path: row.get(9)?,
-                        curator_default_run_on_import: row.get::<_, i32>(10)? != 0,
-                        curator_model: row.get(11)?,
-                        curator_max_cost_per_shoot_cents: row.get(12)?,
-                        curator_provider: row.get(13)?,
-                        curator_model_anthropic: row.get(14)?,
-                        curator_model_gemini: row.get(15)?,
-                        curator_model_local: row.get(16)?,
-                        curator_local_base_url: row.get(17)?,
+                        group_threshold: row.get("group_threshold")?,
+                        group_time_window_s: row.get("group_time_window_s")?,
+                        select_requires_pick: row.get::<_, i32>("select_requires_pick")? != 0,
+                        route_min_star: row.get("route_min_star")?,
+                        library_root: row.get("library_root")?,
+                        enable_ai_on_import: row.get::<_, i32>("enable_ai_on_import")? != 0,
+                        hide_soft_threshold: row.get("hide_soft_threshold")?,
+                        eye_open_confidence: row.get("eye_open_confidence")?,
+                        immich_ingest_path: row.get("immich_ingest_path")?,
+                        curator_default_run_on_import: row
+                            .get::<_, i32>("curator_default_run_on_import")?
+                            != 0,
+                        curator_model: row.get("curator_model")?,
+                        curator_max_cost_per_shoot_cents: row
+                            .get("curator_max_cost_per_shoot_cents")?,
+                        curator_provider: row.get("curator_provider")?,
+                        curator_model_anthropic: row.get("curator_model_anthropic")?,
+                        curator_model_gemini: row.get("curator_model_gemini")?,
+                        curator_model_local: row.get("curator_model_local")?,
+                        curator_local_base_url: row.get("curator_local_base_url")?,
                         // NULL or unparseable JSON → fall back to the
                         // default layout rather than failing the read.
                         folder_template: row
-                            .get::<_, Option<String>>(18)?
+                            .get::<_, Option<String>>("folder_template")?
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or_default(),
-                        onboarded_triage: row.get::<_, i32>(19)? != 0,
-                        onboarded_select: row.get::<_, i32>(20)? != 0,
-                        onboarded_route: row.get::<_, i32>(21)? != 0,
-                        onboarded_wizard: row.get::<_, i32>(22)? != 0,
-                        curator_triage_on_import: row.get::<_, i32>(23)? != 0,
-                        onboarded_review: row.get::<_, i32>(24)? != 0,
+                        onboarded_triage: row.get::<_, i32>("onboarded_triage")? != 0,
+                        onboarded_select: row.get::<_, i32>("onboarded_select")? != 0,
+                        onboarded_route: row.get::<_, i32>("onboarded_route")? != 0,
+                        onboarded_wizard: row.get::<_, i32>("onboarded_wizard")? != 0,
+                        curator_triage_on_import: row
+                            .get::<_, i32>("curator_triage_on_import")?
+                            != 0,
+                        onboarded_review: row.get::<_, i32>("onboarded_review")? != 0,
                     })
                 },
             )
@@ -2344,7 +2384,7 @@ impl Database {
 
     pub fn update_settings(&self, s: &Settings) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO settings (id, near_dup_threshold, related_threshold, group_time_window_s,
+            "INSERT INTO settings (id, group_threshold, group_time_window_s,
                                    select_requires_pick, route_min_star, library_root,
                                    enable_ai_on_import, hide_soft_threshold, eye_open_confidence,
                                    immich_ingest_path,
@@ -2355,10 +2395,9 @@ impl Database {
                                    onboarded_triage, onboarded_select, onboarded_route,
                                    onboarded_wizard, curator_triage_on_import, onboarded_review)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
              ON CONFLICT(id) DO UPDATE SET
-                near_dup_threshold = excluded.near_dup_threshold,
-                related_threshold = excluded.related_threshold,
+                group_threshold = excluded.group_threshold,
                 group_time_window_s = excluded.group_time_window_s,
                 select_requires_pick = excluded.select_requires_pick,
                 route_min_star = excluded.route_min_star,
@@ -2383,8 +2422,7 @@ impl Database {
                 curator_triage_on_import = excluded.curator_triage_on_import,
                 onboarded_review = excluded.onboarded_review",
             params![
-                s.near_dup_threshold,
-                s.related_threshold,
+                s.group_threshold,
                 s.group_time_window_s,
                 s.select_requires_pick as i32,
                 s.route_min_star,
@@ -3021,7 +3059,9 @@ pub(crate) mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        // Migrations run through the latest version; the v3 photos rebuild
+        // is one step in that chain.
+        assert_eq!(version, 4);
 
         // And the new behaviour works: we can now insert the same hash into a
         // second shoot.
@@ -3033,6 +3073,71 @@ pub(crate) mod tests {
         p.content_hash = [1u8; 32];
         db.insert_photos_batch(shoot_b, &[p])
             .expect("cross-shoot duplicate should succeed under v3");
+    }
+
+    #[test]
+    fn v4_migration_renames_threshold_and_drops_dead_columns() {
+        // Simulate a pre-v4 DB: the old `settings` schema carrying both
+        // near_dup_threshold and related_threshold, and the old `groups`
+        // schema with the group_type CHECK column. Opening it must rename
+        // related_threshold → group_threshold, drop near_dup_threshold, and
+        // rebuild `groups` without group_type — preserving stored values
+        // and group rows.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE shoots (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 slug TEXT NOT NULL,
+                 date TEXT NOT NULL,
+                 source_path TEXT NOT NULL,
+                 dest_path TEXT NOT NULL
+             );
+             CREATE TABLE settings (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 near_dup_threshold INTEGER NOT NULL DEFAULT 4,
+                 related_threshold INTEGER NOT NULL DEFAULT 12,
+                 select_requires_pick INTEGER NOT NULL DEFAULT 1,
+                 route_min_star INTEGER NOT NULL DEFAULT 3,
+                 library_root TEXT
+             );
+             CREATE TABLE groups (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE,
+                 group_type TEXT NOT NULL CHECK(group_type IN ('near_duplicate','related'))
+             );
+             INSERT INTO shoots (slug, date, source_path, dest_path)
+                 VALUES ('legacy', '2026-01-01', '/s', '/d');
+             INSERT INTO settings (id, near_dup_threshold, related_threshold)
+                 VALUES (1, 5, 14);
+             INSERT INTO groups (shoot_id, group_type) VALUES (1, 'related');
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let db = Database::open(&path).expect("open should run the v4 migration");
+
+        // related_threshold renamed → group_threshold, value preserved.
+        assert!(db.column_exists("settings", "group_threshold").unwrap());
+        assert!(!db.column_exists("settings", "related_threshold").unwrap());
+        assert!(!db.column_exists("settings", "near_dup_threshold").unwrap());
+        assert_eq!(db.get_settings().unwrap().group_threshold, 14);
+
+        // groups rebuilt without group_type; the legacy row survived.
+        assert!(!db.column_exists("groups", "group_type").unwrap());
+        let group_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM groups", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(group_count, 1, "legacy group row was lost in the rebuild");
+
+        let version: i32 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
     }
 
     #[test]
@@ -3058,7 +3163,7 @@ pub(crate) mod tests {
             )
             .unwrap();
 
-        let group_id = db.create_group(shoot_id, "near_duplicate").unwrap();
+        let group_id = db.create_group(shoot_id).unwrap();
         db.add_group_member(group_id, ids[0], true).unwrap();
         db.add_group_member(group_id, ids[1], false).unwrap();
 
@@ -3071,6 +3176,35 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_settings_roundtrip() {
+        // A fresh test DB runs the base schema + every migration, so this
+        // also exercises the v4 column rename/drop landing cleanly and the
+        // by-name column reads in get_settings.
+        let (db, _dir) = test_db();
+
+        let defaults = db.get_settings().unwrap();
+        assert_eq!(
+            defaults.group_threshold,
+            crate::ingest::clustering::DEFAULT_GROUP_THRESHOLD as i32,
+        );
+
+        let mut s = defaults.clone();
+        s.group_threshold = 9;
+        s.group_time_window_s = 45;
+        s.route_min_star = 2;
+        s.curator_provider = "gemini".to_string();
+        s.onboarded_review = true;
+        db.update_settings(&s).unwrap();
+
+        let back = db.get_settings().unwrap();
+        assert_eq!(back.group_threshold, 9);
+        assert_eq!(back.group_time_window_s, 45);
+        assert_eq!(back.route_min_star, 2);
+        assert_eq!(back.curator_provider, "gemini");
+        assert!(back.onboarded_review);
     }
 
     /// End-to-end integration: simulates a Select-view pick where the user
@@ -3467,7 +3601,7 @@ pub(crate) mod tests {
                 &[sample_insert(1, "a.nef"), sample_insert(2, "b.nef")],
             )
             .unwrap();
-        let group_id = db.create_group(shoot_id, "related").unwrap();
+        let group_id = db.create_group(shoot_id).unwrap();
 
         db.insert_bracket_decision(
             shoot_id, group_id, 0, 0, ids[0], Some(ids[1]), "L", "user",

@@ -4,8 +4,7 @@ import { setupMockIpc } from "../../test/mockIpc";
 beforeEach(() => {
   useSettingsStore.setState({
     settings: {
-      nearDupThreshold: 4,
-      relatedThreshold: 12,
+      groupThreshold: 12,
       groupTimeWindowS: 60,
       selectRequiresPick: true,
       routeMinStar: 3,
@@ -40,16 +39,14 @@ describe("settingsStore", () => {
   test("loadSettings pulls from IPC", async () => {
     setupMockIpc({
       get_settings: {
-        nearDupThreshold: 2,
-        relatedThreshold: 8,
+        groupThreshold: 8,
       },
     });
 
     await useSettingsStore.getState().loadSettings();
     const s = useSettingsStore.getState();
 
-    expect(s.settings.nearDupThreshold).toBe(2);
-    expect(s.settings.relatedThreshold).toBe(8);
+    expect(s.settings.groupThreshold).toBe(8);
     expect(s.isLoaded).toBe(true);
   });
 
@@ -57,15 +54,15 @@ describe("settingsStore", () => {
     const spy = vi.fn();
     setupMockIpc({}, spy);
 
-    await useSettingsStore.getState().updateSettings({ nearDupThreshold: 6 });
+    await useSettingsStore.getState().updateSettings({ groupThreshold: 20 });
 
     const s = useSettingsStore.getState();
-    expect(s.settings.nearDupThreshold).toBe(6);
-    expect(s.settings.relatedThreshold).toBe(12); // unchanged
+    expect(s.settings.groupThreshold).toBe(20);
+    expect(s.settings.groupTimeWindowS).toBe(60); // unchanged
 
     const call = spy.mock.calls.find((c) => c[0] === "update_settings");
     expect(call).toBeDefined();
-    expect((call![1] as { settings: { nearDupThreshold: number } }).settings.nearDupThreshold).toBe(6);
+    expect((call![1] as { settings: { groupThreshold: number } }).settings.groupThreshold).toBe(20);
   });
 
   test("openDialog / closeDialog flip isOpen", () => {
@@ -96,21 +93,20 @@ describe("settingsStore", () => {
     expect((call![1] as { shootId: number }).shootId).toBe(42);
   });
 
-  test("reclusterShootWith passes explicit thresholds through to IPC", async () => {
+  test("reclusterShootWith passes the explicit threshold through to IPC", async () => {
     const spy = vi.fn();
     setupMockIpc({ recluster_shoot_with: 7 }, spy);
 
     const count = await useSettingsStore
       .getState()
-      .reclusterShootWith(42, 8, 20, 60);
+      .reclusterShootWith(42, 20, 60);
 
     expect(count).toBe(7);
     const call = spy.mock.calls.find((c) => c[0] === "recluster_shoot_with");
     expect(call).toBeDefined();
     expect(call![1]).toEqual({
       shootId: 42,
-      nearDupThreshold: 8,
-      relatedThreshold: 20,
+      threshold: 20,
       timeWindowS: 60,
     });
   });

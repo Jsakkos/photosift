@@ -16,13 +16,8 @@ pub fn update_settings(
     settings: Settings,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
-    if settings.near_dup_threshold < 0 || settings.near_dup_threshold > 64 {
-        return Err("near_dup_threshold must be 0..=64".into());
-    }
-    if settings.related_threshold < settings.near_dup_threshold
-        || settings.related_threshold > 64
-    {
-        return Err("related_threshold must be >= near_dup_threshold and <= 64".into());
+    if !(0..=64).contains(&settings.group_threshold) {
+        return Err("group_threshold must be 0..=64".into());
     }
     if settings.route_min_star < 0 || settings.route_min_star > 5 {
         return Err("route_min_star must be 0..=5".into());
@@ -57,8 +52,7 @@ pub fn recluster_shoot(
     do_recluster(
         &mut app_state,
         shoot_id,
-        settings.near_dup_threshold as u32,
-        settings.related_threshold as u32,
+        settings.group_threshold as u32,
         settings.group_time_window_s.max(0) as u32,
     )
 }
@@ -71,25 +65,15 @@ pub fn recluster_shoot(
 #[tauri::command]
 pub fn recluster_shoot_with(
     shoot_id: i64,
-    near_dup_threshold: i32,
-    related_threshold: i32,
+    threshold: i32,
     time_window_s: i32,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<usize, String> {
-    if !(0..=64).contains(&near_dup_threshold) {
-        return Err("near_dup_threshold must be 0..=64".into());
-    }
-    if related_threshold < near_dup_threshold || related_threshold > 64 {
-        return Err("related_threshold must be >= near_dup_threshold and <= 64".into());
+    if !(0..=64).contains(&threshold) {
+        return Err("threshold must be 0..=64".into());
     }
     let mut app_state = state.lock().map_err(|e| e.to_string())?;
-    do_recluster(
-        &mut app_state,
-        shoot_id,
-        near_dup_threshold as u32,
-        related_threshold as u32,
-        time_window_s.max(0) as u32,
-    )
+    do_recluster(&mut app_state, shoot_id, threshold as u32, time_window_s.max(0) as u32)
 }
 
 /// Shared re-cluster core: snapshot covers, run the clusterer with the
@@ -97,8 +81,7 @@ pub fn recluster_shoot_with(
 fn do_recluster(
     app_state: &mut AppState,
     shoot_id: i64,
-    near_dup_threshold: u32,
-    related_threshold: u32,
+    threshold: u32,
     time_window_s: u32,
 ) -> Result<usize, String> {
     // Snapshot existing covers so we can preserve the user's chosen cover
@@ -117,12 +100,7 @@ fn do_recluster(
         db.phashes_for_shoot(shoot_id).map_err(|e| e.to_string())?
     };
 
-    let results = clustering::cluster_phashes(
-        &phash_data,
-        near_dup_threshold,
-        related_threshold,
-        time_window_s,
-    );
+    let results = clustering::cluster_phashes(&phash_data, threshold, time_window_s);
 
     let db = app_state.db.as_mut().ok_or("Database not open")?;
     db.delete_all_groups_for_shoot(shoot_id)
@@ -130,7 +108,7 @@ fn do_recluster(
 
     for group in &results {
         let group_id = db
-            .create_group(shoot_id, group.group_type)
+            .create_group(shoot_id)
             .map_err(|e| e.to_string())?;
 
         // Preserve prior cover if present in the new group; otherwise first member.
