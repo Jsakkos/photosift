@@ -16,13 +16,8 @@ pub fn update_settings(
     settings: Settings,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
-    if settings.near_dup_threshold < 0 || settings.near_dup_threshold > 64 {
-        return Err("near_dup_threshold must be 0..=64".into());
-    }
-    if settings.related_threshold < settings.near_dup_threshold
-        || settings.related_threshold > 64
-    {
-        return Err("related_threshold must be >= near_dup_threshold and <= 64".into());
+    if !(0..=64).contains(&settings.group_threshold) {
+        return Err("group_threshold must be 0..=64".into());
     }
     if settings.route_min_star < 0 || settings.route_min_star > 5 {
         return Err("route_min_star must be 0..=5".into());
@@ -50,7 +45,45 @@ pub fn recluster_shoot(
     state: State<'_, Mutex<AppState>>,
 ) -> Result<usize, String> {
     let mut app_state = state.lock().map_err(|e| e.to_string())?;
+    let settings = {
+        let db = app_state.db.as_ref().ok_or("Database not open")?;
+        db.get_settings().unwrap_or_default()
+    };
+    do_recluster(
+        &mut app_state,
+        shoot_id,
+        settings.group_threshold as u32,
+        settings.group_time_window_s.max(0) as u32,
+    )
+}
 
+/// Re-cluster a single shoot with explicit thresholds, bypassing the
+/// global `settings` row. Powers the inline regroup control in Select so
+/// the user can retune burst grouping for one shoot — the new grouping
+/// persists in the `groups` table, while the global defaults are left
+/// alone for future imports.
+#[tauri::command]
+pub fn recluster_shoot_with(
+    shoot_id: i64,
+    threshold: i32,
+    time_window_s: i32,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<usize, String> {
+    if !(0..=64).contains(&threshold) {
+        return Err("threshold must be 0..=64".into());
+    }
+    let mut app_state = state.lock().map_err(|e| e.to_string())?;
+    do_recluster(&mut app_state, shoot_id, threshold as u32, time_window_s.max(0) as u32)
+}
+
+/// Shared re-cluster core: snapshot covers, run the clusterer with the
+/// given thresholds, rebuild the shoot's groups. Returns the group count.
+fn do_recluster(
+    app_state: &mut AppState,
+    shoot_id: i64,
+    threshold: u32,
+    time_window_s: u32,
+) -> Result<usize, String> {
     // Snapshot existing covers so we can preserve the user's chosen cover
     // photos when a re-clustered group still contains them.
     let prior_covers: std::collections::HashSet<i64> = {
@@ -62,22 +95,12 @@ pub fn recluster_shoot(
             .collect()
     };
 
-    let settings = {
-        let db = app_state.db.as_ref().ok_or("Database not open")?;
-        db.get_settings().unwrap_or_default()
-    };
-
     let phash_data = {
         let db = app_state.db.as_ref().ok_or("Database not open")?;
         db.phashes_for_shoot(shoot_id).map_err(|e| e.to_string())?
     };
 
-    let results = clustering::cluster_phashes(
-        &phash_data,
-        settings.near_dup_threshold as u32,
-        settings.related_threshold as u32,
-        settings.group_time_window_s.max(0) as u32,
-    );
+    let results = clustering::cluster_phashes(&phash_data, threshold, time_window_s);
 
     let db = app_state.db.as_mut().ok_or("Database not open")?;
     db.delete_all_groups_for_shoot(shoot_id)
@@ -85,7 +108,7 @@ pub fn recluster_shoot(
 
     for group in &results {
         let group_id = db
-            .create_group(shoot_id, group.group_type)
+            .create_group(shoot_id)
             .map_err(|e| e.to_string())?;
 
         // Preserve prior cover if present in the new group; otherwise first member.

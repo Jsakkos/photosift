@@ -15,7 +15,10 @@ import { Kbd } from "./primitives";
 
 interface ViewGuide {
   /// The settings flag that gates this view's modal.
-  flag: keyof Pick<Settings, "onboardedTriage" | "onboardedSelect" | "onboardedRoute">;
+  flag: keyof Pick<
+    Settings,
+    "onboardedTriage" | "onboardedSelect" | "onboardedRoute" | "onboardedReview"
+  >;
   eyebrow: string;
   title: string;
   /// One-sentence "what this view is for".
@@ -32,7 +35,7 @@ const GUIDES: Record<CullView, ViewGuide> = {
     eyebrow: "Pass 1",
     title: "Triage — keep or toss?",
     blurb:
-      "The fast first pass: one keep/toss decision per photo. Near-duplicate bursts collapse to a single thumbnail, so one keystroke can decide the whole burst.",
+      "The fast first pass: one keep/toss decision per photo, in shoot order. If AI triage is on, it has already rejected the clearly-unusable frames — review those any time with the AI-rejects filter.",
     keys: [
       { keys: ["P"], label: "Keep (pick)" },
       { keys: ["X"], label: "Reject" },
@@ -64,6 +67,15 @@ const GUIDES: Record<CullView, ViewGuide> = {
       "Give each pick a destination: into your editor (Capture One / DxO) for work, or straight to publish. Route is mouse-driven — select photos, then pick a destination from the Route dropdown.",
     keys: [],
     done: "Done when every pick has a destination.",
+  },
+  review: {
+    flag: "onboardedReview",
+    eyebrow: "Retrospective",
+    title: "Review — walk back your selections",
+    blurb:
+      "Every tournament you run in Select is recorded here as a bracket — and so is the Curator's ranking of each group. Click a frame to open it, or ⇄ to compare a pair side-by-side.",
+    keys: [],
+    done: "Nothing to finish here — Review is a read-only look back at how you (and the Curator) picked.",
   },
 };
 

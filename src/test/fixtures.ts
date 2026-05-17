@@ -36,7 +36,6 @@ export function makeGroup(
   return {
     id,
     shootId: overrides.shootId ?? 1,
-    groupType: overrides.groupType ?? "near_duplicate",
     members: members.map((m, i) => ({
       photoId: m.photoId,
       isCover: m.isCover ?? i === 0,
@@ -59,14 +58,13 @@ export function makeShoot(overrides: Partial<ShootSummary> = {}): ShootSummary {
 
 export function makeGroupWithImages(
   count: number,
-  overrides?: { flag?: string; groupType?: Group["groupType"] },
+  overrides?: { flag?: string },
 ): { images: ImageEntry[]; group: Group } {
   const images = Array.from({ length: count }, () =>
     makeImage({ flag: overrides?.flag ?? "unreviewed" }),
   );
   const group = makeGroup(
     images.map((img, i) => ({ photoId: img.id, isCover: i === 0 })),
-    { groupType: overrides?.groupType },
   );
   return { images, group };
 }

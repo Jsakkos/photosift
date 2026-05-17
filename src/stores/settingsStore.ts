@@ -35,8 +35,9 @@ export const DEFAULT_FOLDER_TEMPLATE: FolderTemplate = {
 };
 
 export interface Settings {
-  nearDupThreshold: number;
-  relatedThreshold: number;
+  /// pHash hamming-distance threshold for grouping similar photos into
+  /// clusters — the single knob the Select "regroup" control exposes.
+  groupThreshold: number;
   /// Maximum capture-time gap in seconds between two photos for them
   /// to cluster together. 0 disables the filter. Default 60s targets
   /// the "same burst" mental model.
@@ -84,11 +85,16 @@ export interface Settings {
   /// First-run onboarding wizard (#9): true once completed or skipped.
   /// Pre-existing installs are migrated to true so upgrades don't see it.
   onboardedWizard: boolean;
+  /// Curator triage stage: whether the import pipeline runs an LLM
+  /// first-pass that auto-rejects clearly-unusable frames. On by default;
+  /// inert when no curator provider key is configured.
+  curatorTriageOnImport: boolean;
+  /// First-run guidance modal for the Review tab.
+  onboardedReview: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  nearDupThreshold: 4,
-  relatedThreshold: 12,
+  groupThreshold: 16,
   groupTimeWindowS: 60,
   selectRequiresPick: true,
   routeMinStar: 3,
@@ -110,6 +116,8 @@ const DEFAULT_SETTINGS: Settings = {
   onboardedSelect: false,
   onboardedRoute: false,
   onboardedWizard: false,
+  curatorTriageOnImport: true,
+  onboardedReview: false,
 };
 
 interface SettingsState {
@@ -123,6 +131,13 @@ interface SettingsState {
   loadSettings: () => Promise<void>;
   updateSettings: (partial: Partial<Settings>) => Promise<void>;
   reclusterShoot: (shootId: number) => Promise<number>;
+  /// Re-cluster one shoot with an explicit threshold (the inline regroup
+  /// control in Select). Does not touch the global default threshold.
+  reclusterShootWith: (
+    shootId: number,
+    threshold: number,
+    timeWindowS: number,
+  ) => Promise<number>;
   openDialog: () => void;
   closeDialog: () => void;
   openWizardTour: () => void;
@@ -162,6 +177,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   reclusterShoot: async (shootId: number) => {
     return await invoke<number>("recluster_shoot", { shootId });
+  },
+
+  reclusterShootWith: async (
+    shootId: number,
+    threshold: number,
+    timeWindowS: number,
+  ) => {
+    return await invoke<number>("recluster_shoot_with", {
+      shootId,
+      threshold,
+      timeWindowS,
+    });
   },
 
   openDialog: () => set({ isOpen: true }),

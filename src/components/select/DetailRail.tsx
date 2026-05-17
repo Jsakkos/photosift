@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAiStore, sharpnessBadgeScore } from "../../stores/aiStore";
 import { FaceChip } from "../FaceChip";
+import { CuratorChip } from "../CuratorChip";
 import { ExifChip, ScoreBar, Stars } from "../primitives";
 import { verdictFor } from "../../lib/faceVerdict";
 import type { Face, ImageEntry } from "../../types";
@@ -148,6 +149,7 @@ export function DetailRail() {
           </div>
         )}
 
+        <CuratorChip />
       </div>
 
       <div

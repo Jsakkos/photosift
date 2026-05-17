@@ -255,12 +255,15 @@ export function useKeyboardNav() {
           }
           break;
         case ".":
-          // Curator (Claude) accept hotkey. Triage-only. The Rust
-          // command marks user_action='accepted' and returns the
-          // suggested_flag string; the frontend then writes the flag
-          // through the existing setFlag flow so undo, advance, and
-          // local state stay uniform with manual P/X.
-          if (currentView === "triage") {
+          // Curator (Claude) accept hotkey, live in Triage and Select.
+          // It always accepts the selection-stage Curator verdict — the
+          // only AI verdict with an accept action (the triage pass has
+          // none; its rejects auto-apply on import). The Rust command
+          // marks user_action='accepted' and returns the suggested_flag
+          // string; the frontend then writes the flag through the
+          // existing setFlag flow so undo, advance, and local state stay
+          // uniform with manual P/X.
+          if (currentView === "triage" || currentView === "select") {
             e.preventDefault();
             const item = displayItems[currentIndex];
             const pid = item?.image.id;
@@ -273,6 +276,10 @@ export function useKeyboardNav() {
                   .patchCuratorJudgment(pid, { userAction: "accepted" });
                 if (suggested === "pick" || suggested === "reject") {
                   await setFlag(suggested);
+                } else if (currentView === "select") {
+                  // 'keep' = "no opinion." Just advance — Select has no
+                  // unreviewed pool, so step to the next frame instead.
+                  navigateNext();
                 } else {
                   // 'keep' = "no opinion." Just advance.
                   advanceToNextUnreviewed();
@@ -380,19 +387,6 @@ export function useKeyboardNav() {
           break;
         case "?":
           toggleShortcutHints();
-          break;
-        case "Enter":
-          {
-            const focused = displayItems[currentIndex];
-            if (
-              focused?.isGroupCover &&
-              focused.groupId !== undefined &&
-              (currentView === "triage" || currentView === "select")
-            ) {
-              e.preventDefault();
-              setActiveInnerGroup(focused.groupId);
-            }
-          }
           break;
         case "Escape":
           // Esc closes the inner strip if one is open. Doesn't compete

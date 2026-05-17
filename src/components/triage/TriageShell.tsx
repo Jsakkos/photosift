@@ -4,7 +4,6 @@ import { LoupeView } from "../LoupeView";
 import { HeatmapOverlay } from "../HeatmapOverlay";
 import { Kbd } from "../primitives";
 import { AllStrip } from "./AllStrip";
-import { TriageGroupStrip } from "./TriageGroupStrip";
 import { FacesRail } from "./FacesRail";
 
 function HeatmapHost() {
@@ -27,7 +26,9 @@ function TopBar() {
   const toggleTriageAiRejectsFilter = useProjectStore(
     (s) => s.toggleTriageAiRejectsFilter,
   );
-  const hasAnyJudgments = useProjectStore((s) => s.curatorJudgments.size > 0);
+  const hasAnyJudgments = useProjectStore(
+    (s) => s.curatorJudgments.size > 0 || s.triageJudgments.size > 0,
+  );
 
   const image = current?.image;
 
@@ -88,8 +89,8 @@ function TopBar() {
           aria-pressed={triageOnlyAiRejects}
           title={
             triageOnlyAiRejects
-              ? "Showing only photos the AI suggests rejecting. Click to show all unreviewed."
-              : "Filter to photos the AI suggests rejecting."
+              ? "Showing the AI's rejects (auto-applied on import, plus Curator suggestions). Z undoes the triage pass; P/U re-keep individually. Click to show all unreviewed."
+              : "Review what the AI rejected — on-import triage rejects and Curator suggestions."
           }
           className="inline-flex items-center gap-1.5 font-mono text-2xs uppercase tracking-[0.6px] px-1.5 py-[3px] rounded-xs bg-transparent border-0 cursor-pointer"
           style={{
@@ -193,7 +194,6 @@ export function TriageShell() {
   return (
     <div data-testid="triage-shell" className="flex-1 flex overflow-hidden">
       {showAllStrip && <AllStrip />}
-      <TriageGroupStrip />
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar />
         <div className="flex-1 relative overflow-hidden" style={{ background: "var(--color-stage)" }}>

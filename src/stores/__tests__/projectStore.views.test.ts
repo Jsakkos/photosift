@@ -8,8 +8,7 @@ beforeEach(() => {
   resetIds();
   useSettingsStore.setState({
     settings: {
-      nearDupThreshold: 4,
-      relatedThreshold: 12,
+      groupThreshold: 12,
       groupTimeWindowS: 60,
       selectRequiresPick: false,
       routeMinStar: 0,
@@ -31,6 +30,8 @@ beforeEach(() => {
       onboardedSelect: true,
       onboardedRoute: true,
       onboardedWizard: true,
+      curatorTriageOnImport: true,
+      onboardedReview: true,
     },
   });
 });
@@ -173,5 +174,49 @@ describe("setView — view switching and cursor management", () => {
     await useProjectStore.getState().setView("select");
 
     expect(useProjectStore.getState().currentIndex).toBe(0);
+  });
+});
+
+describe("toggleTriageAiRejectsFilter", () => {
+  test("turning the filter on switches to grid view; off restores the loupe", () => {
+    setupMockIpc();
+    useProjectStore.setState({
+      triageOnlyAiRejects: false,
+      viewMode: "sequential",
+      currentView: "triage",
+      images: [],
+      groups: [],
+      displayItems: [],
+    });
+
+    useProjectStore.getState().toggleTriageAiRejectsFilter();
+    expect(useProjectStore.getState().triageOnlyAiRejects).toBe(true);
+    expect(useProjectStore.getState().viewMode).toBe("grid");
+
+    useProjectStore.getState().toggleTriageAiRejectsFilter();
+    expect(useProjectStore.getState().triageOnlyAiRejects).toBe(false);
+    expect(useProjectStore.getState().viewMode).toBe("sequential");
+  });
+});
+
+describe("loadShoot — triage reconciliation", () => {
+  test("applies pending triage rejects before reading the photo list", async () => {
+    const shoot = makeShoot();
+    const calls: { cmd: string; args: unknown }[] = [];
+    setupMockIpc({ get_shoot: shoot }, (cmd, args) =>
+      calls.push({ cmd, args }),
+    );
+
+    await useProjectStore.getState().loadShoot(shoot.id);
+
+    const applyIdx = calls.findIndex((c) => c.cmd === "apply_triage_rejects");
+    const listIdx = calls.findIndex((c) => c.cmd === "get_image_list");
+    expect(applyIdx).toBeGreaterThanOrEqual(0);
+    expect((calls[applyIdx].args as { shootId: number }).shootId).toBe(
+      shoot.id,
+    );
+    // Reconcile must run before the photo list is read so the list
+    // reflects the just-applied reject flags.
+    expect(applyIdx).toBeLessThan(listIdx);
   });
 });

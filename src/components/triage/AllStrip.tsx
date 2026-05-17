@@ -28,8 +28,6 @@ export function AllStrip() {
   const displayItems = useProjectStore((s) => s.displayItems);
   const currentIndex = useProjectStore((s) => s.currentIndex);
   const setViewMode = useProjectStore((s) => s.setViewMode);
-  const setActiveInnerGroup = useProjectStore((s) => s.setActiveInnerGroup);
-  const activeInnerGroupId = useProjectStore((s) => s.activeInnerGroupId);
 
   const listRef = useRef<List>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -45,10 +43,9 @@ export function AllStrip() {
     return () => ro.disconnect();
   }, []);
 
-  // The flat timeline: every burst is one cover, singletons appear as
-  // themselves. Independent of `activeInnerGroupId` so drilling into a
-  // group doesn't collapse the strip to just that group's members —
-  // the inner TriageGroupStrip owns the drilled-in view.
+  // The triage filmstrip: every passing photo as its own cell, in shoot
+  // order. Triage has no group collapsing, so this mirrors `displayItems`
+  // — recomputed here only so it stays correct under the Show-all toggle.
   const flatItems = useMemo<DisplayItem[]>(
     () =>
       computeDisplayItems(
@@ -66,15 +63,10 @@ export function AllStrip() {
 
   const currentImageId = displayItems[currentIndex]?.image.id ?? null;
 
-  // When drilled in, highlight the cover of the active group; otherwise
-  // highlight whichever flat cell currently holds the focused photo.
   const selectedFlatIndex = useMemo(() => {
-    if (activeInnerGroupId !== null) {
-      return flatItems.findIndex((d) => d.groupId === activeInnerGroupId);
-    }
     if (currentImageId === null) return -1;
     return flatItems.findIndex((d) => d.image.id === currentImageId);
-  }, [flatItems, activeInnerGroupId, currentImageId]);
+  }, [flatItems, currentImageId]);
 
   useEffect(() => {
     if (listRef.current && selectedFlatIndex >= 0) {
@@ -84,27 +76,12 @@ export function AllStrip() {
 
   const onCellClick = useCallback(
     (item: DisplayItem) => {
-      if (item.isGroupCover && item.groupId != null) {
-        // Clicking a cover is "switch to this burst" — drill in so the
-        // inner strip fills with its members. No-op if we're already
-        // drilled into this group.
-        if (activeInnerGroupId !== item.groupId) {
-          setActiveInnerGroup(item.groupId);
-        }
-        setViewMode("sequential");
-        return;
-      }
-      // Singleton: close any drill-down first so the clicked photo
-      // actually appears in the resulting displayItems, then land on it.
-      if (activeInnerGroupId !== null) {
-        setActiveInnerGroup(null);
-      }
       const fresh = useProjectStore.getState();
       const idx = fresh.displayItems.findIndex((d) => d.image.id === item.image.id);
       if (idx >= 0) fresh.setCurrentIndex(idx);
       setViewMode("sequential");
     },
-    [activeInnerGroupId, setActiveInnerGroup, setViewMode],
+    [setViewMode],
   );
 
   const Row = useCallback(
@@ -120,7 +97,6 @@ export function AllStrip() {
             fit="cover"
             verdict={verdictFromFlag(image.flag)}
             stars={image.starRating as StarCount}
-            groupMember={item.isGroupCover === true}
             selected={index === selectedFlatIndex}
             dim={image.flag === "reject" ? 0.45 : 1}
             onClick={() => onCellClick(item)}

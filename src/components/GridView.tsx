@@ -7,6 +7,8 @@ import { Badge, VerdictBadge, type Verdict } from "./primitives";
 
 const SIZES = [100, 160, 240] as const;
 const CELL_GAP = 8;
+/// Window for pairing two clicks into a double-click (see `handleClick`).
+const DOUBLE_CLICK_MS = 350;
 
 export function GridView() {
   const {
@@ -17,7 +19,6 @@ export function GridView() {
     currentView,
     createGroupFromPhotos,
     ungroupPhotos,
-    setActiveInnerGroup,
   } = useProjectStore();
   const [colWidth, setColWidth] = useState<(typeof SIZES)[number]>(160);
   const [selection, setSelection] = useState<Set<number>>(new Set());
@@ -26,6 +27,7 @@ export function GridView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<Grid>(null);
   const lastClickIdx = useRef(0);
+  const lastClickTime = useRef(0);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -81,19 +83,8 @@ export function GridView() {
           break;
         case "Enter":
           e.preventDefault();
-          {
-            const focused = displayItems[focusIndex];
-            if (
-              focused?.isGroupCover &&
-              focused.groupId !== undefined &&
-              (currentView === "triage" || currentView === "select")
-            ) {
-              setActiveInnerGroup(focused.groupId);
-            } else {
-              setCurrentIndex(focusIndex);
-              setViewMode("sequential");
-            }
-          }
+          setCurrentIndex(focusIndex);
+          setViewMode("sequential");
           break;
         case "=":
         case "+": {
@@ -137,7 +128,7 @@ export function GridView() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, currentView, setActiveInnerGroup, selection]);
+  }, [colWidth, displayItems, focusIndex, columnCount, setCurrentIndex, setViewMode, selection]);
 
   const handleClick = useCallback(
     (index: number, e: React.MouseEvent) => {
@@ -147,13 +138,31 @@ export function GridView() {
         const newSel = new Set(selection);
         for (let i = start; i <= end; i++) newSel.add(i);
         setSelection(newSel);
-      } else {
-        setSelection(new Set([index]));
-        lastClickIdx.current = index;
+        setFocusIndex(index);
+        return;
       }
+      // Manual double-click detection. The DOM `dblclick` event never
+      // fires on these cells: the first click's state update remounts
+      // the virtualized grid, so the second click lands on a fresh node
+      // and the browser can't pair them. Two `click` events DO fire
+      // reliably — so we pair them ourselves. A second click on the same
+      // cell within the window opens that photo in the loupe.
+      const now = Date.now();
+      if (
+        index === lastClickIdx.current &&
+        now - lastClickTime.current < DOUBLE_CLICK_MS
+      ) {
+        lastClickTime.current = 0;
+        setCurrentIndex(index);
+        setViewMode("sequential");
+        return;
+      }
+      lastClickTime.current = now;
+      lastClickIdx.current = index;
+      setSelection(new Set([index]));
       setFocusIndex(index);
     },
-    [selection],
+    [selection, setCurrentIndex, setViewMode],
   );
 
   const handleBulkAction = useCallback(
@@ -229,12 +238,12 @@ export function GridView() {
         const index = rowIndex * columnCount + columnIndex;
         if (index >= displayItems.length) return null;
         const item = displayItems[index];
-        // An expanded-group member: has a groupId but isn't the cover.
-        // These get a shared background tint so adjacent members read as
-        // belonging to one group; alternating tints keep neighboring
-        // groups distinguishable.
+        // An expanded-group member gets a shared background tint so
+        // adjacent members read as belonging to one group; alternating
+        // tints keep neighboring groups distinguishable. Triage is a
+        // flat per-photo pass — group affiliation is not surfaced there.
         const isGroupMember =
-          item.groupId !== undefined && !item.isGroupCover;
+          currentView === "select" && item.groupId !== undefined;
         const tintClass = isGroupMember
           ? item.groupId! % 2 === 0
             ? "bg-accent/[0.06]"
@@ -252,45 +261,12 @@ export function GridView() {
               isSelected={selection.has(index)}
               showGroupBar={isGroupMember}
               onClick={handleClick}
-              onDoubleClick={() => {
-                // Symmetric toggle: clicking a collapsed group cover
-                // expands it; clicking any expanded-group member
-                // collapses it back. Non-group photos open loupe.
-                const inExpandableView =
-                  currentView === "triage" || currentView === "select";
-                const isExpandedMember =
-                  inExpandableView &&
-                  item.groupId !== undefined &&
-                  !item.isGroupCover;
-                if (
-                  item.isGroupCover &&
-                  item.groupId !== undefined &&
-                  inExpandableView
-                ) {
-                  setActiveInnerGroup(item.groupId);
-                } else if (isExpandedMember && item.groupId !== undefined) {
-                  setActiveInnerGroup(item.groupId);
-                } else {
-                  setCurrentIndex(index);
-                  setViewMode("sequential");
-                }
-              }}
               currentView={currentView}
             />
           </div>
         );
       },
-    [
-      columnCount,
-      displayItems,
-      focusIndex,
-      selection,
-      handleClick,
-      setCurrentIndex,
-      setViewMode,
-      currentView,
-      setActiveInnerGroup,
-    ],
+    [columnCount, displayItems, focusIndex, selection, handleClick, currentView],
   );
 
   return (
@@ -458,7 +434,6 @@ function GridThumb({
   isSelected,
   showGroupBar,
   onClick,
-  onDoubleClick,
   currentView,
 }: {
   item: ReturnType<typeof useProjectStore.getState>["displayItems"][0];
@@ -467,7 +442,6 @@ function GridThumb({
   isSelected: boolean;
   showGroupBar: boolean;
   onClick: (index: number, e: React.MouseEvent) => void;
-  onDoubleClick: () => void;
   currentView: string;
 }) {
   const image = item.image;
@@ -480,9 +454,6 @@ function GridThumb({
     image.flag !== "unreviewed" ? image.flag : null,
     image.destination !== "unrouted" ? image.destination.replace("_", " ") : null,
     image.starRating > 0 ? `${image.starRating} star${image.starRating === 1 ? "" : "s"}` : null,
-    item.isGroupCover && item.groupMemberCount
-      ? `group of ${item.groupMemberCount}`
-      : null,
   ]
     .filter(Boolean)
     .join(", ");
@@ -509,7 +480,6 @@ function GridThumb({
       } ${isRejected ? "opacity-35" : ""}`}
       style={{ outline, outlineOffset }}
       onClick={(e) => onClick(index, e)}
-      onDoubleClick={onDoubleClick}
     >
       <img
         key={image.id}
@@ -561,18 +531,6 @@ function GridThumb({
           }
         >
           {image.destination === "edit" ? "→ C1" : "→ Exp"}
-        </Badge>
-      )}
-      {/* Group stack indicator */}
-      {item.isGroupCover && item.groupMemberCount && (
-        <Badge
-          tone="neutral"
-          variant="glass"
-          className="absolute bottom-1 right-1 font-semibold pointer-events-none"
-          title={`Group cover · ${item.groupMemberCount} photos total\n${item.groupMemberCount - 1} similar photos hidden.\nDouble-click or press Enter to drill in.`}
-          aria-label={`Group cover, ${item.groupMemberCount} photos total`}
-        >
-          +{item.groupMemberCount - 1}
         </Badge>
       )}
       {/* Filename on hover */}

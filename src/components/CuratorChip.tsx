@@ -2,13 +2,16 @@ import { useProjectStore } from "../stores/projectStore";
 import { humanizeCuratorReason } from "../lib/curatorText";
 import { Kbd } from "./primitives";
 
-/// Inline Curator-suggestion panel rendered inside the FacesRail. Reads
-/// the judgment from the project-store map (bulk-loaded at loadShoot,
-/// kept in sync via patchCuratorJudgment after accept/override). When
-/// no judgment exists for the current photo, renders a slim empty-state
-/// hint pointing the user back to the Library (where Curator runs are
-/// kicked off) — this is the "empty state names the right subsystem"
-/// requirement from #17. Press `.` in Triage to accept.
+/// Inline Curator-suggestion panel for the *selection stage* — the
+/// editorial "is this a keeper?" verdict. Rendered in the Select tab's
+/// DetailRail (deliberately not in Triage, where it contradicted the
+/// triage pass; Triage shows `TriageNote` instead). Reads the judgment
+/// from the project-store map (bulk-loaded at loadShoot, kept in sync
+/// via patchCuratorJudgment after accept/override). When no judgment
+/// exists for the current photo, renders a slim empty-state hint
+/// pointing the user back to the Library (where Curator runs are kicked
+/// off) — this is the "empty state names the right subsystem"
+/// requirement from #17. Press `.` to accept.
 export function CuratorChip() {
   const judgment = useProjectStore((s) => {
     const pid = s.displayItems[s.currentIndex]?.image.id;

@@ -65,16 +65,23 @@ Content-based hashing (SHA-256 on file bytes) prevents importing the same file t
 
 ### Perceptual Hash Grouping
 
-Similarity is measured by Hamming distance between 64-bit pHash values. Two tiers:
+Similarity is measured by Hamming distance between 64-bit pHash values.
+Single tier: any two photos within one user-tunable threshold (default 16,
+also gated by a capture-time window) form an edge; groups are the
+transitive closure. Every photo belongs to at most one group.
 
-| Tier | Hamming Distance | Meaning | Cull Behavior |
-|---|---|---|---|
-| Near-duplicate | ≤ 4 | Same shot / burst / bracket | Collapsed by default, show cover only |
-| Related | 5–12 | Same scene, different moment or angle | Loose group with visual separator |
+> **Divergence note (code wins):** earlier drafts of this spec defined two
+> tiers (near-duplicate ≤ 4, related 5–12). The implemented model collapsed
+> to a single tier — grouping only needs to be "good enough" to funnel
+> similar frames into the Select tournament, and one tunable threshold is
+> simpler to reason about and retune per shoot.
 
-Clustering: single-linkage agglomerative clustering. Walk the sorted hash list, merge any pair within threshold. For typical shoot sizes (200–500 images), this runs in milliseconds.
+Clustering: union-find over the photo pairs within threshold. For typical
+shoot sizes (200–500 images), this runs in milliseconds.
 
-Groups are computed at import time and stored in the database. They can be recomputed if similarity thresholds are adjusted.
+Groups are computed at import time and stored in the database. They can be
+recomputed (per shoot) if the similarity threshold is adjusted — the Select
+view's inline "regroup" control does exactly this.
 
 ---
 
@@ -377,7 +384,6 @@ DSLR/2026/2026-06_Greece/
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
 | `shoot_id` | INTEGER FK | References shoots.id |
-| `group_type` | TEXT | `near_duplicate` · `related` |
 
 ### `group_members`
 

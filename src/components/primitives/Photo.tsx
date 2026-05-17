@@ -22,6 +22,10 @@ type PhotoProps = {
   verdict?: Verdict;
   colorLabel?: ColorLabelValue | null;
   groupMember?: boolean;
+  /// Cluster-indicator edge color. When set, the thumbnail gets a colored
+  /// left stripe identifying which group it belongs to (Select filmstrip).
+  /// Takes precedence over the plain `groupMember` accent stripe.
+  groupColor?: string;
   selected?: boolean;
   /// Star rating overlay (bottom-left). 0 / undefined renders nothing.
   stars?: StarCount;
@@ -58,6 +62,7 @@ function PhotoInner({
   verdict = null,
   colorLabel,
   groupMember = false,
+  groupColor,
   selected = false,
   stars = 0,
   destination = null,
@@ -109,8 +114,11 @@ function PhotoInner({
         />
       )}
 
-      {groupMember && (
-        <div className="absolute left-0 top-0 bottom-0 w-[2px]" style={{ background: "var(--color-accent)" }} />
+      {(groupMember || groupColor !== undefined) && (
+        <div
+          className="absolute left-0 top-0 bottom-0 w-[3px]"
+          style={{ background: groupColor ?? "var(--color-accent)" }}
+        />
       )}
 
       <VerdictBadge verdict={verdict} />

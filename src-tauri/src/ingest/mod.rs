@@ -310,8 +310,7 @@ pub fn run_import(
     };
     let groups = clustering::cluster_phashes(
         &phash_rows,
-        settings.near_dup_threshold as u32,
-        settings.related_threshold as u32,
+        settings.group_threshold as u32,
         settings.group_time_window_s.max(0) as u32,
     );
 
@@ -326,7 +325,7 @@ pub fn run_import(
         }
         for group in &groups {
             let group_id = db_guard
-                .create_group(shoot_id, group.group_type)
+                .create_group(shoot_id)
                 .map_err(|e| e.to_string())?;
 
             for (i, &idx) in group.member_indices.iter().enumerate() {

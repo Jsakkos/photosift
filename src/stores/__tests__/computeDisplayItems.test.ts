@@ -21,7 +21,7 @@ describe("computeDisplayItems", () => {
       expect(items[1].image.id).toBe(3);
     });
 
-    test("collapses group to cover with correct member count", () => {
+    test("emits every group member individually — no cover collapsing", () => {
       const img1 = makeImage({ id: 1 });
       const img2 = makeImage({ id: 2 });
       const img3 = makeImage({ id: 3 });
@@ -33,11 +33,14 @@ describe("computeDisplayItems", () => {
 
       const items = computeDisplayItems([img1, img2, img3], "triage", [group]);
 
-      expect(items).toHaveLength(1);
-      expect(items[0].image.id).toBe(1);
-      expect(items[0].isGroupCover).toBe(true);
-      expect(items[0].groupMemberCount).toBe(3);
-      expect(items[0].groupId).toBe(group.id);
+      // Triage reviews every photo individually — N members = N items.
+      expect(items).toHaveLength(3);
+      expect(items.map((i) => i.image.id)).toEqual([1, 2, 3]);
+      // groupId is still attached (Shift+P "keep group" relies on it),
+      // but there is no cover / member-count metadata in triage.
+      expect(items.every((i) => i.groupId === group.id)).toBe(true);
+      expect(items.every((i) => i.isGroupCover === undefined)).toBe(true);
+      expect(items.every((i) => i.groupMemberCount === undefined)).toBe(true);
     });
 
     test("excludes group when all members are reviewed", () => {
@@ -53,7 +56,7 @@ describe("computeDisplayItems", () => {
       expect(items).toHaveLength(0);
     });
 
-    test("shows ungrouped alongside grouped items", () => {
+    test("shows ungrouped alongside grouped items, all flat", () => {
       const img1 = makeImage({ id: 1 });
       const img2 = makeImage({ id: 2 });
       const img3 = makeImage({ id: 3 });
@@ -64,76 +67,13 @@ describe("computeDisplayItems", () => {
 
       const items = computeDisplayItems([img1, img2, img3], "triage", [group]);
 
-      expect(items).toHaveLength(2);
-      expect(items[0].isGroupCover).toBe(true);
-      expect(items[1].image.id).toBe(3);
-      expect(items[1].isGroupCover).toBeUndefined();
+      expect(items).toHaveLength(3);
+      expect(items.map((i) => i.image.id)).toEqual([1, 2, 3]);
+      expect(items[0].groupId).toBe(group.id);
+      expect(items[2].groupId).toBeUndefined();
     });
 
-    test("uses isCover member as the displayed cover image", () => {
-      const img1 = makeImage({ id: 1 });
-      const img2 = makeImage({ id: 2 });
-      const group = makeGroup([
-        { photoId: 1, isCover: false },
-        { photoId: 2, isCover: true },
-      ]);
-
-      const items = computeDisplayItems([img1, img2], "triage", [group]);
-
-      expect(items).toHaveLength(1);
-      expect(items[0].image.id).toBe(2);
-    });
-
-    test("groupMemberCount reflects total members, not just unreviewed", () => {
-      const img1 = makeImage({ id: 1, flag: "unreviewed" });
-      const img2 = makeImage({ id: 2, flag: "pick" });
-      const img3 = makeImage({ id: 3, flag: "unreviewed" });
-      const group = makeGroup([
-        { photoId: 1, isCover: true },
-        { photoId: 2 },
-        { photoId: 3 },
-      ]);
-
-      const items = computeDisplayItems([img1, img2, img3], "triage", [group]);
-
-      expect(items).toHaveLength(1);
-      expect(items[0].groupMemberCount).toBe(3);
-    });
-
-    test("expandedGroupIds drills into one group inline while others stay collapsed", () => {
-      const img1 = makeImage({ id: 1, flag: "unreviewed" });
-      const img2 = makeImage({ id: 2, flag: "unreviewed" });
-      const img3 = makeImage({ id: 3, flag: "unreviewed" });
-      const img4 = makeImage({ id: 4, flag: "unreviewed" });
-      const img5 = makeImage({ id: 5, flag: "unreviewed" });
-      const groupA = makeGroup([
-        { photoId: 1, isCover: true },
-        { photoId: 2 },
-      ]);
-      const groupB = makeGroup([
-        { photoId: 3, isCover: true },
-        { photoId: 4 },
-        { photoId: 5 },
-      ]);
-
-      const items = computeDisplayItems(
-        [img1, img2, img3, img4, img5],
-        "triage",
-        [groupA, groupB],
-        new Set([groupB.id]),
-      );
-
-      // groupA stays collapsed (1 cover) + groupB expanded (3 members) = 4 items
-      expect(items).toHaveLength(4);
-      expect(items[0].isGroupCover).toBe(true);
-      expect(items[0].groupId).toBe(groupA.id);
-      // Expanded members carry groupId but no isGroupCover / count
-      expect(items[1].groupId).toBe(groupB.id);
-      expect(items[1].isGroupCover).toBeUndefined();
-      expect(items.slice(1).map((i) => i.image.id)).toEqual([3, 4, 5]);
-    });
-
-    test("expandedGroupIds skips non-unreviewed members within an expanded group", () => {
+    test("skips non-unreviewed members of a group, keeps the rest flat", () => {
       const img1 = makeImage({ id: 1, flag: "unreviewed" });
       const img2 = makeImage({ id: 2, flag: "reject" });
       const img3 = makeImage({ id: 3, flag: "unreviewed" });
@@ -143,12 +83,7 @@ describe("computeDisplayItems", () => {
         { photoId: 3 },
       ]);
 
-      const items = computeDisplayItems(
-        [img1, img2, img3],
-        "triage",
-        [group],
-        new Set([group.id]),
-      );
+      const items = computeDisplayItems([img1, img2, img3], "triage", [group]);
 
       expect(items).toHaveLength(2);
       expect(items.map((i) => i.image.id)).toEqual([1, 3]);

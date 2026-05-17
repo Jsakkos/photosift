@@ -113,11 +113,9 @@ describe("setFlag", () => {
     expect(flagged.find((i) => i.id === 3)!.flag).toBe("unreviewed");
   });
 
-  test("triage view: P on group cover flags only the cover, not siblings", async () => {
-    // Groups in Triage are a visual aid, not a bulk-decision shortcut.
-    // Auto-drill normally keeps the cursor off the cover, but if the
-    // cursor does land on one (e.g. via programmatic setState here),
-    // the flag must stay scoped to that single photo.
+  test("triage view: P on a grouped photo flags only that photo, not siblings", async () => {
+    // Triage shows every photo flat — group membership is not a
+    // bulk-decision shortcut. P must stay scoped to the focused photo.
     const spy = vi.fn();
     setupMockIpc({}, spy);
 
@@ -134,8 +132,8 @@ describe("setFlag", () => {
     const groups = [group];
     const displayItems = computeDisplayItems(images, "triage", groups);
 
-    expect(displayItems).toHaveLength(1);
-    expect(displayItems[0].isGroupCover).toBe(true);
+    expect(displayItems).toHaveLength(3);
+    expect(displayItems[0].image.id).toBe(1);
 
     useProjectStore.setState({
       images,
@@ -315,10 +313,9 @@ describe("setFlag", () => {
     expect(useProjectStore.getState().redoStack).toHaveLength(0);
   });
 
-  test("autoDrillIfOnCover: Triage cover triggers drill-down", () => {
-    // Simulates landing on a group cover in Triage (e.g. after loadShoot).
-    // The helper should flip activeInnerGroupId to the cover's groupId so
-    // the user sees every group member and decides each frame individually.
+  test("autoDrillIfOnCover: no-op in flat triage — groups are not collapsed", () => {
+    // Triage shows every photo individually; there are no group covers
+    // to drill into, so the helper leaves activeInnerGroupId untouched.
     const img1 = makeImage({ id: 1, flag: "unreviewed" });
     const img2 = makeImage({ id: 2, flag: "unreviewed" });
     const group = makeGroup([
@@ -329,8 +326,8 @@ describe("setFlag", () => {
     const groups = [group];
     const displayItems = computeDisplayItems(images, "triage", groups);
 
-    expect(displayItems).toHaveLength(1);
-    expect(displayItems[0].isGroupCover).toBe(true);
+    // Flat: one item per member.
+    expect(displayItems).toHaveLength(2);
 
     useProjectStore.setState({
       images,
@@ -343,9 +340,7 @@ describe("setFlag", () => {
 
     useProjectStore.getState().autoDrillIfOnCover();
 
-    const state = useProjectStore.getState();
-    expect(state.activeInnerGroupId).toBe(group.id);
-    expect(state.displayItems.every((d) => d.groupId === group.id)).toBe(true);
+    expect(useProjectStore.getState().activeInnerGroupId).toBeNull();
   });
 
   test("autoDrillIfOnCover: no-op on ungrouped photo", () => {
@@ -474,15 +469,13 @@ describe("setFlag", () => {
     expect(useProjectStore.getState().currentView).toBe("triage");
   });
 
-  test("triage drill-down auto-exits when the last member is flagged", async () => {
+  test("flagging the last unreviewed member of a group leaves the rest flat", async () => {
     setupMockIpc({});
 
-    // Two groups: user drills into groupA and picks its last unreviewed
-    // frame. groupB still has unreviewed members. The first fix (auto-
-    // exit) made sure the outer list came back instead of a false
-    // "Triage complete." This test now also guards the follow-up: the
-    // outer advance lands on groupB's cover (where groupA used to sit)
-    // and auto-drills into it so the user keeps going zero-click.
+    // a1/a2 already reviewed, a3 is groupA's last unreviewed frame;
+    // groupB's two members are still unreviewed. Picking a3 drops it
+    // from the flat triage list, leaving b1 + b2 — no drill, no
+    // false "Triage complete".
     const a1 = makeImage({ id: 1, flag: "pick" });
     const a2 = makeImage({ id: 2, flag: "reject" });
     const a3 = makeImage({ id: 3, flag: "unreviewed" });
@@ -501,14 +494,11 @@ describe("setFlag", () => {
     const images = [a1, a2, a3, b1, b2];
     const groups = [groupA, groupB];
 
-    // Emulate "drilled into groupA, focused on its last unreviewed
-    // frame id=3." Setup displayItems as the drill-down list of one
-    // photo so setFlag targets it.
     useProjectStore.setState({
       images,
       groups,
-      displayItems: [{ imageIndex: 2, image: a3, groupId: groupA.id }],
-      activeInnerGroupId: groupA.id,
+      displayItems: computeDisplayItems(images, "triage", groups),
+      activeInnerGroupId: null,
       currentView: "triage",
       currentIndex: 0,
       autoAdvance: false,
@@ -517,16 +507,13 @@ describe("setFlag", () => {
       showReviewed: false,
     });
 
+    // Before: a3, b1, b2 unreviewed → 3 flat items.
+    expect(useProjectStore.getState().displayItems).toHaveLength(3);
+
     await useProjectStore.getState().setFlag("pick");
 
     const state = useProjectStore.getState();
-    // Auto-drilled into groupB — its cover sat where groupA's used to
-    // in the outer list, and the advance-then-drill handoff picks it up.
-    expect(state.activeInnerGroupId).toBe(groupB.id);
-    // Inner strip for groupB is now the live displayItems.
-    expect(state.displayItems.length).toBe(2);
-    expect(state.displayItems.every((d) => d.groupId === groupB.id)).toBe(true);
-    // Focused on the top frame of the new group, not stale state.
-    expect(state.currentIndex).toBe(0);
+    // a3 picked → drops out; b1 + b2 remain, still flat.
+    expect(state.displayItems.map((d) => d.image.id)).toEqual([4, 5]);
   });
 });

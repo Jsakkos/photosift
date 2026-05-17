@@ -1,7 +1,7 @@
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach, vi } from "vitest";
 import { useProjectStore, computeDisplayItems } from "../projectStore";
 import { setupMockIpc } from "../../test/mockIpc";
-import { makeImage, makeGroup, resetIds } from "../../test/fixtures";
+import { makeImage, makeGroup, makeShoot, resetIds } from "../../test/fixtures";
 
 beforeEach(() => {
   resetIds();
@@ -255,5 +255,53 @@ describe("enterBracket — Wave 1 filter gates (#22 + #16)", () => {
     useProjectStore.getState().enterBracket();
 
     expect(useProjectStore.getState().selectBracket).toBeNull();
+  });
+});
+
+describe("bracketDecision — Review-tab persistence", () => {
+  test("persists each decision via record_bracket_decision", async () => {
+    const spy = vi.fn();
+    setupMockIpc({}, spy);
+    const img1 = makeImage({ id: 1, flag: "pick", starRating: 1, qualityScore: 90 });
+    const img2 = makeImage({ id: 2, flag: "pick", starRating: 1, qualityScore: 80 });
+    const group = makeGroup([{ photoId: 1, isCover: true }, { photoId: 2 }]);
+    seedSelectWithGroup([img1, img2], group);
+    useProjectStore.setState({ currentShoot: makeShoot({ id: 7 }) });
+    useProjectStore.getState().enterBracket();
+
+    await useProjectStore.getState().bracketDecision("L");
+
+    const call = spy.mock.calls.find((c) => c[0] === "record_bracket_decision");
+    expect(call).toBeDefined();
+    const args = call![1] as {
+      shootId: number;
+      groupId: number;
+      decision: string;
+      leftPhotoId: number;
+      rightPhotoId: number | null;
+    };
+    expect(args.shootId).toBe(7);
+    expect(args.groupId).toBe(group.id);
+    expect(args.decision).toBe("L");
+    expect(args.leftPhotoId).toBe(1);
+    expect(args.rightPhotoId).toBe(2);
+  });
+
+  test("undo of a tournament pick deletes its persisted bracket row", async () => {
+    const spy = vi.fn();
+    setupMockIpc({}, spy);
+    const img1 = makeImage({ id: 1, flag: "pick", starRating: 1, qualityScore: 90 });
+    const img2 = makeImage({ id: 2, flag: "pick", starRating: 1, qualityScore: 80 });
+    const group = makeGroup([{ photoId: 1, isCover: true }, { photoId: 2 }]);
+    seedSelectWithGroup([img1, img2], group);
+    useProjectStore.setState({ currentShoot: makeShoot({ id: 7 }) });
+    useProjectStore.getState().enterBracket();
+    await useProjectStore.getState().bracketDecision("L");
+
+    await useProjectStore.getState().undo();
+
+    expect(
+      spy.mock.calls.find((c) => c[0] === "delete_bracket_decision"),
+    ).toBeDefined();
   });
 });

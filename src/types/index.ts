@@ -70,7 +70,10 @@ export interface ShootSummary {
   cameraModel?: string | null;
 }
 
-export type CullView = "triage" | "select" | "route";
+/// The four in-shoot views. `review` is a retrospective tab — it shows
+/// tournament-bracket history rather than a cull queue — but it shares
+/// the `currentView` / tab plumbing with the three cull passes.
+export type CullView = "triage" | "select" | "route" | "review";
 export type ViewMode = "sequential" | "grid";
 
 export interface DisplayItem {
@@ -90,7 +93,6 @@ export interface GroupMemberInfo {
 export interface Group {
   id: number;
   shootId: number;
-  groupType: "near_duplicate" | "related";
   members: GroupMemberInfo[];
 }
 
@@ -314,4 +316,47 @@ export interface CuratorFailedEvent {
 }
 export interface CuratorCompletedEvent {
   shootId: number;
+}
+
+// ---- Curator triage stage (on-import first pass) ----
+
+/// One triage-stage verdict for one photo. Mirrors a `triage_judgments`
+/// row. The triage stage only ever emits `reject` or `keep`; `applied`
+/// records whether the reject flag was actually written.
+export interface TriageJudgment {
+  photoId: number;
+  shootId: number;
+  suggestedFlag: "reject" | "keep";
+  reason: string;
+  applied: boolean;
+  judgedAt: string;
+  model: string;
+  promptVersion: number;
+}
+
+/// Emitted once the triage stage finishes a shoot. `rejectPhotoIds` are
+/// the photos the frontend should fold into a single batch undo entry.
+export interface CuratorTriageDoneEvent {
+  shootId: number;
+  rejectPhotoIds: number[];
+}
+
+// ---- Tournament bracket history ----
+
+export type BracketDecisionValue = "L" | "R" | "both" | "bye";
+export type BracketDecisionSource = "user" | "curator";
+
+/// One persisted tournament-bracket decision. Mirrors a
+/// `bracket_decisions` row. `rightPhotoId` is null for a bye.
+export interface BracketDecision {
+  id: number;
+  shootId: number;
+  groupId: number;
+  roundIndex: number;
+  pairIndex: number;
+  leftPhotoId: number;
+  rightPhotoId: number | null;
+  decision: BracketDecisionValue;
+  decidedAt: string;
+  source: BracketDecisionSource;
 }

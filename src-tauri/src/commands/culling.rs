@@ -174,17 +174,12 @@ pub fn set_group_cover(
 pub fn create_group_from_photos(
     shoot_id: i64,
     photo_ids: Vec<i64>,
-    group_type: Option<String>,
     state: State<'_, Mutex<AppState>>,
 ) -> Result<i64, String> {
-    let gt = group_type.unwrap_or_else(|| "near_duplicate".into());
-    if gt != "near_duplicate" && gt != "related" {
-        return Err(format!("Invalid group_type: {gt}"));
-    }
     let mut app_state = state.lock().map_err(|e| e.to_string())?;
     let db = app_state.db.as_mut().ok_or("Database not open")?;
 
-    db.create_group_with_members(shoot_id, &gt, &photo_ids)
+    db.create_group_with_members(shoot_id, &photo_ids)
         .map_err(|e| e.to_string())
 }
 
@@ -197,5 +192,69 @@ pub fn ungroup_photos(
     let db = app_state.db.as_mut().ok_or("Database not open")?;
 
     db.remove_photos_from_groups(&photo_ids)
+        .map_err(|e| e.to_string())
+}
+
+// ---- Tournament bracket history (Review tab) ----
+
+const VALID_BRACKET_DECISIONS: &[&str] = &["L", "R", "both", "bye"];
+
+/// All persisted bracket decisions for a shoot — both the user's own
+/// tournament picks and the Curator-derived ones.
+#[tauri::command]
+pub fn get_bracket_decisions_for_shoot(
+    shoot_id: i64,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<crate::db::schema::BracketDecisionRow>, String> {
+    let app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_ref().ok_or("Database not open")?;
+    db.bracket_decisions_for_shoot(shoot_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Persist one user tournament decision. Fire-and-forget from the Select
+/// bracket — keyed on `(group, round, pair)` so a redo overwrites cleanly.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn record_bracket_decision(
+    shoot_id: i64,
+    group_id: i64,
+    round_index: i32,
+    pair_index: i32,
+    left_photo_id: i64,
+    right_photo_id: Option<i64>,
+    decision: String,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    if !VALID_BRACKET_DECISIONS.contains(&decision.as_str()) {
+        return Err(format!("Invalid bracket decision: {decision}"));
+    }
+    let app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_ref().ok_or("Database not open")?;
+    db.insert_bracket_decision(
+        shoot_id,
+        group_id,
+        round_index,
+        pair_index,
+        left_photo_id,
+        right_photo_id,
+        &decision,
+        "user",
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Delete one user bracket decision — called when a tournament pick is
+/// undone with Z so the Review tab doesn't show a stale choice.
+#[tauri::command]
+pub fn delete_bracket_decision(
+    group_id: i64,
+    round_index: i32,
+    pair_index: i32,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let app_state = state.lock().map_err(|e| e.to_string())?;
+    let db = app_state.db.as_ref().ok_or("Database not open")?;
+    db.delete_bracket_decision(group_id, round_index, pair_index, "user")
         .map_err(|e| e.to_string())
 }

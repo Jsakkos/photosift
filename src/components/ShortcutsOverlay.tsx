@@ -19,8 +19,7 @@ const SECTIONS: Section[] = [
       { keys: ["End"], label: "Jump to last" },
       { keys: ["Space"], label: "Advance to next unreviewed" },
       { keys: ["G"], label: "Toggle grid view" },
-      { keys: ["Enter"], label: "Drill into group (from cover)" },
-      { keys: ["Esc"], label: "Exit drilled group" },
+      { keys: ["Esc"], label: "Exit drilled group (Select)" },
     ],
   },
   {

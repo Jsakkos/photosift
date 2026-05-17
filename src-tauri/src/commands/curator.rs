@@ -381,6 +381,61 @@ pub fn record_curator_override(
         .map_err(|e| e.to_string())
 }
 
+// ---- Triage stage ----
+
+/// Bulk-load every triage-stage judgment for a shoot. The frontend reads
+/// this at `loadShoot` so the Triage "AI rejects" filter has a local map.
+#[tauri::command]
+pub fn get_triage_judgments_for_shoot(
+    shoot_id: i64,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<crate::db::schema::TriageJudgmentRow>, String> {
+    let s = state.lock().map_err(|e| e.to_string())?;
+    let db = s.db.as_ref().ok_or("db not open")?;
+    db.triage_judgments_for_shoot(shoot_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Apply pending triage-stage rejects: write `flag = 'reject'` for every
+/// photo the triage stage flagged that the user hasn't already triaged by
+/// hand. Idempotent — each judgment is marked `applied` once acted on, so
+/// repeated calls (one per `curator:triage_done` event) only ever touch
+/// new rows. Returns the photo IDs actually flagged so the frontend can
+/// fold them into one batch undo entry.
+#[tauri::command]
+pub fn apply_triage_rejects(
+    shoot_id: i64,
+    state: State<'_, Mutex<AppState>>,
+) -> Result<Vec<i64>, String> {
+    let s = state.lock().map_err(|e| e.to_string())?;
+    let db = s.db.as_ref().ok_or("db not open")?;
+    let pending = db
+        .pending_triage_rejects(shoot_id)
+        .map_err(|e| e.to_string())?;
+    let mut flagged = Vec::new();
+    for pid in pending {
+        // Only auto-reject photos still unreviewed — never overwrite a
+        // decision the user already made by hand.
+        if let Ok(photo) = db.get_photo_by_id(pid) {
+            if photo.flag == "unreviewed" {
+                db.set_flag(pid, "reject").map_err(|e| e.to_string())?;
+                let _ = db.append_undo(
+                    shoot_id,
+                    &s.session_id,
+                    pid,
+                    "flag",
+                    "unreviewed",
+                    "reject",
+                );
+                flagged.push(pid);
+            }
+        }
+        db.mark_triage_judgment_applied(pid)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(flagged)
+}
+
 // ---- Internal helpers ----
 
 fn read_settings(state: &State<'_, Mutex<AppState>>) -> Result<Settings, String> {
@@ -441,7 +496,9 @@ fn build_provider_from_settings(
 }
 
 /// Lazy-spawn the curator worker the first time it's needed. Idempotent.
-fn ensure_worker_spawned(
+/// `pub(crate)` so the import pipeline can spawn the shared worker for
+/// the on-import triage stage.
+pub(crate) fn ensure_worker_spawned(
     app: &AppHandle,
     state: &State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
