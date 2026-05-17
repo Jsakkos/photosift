@@ -7,7 +7,14 @@ use tauri::State;
 #[tauri::command]
 pub fn get_settings(state: State<'_, Mutex<AppState>>) -> Result<Settings, String> {
     let app_state = state.lock().map_err(|e| e.to_string())?;
-    let db = app_state.db.as_ref().ok_or("Database not open")?;
+    // Surface the real open failure (e.g. a migration error) rather than a
+    // generic message — the frontend renders it on a fatal-error screen.
+    let db = app_state.db.as_ref().ok_or_else(|| {
+        app_state
+            .db_open_error
+            .clone()
+            .unwrap_or_else(|| "Database not open".to_string())
+    })?;
     db.get_settings().map_err(|e| e.to_string())
 }
 

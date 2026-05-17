@@ -123,6 +123,11 @@ const DEFAULT_SETTINGS: Settings = {
 interface SettingsState {
   settings: Settings;
   isLoaded: boolean;
+  /// Non-null when `get_settings` failed — carries the backend error (e.g. a
+  /// DB migration failure). The app renders a fatal-error screen instead of
+  /// falling back to default settings, which would soft-lock the user on the
+  /// onboarding wizard.
+  loadError: string | null;
   isOpen: boolean;
   /// "Take the tour" re-opened the onboarding wizard at its three-pass
   /// step. Ephemeral (not persisted) — distinct from the first-run case,
@@ -147,16 +152,19 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   isLoaded: false,
+  loadError: null,
   isOpen: false,
   wizardReplay: false,
 
   loadSettings: async () => {
     try {
       const s = await invoke<Settings>("get_settings");
-      set({ settings: s, isLoaded: true });
+      set({ settings: s, isLoaded: true, loadError: null });
     } catch (e) {
+      // Don't fall back to defaults — that strands the user on the
+      // onboarding wizard. Surface the error so App renders DbErrorScreen.
       console.error("Failed to load settings:", e);
-      set({ settings: DEFAULT_SETTINGS, isLoaded: true });
+      set({ loadError: String(e), isLoaded: true });
     }
   },
 

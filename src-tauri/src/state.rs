@@ -10,6 +10,10 @@ use std::sync::Arc;
 
 pub struct AppState {
     pub db: Option<Database>,
+    /// Why `db` is `None`, when the global DB failed to open (e.g. a
+    /// migration error). Surfaced to the UI so a failed open shows a clear
+    /// error screen instead of silently falling back to default settings.
+    pub db_open_error: Option<String>,
     pub cache: ImageCache,
     pub prefetch: PrefetchManager,
     pub xmp_queue: XmpWriteQueue,
@@ -56,19 +60,20 @@ impl AppState {
         let xmp_queue = XmpWriteQueue::new();
         xmp_queue.spawn_flusher();
 
-        let db = match Database::open_global() {
+        let (db, db_open_error) = match Database::open_global() {
             Ok(db) => {
                 log::info!("Opened global DB at {:?}", schema::global_db_path());
-                Some(db)
+                (Some(db), None)
             }
             Err(e) => {
                 log::error!("Failed to open global DB: {}", e);
-                None
+                (None, Some(e.to_string()))
             }
         };
 
         Self {
             db,
+            db_open_error,
             cache,
             prefetch,
             xmp_queue,
