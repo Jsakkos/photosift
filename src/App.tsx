@@ -8,6 +8,7 @@ import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { BenchmarkPage } from "./pages/BenchmarkPage";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { OnboardingWizard } from "./components/OnboardingWizard";
+import { DbErrorScreen } from "./components/DbErrorScreen";
 import { Toast } from "./components/Toast";
 import { DriveDetectedToast } from "./components/DriveDetectedToast";
 import { useSettingsStore } from "./stores/settingsStore";
@@ -61,6 +62,7 @@ function useAiListener() {
 function App() {
   const loadSettings = useSettingsStore((s) => s.loadSettings);
   const isLoaded = useSettingsStore((s) => s.isLoaded);
+  const loadError = useSettingsStore((s) => s.loadError);
   const onboardedWizard = useSettingsStore((s) => s.settings.onboardedWizard);
   const wizardReplay = useSettingsStore((s) => s.wizardReplay);
   const closeWizardTour = useSettingsStore((s) => s.closeWizardTour);
@@ -69,6 +71,12 @@ function App() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
+
+  // The library database failed to open (typically a migration error).
+  // Show the real cause rather than the app shell + onboarding wizard.
+  if (loadError) {
+    return <DbErrorScreen error={loadError} />;
+  }
 
   // First-run: show until `onboardedWizard` is written. Re-runs: while
   // `wizardReplay` is set (cleared on close).

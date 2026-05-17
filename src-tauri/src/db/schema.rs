@@ -984,6 +984,13 @@ impl Database {
             return Ok(());
         }
 
+        // The table-rebuild dance re-validates every foreign key on the
+        // INSERT into faces_new; toggle foreign_keys OFF around it exactly as
+        // the v3/v4 rebuilds do (https://sqlite.org/lang_altertable.html).
+        // Without this, a DB carrying orphan faces rows — left behind by a
+        // photo delete that ran while foreign_keys was off — fails the whole
+        // migration, which aborts DB open entirely.
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
         self.conn.execute_batch(
             "BEGIN;
             CREATE TABLE faces_new (
@@ -1018,12 +1025,13 @@ impl Database {
                 NULL, NULL,
                 left_eye_sharpness, right_eye_sharpness,
                 detection_confidence, NULL, species
-            FROM faces;
+            FROM faces WHERE photo_id IN (SELECT id FROM photos);
             DROP TABLE faces;
             ALTER TABLE faces_new RENAME TO faces;
             CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
             COMMIT;",
         )?;
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         Ok(())
     }
 
@@ -3138,6 +3146,108 @@ pub(crate) mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, 4);
+    }
+
+    #[test]
+    fn faces_migration_survives_orphan_rows() {
+        // A pre-#78 DB carries the old faces schema (NOT NULL eye columns)
+        // and may hold orphan faces rows — a face whose photo was deleted
+        // while foreign_keys was off. migrate_faces_eye_open_nullable rebuilds
+        // the table; under foreign_keys = ON (how the app opens the
+        // connection) the rebuild's INSERT must not trip on those orphans,
+        // and must drop them. Regression test for the release-build DB-open
+        // failure that soft-locked the app on the onboarding wizard.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            // foreign_keys is on by default in rusqlite — turn it off so the
+            // orphan face insert below (a deliberately dangling photo_id) is
+            // allowed, reproducing the corrupt-but-real DB shape.
+            "PRAGMA foreign_keys = OFF;
+             CREATE TABLE shoots (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 slug TEXT NOT NULL,
+                 date TEXT NOT NULL,
+                 source_path TEXT NOT NULL,
+                 dest_path TEXT NOT NULL
+             );
+             CREATE TABLE photos (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 shoot_id INTEGER NOT NULL REFERENCES shoots(id) ON DELETE CASCADE,
+                 flag TEXT NOT NULL DEFAULT 'unreviewed'
+             );
+             CREATE TABLE faces (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+                 bbox_x REAL NOT NULL, bbox_y REAL NOT NULL,
+                 bbox_w REAL NOT NULL, bbox_h REAL NOT NULL,
+                 left_eye_x REAL NOT NULL, left_eye_y REAL NOT NULL,
+                 right_eye_x REAL NOT NULL, right_eye_y REAL NOT NULL,
+                 left_eye_open INTEGER NOT NULL, right_eye_open INTEGER NOT NULL,
+                 left_eye_sharpness REAL NOT NULL, right_eye_sharpness REAL NOT NULL,
+                 detection_confidence REAL NOT NULL,
+                 smile_score REAL, species TEXT NOT NULL DEFAULT 'human'
+             );
+             INSERT INTO shoots (slug, date, source_path, dest_path)
+                 VALUES ('legacy', '2026-01-01', '/s', '/d');
+             INSERT INTO photos (id, shoot_id) VALUES (1, 1);
+             -- A valid face on photo 1, plus an orphan face whose photo_id
+             -- references no row (allowed here because foreign_keys is off).
+             INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                 left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+                 left_eye_open, right_eye_open,
+                 left_eye_sharpness, right_eye_sharpness, detection_confidence)
+                 VALUES (1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 5, 5, 0.9);
+             INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_w, bbox_h,
+                 left_eye_x, left_eye_y, right_eye_x, right_eye_y,
+                 left_eye_open, right_eye_open,
+                 left_eye_sharpness, right_eye_sharpness, detection_confidence)
+                 VALUES (999, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 5, 5, 0.9);
+             PRAGMA user_version = 4;",
+        )
+        .unwrap();
+        drop(conn);
+
+        // Opening must succeed despite the orphan row and foreign_keys = ON.
+        let db = Database::open(&path).expect("faces migration must survive orphan rows");
+
+        // left_eye_open is now nullable.
+        let notnull: i32 = db
+            .conn
+            .query_row(
+                "SELECT \"notnull\" FROM pragma_table_info('faces')
+                 WHERE name = 'left_eye_open'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            notnull, 0,
+            "left_eye_open should be nullable post-migration"
+        );
+
+        // The orphan row was dropped; the valid face survived.
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM faces", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "orphan faces row dropped, valid one kept");
+        let surviving_photo_id: i64 = db
+            .conn
+            .query_row("SELECT photo_id FROM faces", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(surviving_photo_id, 1);
+
+        // The rebuilt DB is foreign-key clean.
+        let violations = db
+            .conn
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query_map([], |_| Ok(()))
+            .unwrap()
+            .count();
+        assert_eq!(violations, 0, "no foreign key violations after migration");
     }
 
     #[test]

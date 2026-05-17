@@ -1,3 +1,4 @@
+import { mockIPC } from "@tauri-apps/api/mocks";
 import { useSettingsStore, DEFAULT_FOLDER_TEMPLATE } from "../settingsStore";
 import { setupMockIpc } from "../../test/mockIpc";
 
@@ -30,6 +31,7 @@ beforeEach(() => {
       onboardedReview: true,
     },
     isLoaded: false,
+    loadError: null,
     isOpen: false,
     wizardReplay: false,
   });
@@ -47,6 +49,24 @@ describe("settingsStore", () => {
     const s = useSettingsStore.getState();
 
     expect(s.settings.groupThreshold).toBe(8);
+    expect(s.isLoaded).toBe(true);
+    expect(s.loadError).toBeNull();
+  });
+
+  test("loadSettings surfaces a backend failure as loadError", async () => {
+    mockIPC((cmd: string) => {
+      if (cmd === "get_settings") {
+        throw new Error("FOREIGN KEY constraint failed");
+      }
+      return undefined;
+    });
+
+    await useSettingsStore.getState().loadSettings();
+    const s = useSettingsStore.getState();
+
+    // The error is surfaced (App renders DbErrorScreen) rather than silently
+    // falling back to defaults and stranding the user on the wizard.
+    expect(s.loadError).toContain("FOREIGN KEY constraint failed");
     expect(s.isLoaded).toBe(true);
   });
 
