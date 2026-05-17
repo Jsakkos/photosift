@@ -4,7 +4,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useAiStore, sharpnessBadgeScore } from "../../stores/aiStore";
 import { FaceChip } from "../FaceChip";
 import { ExifChip, ScoreBar } from "../primitives";
-import { CuratorChip } from "../CuratorChip";
+import { TriageNote } from "./TriageNote";
 import { verdictFor } from "../../lib/faceVerdict";
 import type { Face, ImageEntry } from "../../types";
 
@@ -163,7 +163,7 @@ export function FacesRail() {
           </div>
         )}
 
-        <CuratorChip />
+        <TriageNote />
       </div>
 
       <div
