@@ -46,7 +46,7 @@
     "@wdio/visual-service": "^8.0.2",
     "cross-env": "^7.0.3",
     "expect-webdriverio": "^5.6.5",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.0",
     "happy-dom": "^20.9.0",
     "mocha": "^11.7.5",
     "tailwindcss": "^4",
