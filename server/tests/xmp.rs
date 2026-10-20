@@ -12,13 +12,8 @@ use serde_json::{json, Value};
 const FIXTURE_RAW: &str = include_str!("fixtures/lightroom_sidecar.xmp");
 
 /// The fixture with LF endings, whatever the checkout's autocrlf did to it.
-#[allow(clippy::no_effect_replace)] // no-op only where the checkout is LF
 fn fixture() -> String {
-    FIXTURE_RAW.replace(
-        "
-", "
-",
-    )
+    FIXTURE_RAW.replace("\r\n", "\n")
 }
 
 const ALL: [Outcome; 5] = [
