@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use chrono::{DateTime, Local, NaiveDateTime, Timelike};
+use serde::Serialize;
 
 use super::events::{split_into_events, ProposedEvent};
 use crate::config::Settings;
@@ -23,13 +24,14 @@ const RAW_EXTS: &[&str] = &["raf", "nef"];
 const JPEG_EXTS: &[&str] = &["jpg", "jpeg"];
 const VIDEO_EXTS: &[&str] = &["mov", "mp4"];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ItemKind {
     Photo,
     Video,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ScanItem {
     /// Position in `CardScan::items`; events refer to items by this.
     pub idx: usize,
@@ -46,7 +48,7 @@ pub struct ScanItem {
     pub bytes: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CameraRange {
     pub camera: String,
     pub count: usize,
@@ -54,7 +56,7 @@ pub struct CameraRange {
     pub last: NaiveDateTime,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CardScan {
     /// Opaque id under which the import step finds this scan again.
     pub scan_id: String,
@@ -96,7 +98,7 @@ pub fn scan(source: &Path, db: &DbPool, settings: &Settings) -> anyhow::Result<C
         settings.everyday_max_photos,
     );
     Ok(CardScan {
-        scan_id: new_scan_id(),
+        scan_id: new_id(),
         source: source.to_path_buf(),
         cameras: camera_ranges(&items),
         already_imported: count_already_imported(db, &items)?,
@@ -146,9 +148,10 @@ fn count_already_imported(db: &DbPool, items: &[ScanItem]) -> anyhow::Result<usi
 
 // --- id -------------------------------------------------------------------
 
-fn new_scan_id() -> String {
+/// Opaque 32-hex-char id for scans and import jobs.
+pub(crate) fn new_id() -> String {
     // RandomState is seeded from the OS per process and varies per instance,
-    // which is plenty for an in-memory cache key without a uuid dependency.
+    // which is plenty for an in-memory key without a uuid dependency.
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
     h.write_u128(
         std::time::SystemTime::now()

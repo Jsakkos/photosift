@@ -4,8 +4,9 @@ use chrono::{NaiveDate, NaiveDateTime};
 use rusqlite::{
     params, params_from_iter,
     types::{FromSqlError, Type},
-    OptionalExtension, Row,
+    Connection, OptionalExtension, Row,
 };
+use serde::Serialize;
 
 use super::DbPool;
 use crate::outcome::Outcome;
@@ -30,7 +31,8 @@ impl ShootKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TimeSource {
     Exif,
     Mtime,
@@ -185,53 +187,69 @@ fn fmt_datetime(t: Option<NaiveDateTime>) -> Option<String> {
     t.map(|t| t.format(DATETIME_FMT).to_string())
 }
 
-pub fn insert_shoot(pool: &DbPool, shoot: &NewShoot) -> anyhow::Result<i64> {
+fn insert_shoot_on(c: &Connection, shoot: &NewShoot) -> rusqlite::Result<i64> {
     let created_at = chrono::Local::now()
         .naive_local()
         .format(DATETIME_FMT)
         .to_string();
-    pool.with(|c| {
-        c.execute(
-            "INSERT INTO shoots (kind, name, folder, date_start, date_end, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                shoot.kind.as_str(),
-                shoot.name,
-                shoot.folder,
-                shoot.date_start.map(|d| d.format(DATE_FMT).to_string()),
-                shoot.date_end.map(|d| d.format(DATE_FMT).to_string()),
-                created_at,
-            ],
-        )?;
-        Ok(c.last_insert_rowid())
-    })
+    c.execute(
+        "INSERT INTO shoots (kind, name, folder, date_start, date_end, created_at)          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            shoot.kind.as_str(),
+            shoot.name,
+            shoot.folder,
+            shoot.date_start.map(|d| d.format(DATE_FMT).to_string()),
+            shoot.date_end.map(|d| d.format(DATE_FMT).to_string()),
+            created_at,
+        ],
+    )?;
+    Ok(c.last_insert_rowid())
+}
+
+fn insert_photo_on(c: &Connection, photo: &NewPhoto) -> rusqlite::Result<i64> {
+    c.execute(
+        "INSERT INTO photos (shoot_id, raw_path, jpeg_path, video_path, sha256, camera,          capture_time_orig, capture_time, time_source, orientation, width, height, phash)          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            photo.shoot_id,
+            photo.raw_path,
+            photo.jpeg_path,
+            photo.video_path,
+            photo.sha256,
+            photo.camera,
+            fmt_datetime(photo.capture_time_orig),
+            fmt_datetime(photo.capture_time),
+            photo.time_source.map(TimeSource::as_str),
+            photo.orientation,
+            photo.width,
+            photo.height,
+            // Bit-for-bit u64 -> i64; SQLite has no unsigned type.
+            photo.phash.map(|h| h as i64),
+        ],
+    )?;
+    Ok(c.last_insert_rowid())
+}
+
+fn insert_file_on(
+    c: &Connection,
+    sha256: &str,
+    path: &str,
+    name: &str,
+    size: i64,
+    photo_id: Option<i64>,
+) -> rusqlite::Result<()> {
+    c.execute(
+        "INSERT INTO files (sha256, path, name, size, photo_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![sha256, path, name, size, photo_id],
+    )?;
+    Ok(())
+}
+
+pub fn insert_shoot(pool: &DbPool, shoot: &NewShoot) -> anyhow::Result<i64> {
+    pool.with(|c| insert_shoot_on(c, shoot))
 }
 
 pub fn insert_photo(pool: &DbPool, photo: &NewPhoto) -> anyhow::Result<i64> {
-    pool.with(|c| {
-        c.execute(
-            "INSERT INTO photos (shoot_id, raw_path, jpeg_path, video_path, sha256, camera, \
-             capture_time_orig, capture_time, time_source, orientation, width, height, phash) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                photo.shoot_id,
-                photo.raw_path,
-                photo.jpeg_path,
-                photo.video_path,
-                photo.sha256,
-                photo.camera,
-                fmt_datetime(photo.capture_time_orig),
-                fmt_datetime(photo.capture_time),
-                photo.time_source.map(TimeSource::as_str),
-                photo.orientation,
-                photo.width,
-                photo.height,
-                // Bit-for-bit u64 -> i64; SQLite has no unsigned type.
-                photo.phash.map(|h| h as i64),
-            ],
-        )?;
-        Ok(c.last_insert_rowid())
-    })
+    pool.with(|c| insert_photo_on(c, photo))
 }
 
 /// Registers a copied file for global dedupe. `photo_id` is None for files not
@@ -244,12 +262,88 @@ pub fn insert_file(
     size: i64,
     photo_id: Option<i64>,
 ) -> anyhow::Result<()> {
+    pool.with(|c| insert_file_on(c, sha256, path, name, size, photo_id))
+}
+
+/// A copied file to register in `files`. `name`/`size` describe the SOURCE
+/// file (what a later card scan will see), `path` the library copy.
+#[derive(Debug, Clone)]
+pub struct NewFile {
+    pub sha256: String,
+    pub path: String,
+    pub name: String,
+    pub size: i64,
+}
+
+/// One imported frame: its photo row plus every file copied for it.
+#[derive(Debug, Clone)]
+pub struct PhotoBundle {
+    pub photo: NewPhoto,
+    pub files: Vec<NewFile>,
+}
+
+pub struct CommittedEvent {
+    pub shoot_id: i64,
+    /// Photo ids in the order of the `bundles` passed in.
+    pub photo_ids: Vec<i64>,
+}
+
+/// Records one imported event atomically: finds or creates the shoot, inserts
+/// every photo and file row, and stores the camera offsets. A shoot already
+/// at `shoot.folder` (a second import into the same Everyday month, or a
+/// resumed import) is reused and its date range widened. `bundle.photo.shoot_id`
+/// is ignored and replaced.
+pub fn commit_import_event(
+    pool: &DbPool,
+    shoot: &NewShoot,
+    bundles: &[PhotoBundle],
+    offsets: &[(String, i64)],
+) -> anyhow::Result<CommittedEvent> {
     pool.with(|c| {
-        c.execute(
-            "INSERT INTO files (sha256, path, name, size, photo_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![sha256, path, name, size, photo_id],
-        )?;
-        Ok(())
+        // Dropped without commit on any error, which rolls the whole event back.
+        let tx = c.unchecked_transaction()?;
+        let existing: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM shoots WHERE folder = ?1",
+                [&shoot.folder],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let shoot_id = match existing {
+            Some(id) => {
+                tx.execute(
+                    "UPDATE shoots SET                        date_start = MIN(COALESCE(date_start, ?1), ?1),                        date_end = MAX(COALESCE(date_end, ?2), ?2)                      WHERE id = ?3 AND ?1 IS NOT NULL AND ?2 IS NOT NULL",
+                    params![
+                        shoot.date_start.map(|d| d.format(DATE_FMT).to_string()),
+                        shoot.date_end.map(|d| d.format(DATE_FMT).to_string()),
+                        id,
+                    ],
+                )?;
+                id
+            }
+            None => insert_shoot_on(&tx, shoot)?,
+        };
+        let mut photo_ids = Vec::with_capacity(bundles.len());
+        for bundle in bundles {
+            let mut photo = bundle.photo.clone();
+            photo.shoot_id = shoot_id;
+            let photo_id = insert_photo_on(&tx, &photo)?;
+            for f in &bundle.files {
+                insert_file_on(&tx, &f.sha256, &f.path, &f.name, f.size, Some(photo_id))?;
+            }
+            photo_ids.push(photo_id);
+        }
+        for (camera, secs) in offsets {
+            tx.execute(
+                "INSERT INTO camera_offsets (shoot_id, camera, offset_seconds)                  VALUES (?1, ?2, ?3)                  ON CONFLICT (shoot_id, camera) DO UPDATE SET offset_seconds = ?3",
+                params![shoot_id, camera, secs],
+            )?;
+        }
+        tx.commit()?;
+        Ok(CommittedEvent {
+            shoot_id,
+            photo_ids,
+        })
     })
 }
 

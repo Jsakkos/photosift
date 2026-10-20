@@ -3,16 +3,18 @@
 use std::collections::HashMap;
 
 use chrono::{Duration, NaiveDateTime};
+use serde::{Deserialize, Serialize};
 
 use super::scan::{ItemKind, ScanItem};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Named,
     Everyday,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProposedEvent {
     /// `ScanItem::idx` values, in offset-corrected capture order.
     pub item_idxs: Vec<usize>,
