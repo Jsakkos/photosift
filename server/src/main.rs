@@ -1,3 +1,7 @@
+// Release builds use the GUI subsystem so the logon task opens no console
+// window; `instance::redirect_stdio_if_detached` keeps output in a log file.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::{
     net::SocketAddr,
     panic::{catch_unwind, AssertUnwindSafe},
@@ -9,6 +13,7 @@ use photosift::{
     api, config,
     drives::{list_removable_drives, Watcher},
     ingest::scan,
+    instance,
 };
 
 const CARD_POLL: Duration = Duration::from_secs(2);
@@ -16,9 +21,32 @@ const CARD_POLL: Duration = Duration::from_secs(2);
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let data_root = config::data_root();
+    instance::redirect_stdio_if_detached(&data_root);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let flag = |name: &str| args.iter().any(|a| a == name);
+    let (open, no_browser) = (flag("--open"), flag("--no-browser"));
+
     let port = config::load(&data_root)?.port;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let url = format!("http://{addr}/");
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            // Binding is the single-instance lock: a failed bind plus a
+            // PhotoSift health answer means we are the second launch.
+            if instance::health_answers(addr) {
+                println!("PhotoSift is already running at {url}");
+                if open && !no_browser {
+                    instance::open_browser(&url)?;
+                }
+                return Ok(());
+            }
+            anyhow::bail!(
+                "cannot listen on port {port} ({e}); the port is held by something that is not PhotoSift (no /api/health answer). Free it or change `port` in {}",
+                data_root.join("settings.toml").display()
+            );
+        }
+    };
     let state = photosift::build_state(&data_root, listener.local_addr()?.port())?;
     spawn_card_watcher(&state);
     let app = api::router(state, config::web_dist());
@@ -26,6 +54,11 @@ async fn main() -> anyhow::Result<()> {
         "PhotoSift listening on http://{addr} (data root {})",
         data_root.display()
     );
+    if open && !no_browser {
+        if let Err(e) = instance::open_browser(&url) {
+            eprintln!("could not open the browser: {e}");
+        }
+    }
     axum::serve(listener, app).await?;
     Ok(())
 }

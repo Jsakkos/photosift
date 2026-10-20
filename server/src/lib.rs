@@ -5,6 +5,7 @@ pub mod drives;
 pub mod enrich;
 pub mod events;
 pub mod ingest;
+pub mod instance;
 pub mod media;
 pub mod outcome;
 #[doc(hidden)]
