@@ -692,3 +692,68 @@ async fn trash_failure_reported_not_fatal() {
     assert!(retry["failed"].as_array().unwrap().is_empty());
     assert!(!exists(&env.path("B.NEF")));
 }
+
+// --- trash safety -----------------------------------------------------------
+
+#[tokio::test]
+async fn trash_skips_photo_flipped_after_the_snapshot() {
+    let mut env = Env::new().await;
+    let flipped = env.add_photo("FLIPPED", 0);
+    let doomed = env.add_photo("DOOMED", 1);
+    env.set_outcome(flipped, "delete");
+    env.set_outcome(doomed, "delete");
+    let snapshot = photos::pending_deletes(&env.pool, env.shoot).unwrap();
+    assert_eq!(snapshot.len(), 2);
+
+    // The user changes their mind after the list was built, before it is processed.
+    photos::set_outcome(&env.pool, flipped, photosift::outcome::Outcome::Album, None).unwrap();
+
+    let report = photosift::trash::trash_photos(&env.pool, env.shoot, snapshot);
+    assert_eq!(report.trashed, 1);
+    assert!(report.failed.is_empty());
+    for ext in ["NEF", "JPG", "xmp"] {
+        assert!(
+            exists(&env.path(&format!("FLIPPED.{ext}"))),
+            "FLIPPED.{ext}"
+        );
+        assert!(!exists(&env.path(&format!("DOOMED.{ext}"))));
+    }
+    let row = photos::get_photo(&env.pool, flipped).unwrap().unwrap();
+    assert!(row.trashed_at.is_none());
+}
+
+#[tokio::test]
+async fn overlapping_batches_count_each_photo_once() {
+    let mut env = Env::new().await;
+    let id = env.add_photo("A", 0);
+    env.set_outcome(id, "delete");
+    let snapshot = photos::pending_deletes(&env.pool, env.shoot).unwrap();
+
+    let first = photosift::trash::trash_photos(&env.pool, env.shoot, snapshot.clone());
+    let second = photosift::trash::trash_photos(&env.pool, env.shoot, snapshot);
+    assert_eq!(first.trashed, 1);
+    assert_eq!(second.trashed, 0);
+    assert!(second.failed.is_empty());
+}
+
+#[tokio::test]
+async fn unavailable_library_folder_is_a_failure_not_a_trash() {
+    let mut env = Env::new().await;
+    let id = env.add_photo("A", 0);
+    env.set_outcome(id, "delete");
+    // The whole folder is unreachable, like an offline drive.
+    std::fs::remove_dir_all(env.folder.path()).unwrap();
+
+    let body = env.trash().await;
+    assert_eq!(body["trashed"], 0, "{body}");
+    assert_eq!(body["failed"][0]["photo_id"], id);
+    assert_eq!(body["failed"][0]["error"], "library folder not available");
+    let row = photos::get_photo(&env.pool, id).unwrap().unwrap();
+    assert!(row.trashed_at.is_none(), "must stay in the review");
+    assert_eq!(env.get_json("/api/shoots").await[0]["counts"]["delete"], 1);
+
+    // Back online with the files already gone: nothing left to lose, so finish.
+    std::fs::create_dir_all(env.folder.path()).unwrap();
+    let body = env.trash().await;
+    assert_eq!(body["trashed"], 1, "{body}");
+}

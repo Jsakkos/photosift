@@ -466,11 +466,13 @@ pub fn set_outcome(
     })
 }
 
+const PENDING_DELETE: &str = "shoot_id = ?1 AND outcome = 'delete' AND trashed_at IS NULL";
+
 /// Photos of the shoot marked `delete` that are not in the Recycle Bin yet.
 pub fn pending_deletes(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<PhotoRow>> {
     pool.with(|c| {
         let mut stmt = c.prepare(&format!(
-            "SELECT {PHOTO_COLUMNS} FROM photos              WHERE shoot_id = ?1 AND outcome = 'delete' AND trashed_at IS NULL ORDER BY id"
+            "SELECT {PHOTO_COLUMNS} FROM photos WHERE {PENDING_DELETE} ORDER BY id"
         ))?;
         let rows = stmt
             .query_map([shoot_id], row_to_photo)?
@@ -479,18 +481,37 @@ pub fn pending_deletes(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<Photo
     })
 }
 
-/// Records that the photo's files went to the Recycle Bin. The `photos` and
-/// `files` rows stay (see `trash`).
-pub fn mark_trashed(pool: &DbPool, photo_id: i64) -> anyhow::Result<()> {
+/// The photo as it is right now, only if it still qualifies for the Recycle
+/// Bin: in this shoot, outcome `delete`, not trashed yet.
+pub fn pending_delete(
+    pool: &DbPool,
+    shoot_id: i64,
+    photo_id: i64,
+) -> anyhow::Result<Option<PhotoRow>> {
+    pool.with(|c| {
+        c.query_row(
+            &format!("SELECT {PHOTO_COLUMNS} FROM photos WHERE id = ?2 AND {PENDING_DELETE}"),
+            params![shoot_id, photo_id],
+            row_to_photo,
+        )
+        .optional()
+    })
+}
+
+/// Records that the photo's files went to the Recycle Bin, but only if it
+/// still qualifies (see `pending_delete`). Returns whether a row was updated.
+/// The `photos` and `files` rows stay (see `trash`).
+pub fn mark_trashed(pool: &DbPool, shoot_id: i64, photo_id: i64) -> anyhow::Result<bool> {
     pool.with(|c| {
         c.execute(
-            "UPDATE photos SET trashed_at = ?1 WHERE id = ?2",
+            &format!("UPDATE photos SET trashed_at = ?3 WHERE id = ?2 AND {PENDING_DELETE}"),
             params![
-                fmt_datetime(Some(chrono::Local::now().naive_local())),
-                photo_id
+                shoot_id,
+                photo_id,
+                fmt_datetime(Some(chrono::Local::now().naive_local()))
             ],
         )
-        .map(|_| ())
+        .map(|n| n > 0)
     })
 }
 
