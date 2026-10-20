@@ -271,6 +271,7 @@ async fn missing_models_is_not_fatal() {
     let server = spawn_server_with_library(library.path()).await;
     let st = status(&server.base_url).await;
     assert_eq!(st["ai_backend"], "unavailable", "{st}");
+    assert_eq!(st["embeddings"], false, "{st}");
 
     let card = three_file_card();
     let imported = import_and_enrich(&server.base_url, card.path(), Duration::from_secs(60)).await;
@@ -423,6 +424,7 @@ async fn status_reports_unavailable_without_models() {
     let server = spawn_server().await;
     let st = status(&server.base_url).await;
     assert_eq!(st["ai_backend"], "unavailable");
+    assert_eq!(st["embeddings"], false);
     assert_eq!(st["queue"], 0);
 }
 
@@ -460,6 +462,7 @@ async fn golden_faces_found() {
         st["ai_backend"], "unavailable",
         "models failed to load: {st}"
     );
+    assert_eq!(st["embeddings"], true, "identity model missing: {st}");
 
     let imported = import_and_enrich(&server.base_url, &dir, Duration::from_secs(600)).await;
     println!(

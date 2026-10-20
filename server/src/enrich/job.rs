@@ -31,8 +31,11 @@ const ANALYSIS_EDGE: u32 = 1024;
 /// What `GET /api/status` reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Status {
-    /// `"cuda"`, `"cpu"`, or `"unavailable"` when the face models are missing.
+    /// `"cuda"` only when every loaded model runs on CUDA, `"cpu"` when any
+    /// fell back, `"unavailable"` when the detector is missing.
     pub ai_backend: &'static str,
+    /// False when the identity model is missing: faces carry no embedding.
+    pub embeddings: bool,
     /// Shoots waiting for or undergoing enrichment.
     pub queue: usize,
 }
@@ -41,6 +44,7 @@ struct Models {
     detector: Detector,
     /// Faces are still detected without it; they just carry no embedding.
     embedder: Option<Embedder>,
+    /// Effective backend: CUDA only if every loaded model runs on it.
     backend: Backend,
 }
 
@@ -55,6 +59,7 @@ struct Shared {
     state: Mutex<State>,
     wake: Condvar,
     backend: Option<Backend>,
+    embeddings: bool,
 }
 
 impl Shared {
@@ -97,6 +102,7 @@ impl EnrichWorker {
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
             backend: models.as_ref().map(|m| m.backend),
+            embeddings: models.as_ref().is_some_and(|m| m.embedder.is_some()),
         });
         let ctx = Ctx {
             db: db.clone(),
@@ -137,24 +143,32 @@ impl EnrichWorker {
         let state = self.shared.lock();
         Status {
             ai_backend: self.shared.backend.map_or("unavailable", Backend::as_str),
+            embeddings: self.shared.embeddings,
             queue: state.pending.len() + usize::from(state.active.is_some()),
         }
     }
 }
 
 fn load_models(dir: &Path) -> Option<Models> {
-    let (detector, backend) = match Detector::load(dir, true) {
+    let (detector, detector_backend) = match Detector::load(dir, true) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("photosift: face detection unavailable: {e:#}");
             return None;
         }
     };
-    let embedder = match Embedder::load(dir, backend == Backend::Cuda) {
-        Ok(e) => Some(e),
+    let (embedder, backend) = match Embedder::load(dir, detector_backend == Backend::Cuda) {
+        Ok((e, embedder_backend)) => {
+            let both = if detector_backend == Backend::Cuda && embedder_backend == Backend::Cuda {
+                Backend::Cuda
+            } else {
+                Backend::Cpu
+            };
+            (Some(e), both)
+        }
         Err(e) => {
             eprintln!("photosift: face identity unavailable: {e:#}");
-            None
+            (None, detector_backend)
         }
     };
     Some(Models {
@@ -181,6 +195,9 @@ fn worker_loop(shared: &Shared, ctx: &Ctx) {
         };
         if catch_unwind(AssertUnwindSafe(|| run_shoot(ctx, shoot_id))).is_err() {
             eprintln!("photosift: enrichment of shoot {shoot_id} panicked");
+            // A UI waiting on this shoot must not hang; its photos stay
+            // unenriched and are retried at the next start.
+            ctx.events.send(ServerEvent::EnrichDone { shoot_id });
         }
         shared.lock().active = None;
     }
@@ -191,6 +208,7 @@ fn run_shoot(ctx: &Ctx, shoot_id: i64) {
         Ok(ids) => ids,
         Err(e) => {
             eprintln!("photosift: listing photos of shoot {shoot_id}: {e:#}");
+            ctx.events.send(ServerEvent::EnrichDone { shoot_id });
             return;
         }
     };

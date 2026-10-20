@@ -8,6 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use ort::session::Session;
 use ort::value::Tensor;
 
+use super::Backend;
 use crate::media::render::RgbImage;
 
 pub const MODEL_FILE: &str = "face_recognition_sface_2021dec.onnx";
@@ -29,24 +30,31 @@ pub struct Embedder {
 }
 
 impl Embedder {
-    pub fn load(models_dir: &Path, cuda: bool) -> Result<Self> {
+    /// Like `Detector::load`: CUDA if asked and working, else CPU; the backend
+    /// that actually runs is returned.
+    pub fn load(models_dir: &Path, cuda: bool) -> Result<(Self, Backend)> {
         let path = models_dir.join(MODEL_FILE);
         if !path.is_file() {
             return Err(anyhow!("{} not found", path.display()));
         }
-        let (mut session, _) = super::load_session(&path, cuda)
-            .with_context(|| format!("loading {}", path.display()))?;
-        let dummy = Tensor::from_array((
-            vec![1i64, 3, CROP as i64, CROP as i64],
-            vec![0f32; 3 * CROP * CROP],
-        ))
-        .map_err(|e| anyhow!("{e}"))?;
-        session
-            .run(ort::inputs!["data" => dummy])
-            .map_err(|e| anyhow!("warm-up run: {e}"))?;
-        Ok(Self {
-            session: Mutex::new(session),
+        let (session, backend) = super::load_session(&path, cuda, |session| {
+            let dummy = Tensor::from_array((
+                vec![1i64, 3, CROP as i64, CROP as i64],
+                vec![0f32; 3 * CROP * CROP],
+            ))
+            .map_err(|e| anyhow!("{e}"))?;
+            session
+                .run(ort::inputs!["data" => dummy])
+                .map_err(|e| anyhow!("warm-up run: {e}"))?;
+            Ok(())
         })
+        .with_context(|| format!("loading {}", path.display()))?;
+        Ok((
+            Self {
+                session: Mutex::new(session),
+            },
+            backend,
+        ))
     }
 
     /// `landmarks` are in pixel coordinates of `img`, in YuNet's order.

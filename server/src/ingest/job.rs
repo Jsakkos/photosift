@@ -264,8 +264,9 @@ fn run_events(
             attach_jpegs(&ctx.db, &attachments).context("recording attached JPEGs")?;
             summary.copied += attachments.len();
             let photo_ids: Vec<i64> = attachments.iter().map(|a| a.photo_id).collect();
-            if let Ok(ids) = shoot_ids_of_photos(&ctx.db, &photo_ids) {
-                summary.attached_shoot_ids.extend(ids);
+            match shoot_ids_of_photos(&ctx.db, &photo_ids) {
+                Ok(ids) => summary.attached_shoot_ids.extend(ids),
+                Err(e) => eprintln!("photosift: finding shoots of attached JPEGs: {e:#}"),
             }
         }
         if let Some(e) = first_error {

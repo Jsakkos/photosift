@@ -48,17 +48,73 @@ fn build_session(path: &Path, cuda: bool) -> Result<Session> {
     builder.commit_from_file(path).map_err(|e| anyhow!("{e}"))
 }
 
-/// Loads `path` on CUDA when asked and possible; otherwise on CPU. A CUDA
-/// failure (missing DLLs, no GPU) is logged and never fatal.
-pub(crate) fn load_session(path: &Path, cuda: bool) -> Result<(Session, Backend)> {
+/// Loads `path` on CUDA when asked and possible; otherwise on CPU. `warm_up`
+/// runs one inference on the new session, inside the fallback: a CUDA session
+/// that builds but cannot run (cuDNN/runtime errors surface on first run) is
+/// logged and retried on CPU, never fatal.
+pub(crate) fn load_session(
+    path: &Path,
+    cuda: bool,
+    warm_up: impl Fn(&mut Session) -> Result<()>,
+) -> Result<(Session, Backend)> {
+    with_cpu_fallback(cuda, |on_cuda| {
+        let mut session = build_session(path, on_cuda)?;
+        warm_up(&mut session)?;
+        Ok(session)
+    })
+    .map_err(|e| e.context(path.display().to_string()))
+}
+
+/// Tries `attempt(true)` when `cuda` is set, and `attempt(false)` if that
+/// fails or CUDA was not asked for.
+fn with_cpu_fallback<T>(cuda: bool, attempt: impl Fn(bool) -> Result<T>) -> Result<(T, Backend)> {
     if cuda {
-        match build_session(path, true) {
-            Ok(s) => return Ok((s, Backend::Cuda)),
-            Err(e) => eprintln!(
-                "photosift: CUDA unavailable for {} ({e:#}); using CPU",
-                path.display()
-            ),
+        match attempt(true) {
+            Ok(v) => return Ok((v, Backend::Cuda)),
+            Err(e) => eprintln!("photosift: CUDA unavailable ({e:#}); using CPU"),
         }
     }
-    Ok((build_session(path, false)?, Backend::Cpu))
+    Ok((attempt(false)?, Backend::Cpu))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn cuda_failure_after_the_session_builds_retries_on_cpu() {
+        // Models the warm-up run failing on CUDA after the session was built.
+        let tried = Cell::new(Vec::new());
+        let (v, backend) = with_cpu_fallback(true, |cuda| {
+            let mut t = tried.take();
+            t.push(cuda);
+            tried.set(t);
+            if cuda {
+                Err(anyhow!("cudnn runtime error"))
+            } else {
+                Ok("cpu session")
+            }
+        })
+        .unwrap();
+        assert_eq!((v, backend), ("cpu session", Backend::Cpu));
+        assert_eq!(tried.take(), vec![true, false]);
+    }
+
+    #[test]
+    fn working_cuda_is_kept_and_cpu_only_never_tries_cuda() {
+        let (_, backend) = with_cpu_fallback(true, |_| Ok(())).unwrap();
+        assert_eq!(backend, Backend::Cuda);
+        let (_, backend) = with_cpu_fallback(false, |cuda| {
+            assert!(!cuda);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(backend, Backend::Cpu);
+    }
+
+    #[test]
+    fn failure_on_cpu_is_an_error() {
+        assert!(with_cpu_fallback::<()>(true, |_| Err(anyhow!("broken"))).is_err());
+    }
 }

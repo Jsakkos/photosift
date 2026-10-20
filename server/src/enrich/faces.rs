@@ -73,17 +73,20 @@ impl Detector {
         if !path.is_file() {
             return Err(anyhow!("{} not found", path.display()));
         }
-        let (mut session, backend) = super::load_session(&path, cuda)
-            .with_context(|| format!("loading {}", path.display()))?;
-        // The first run pays allocator/JIT cost; keep it off the first photo.
-        let dummy = Tensor::from_array((
-            vec![1i64, 3, SIDE as i64, SIDE as i64],
-            vec![0f32; 3 * SIDE * SIDE],
-        ))
-        .map_err(|e| anyhow!("{e}"))?;
-        session
-            .run(ort::inputs!["input" => dummy])
-            .map_err(|e| anyhow!("warm-up run: {e}"))?;
+        // The warm-up run pays allocator/JIT cost off the first photo, and
+        // doubles as the check that the chosen backend really works.
+        let (session, backend) = super::load_session(&path, cuda, |session| {
+            let dummy = Tensor::from_array((
+                vec![1i64, 3, SIDE as i64, SIDE as i64],
+                vec![0f32; 3 * SIDE * SIDE],
+            ))
+            .map_err(|e| anyhow!("{e}"))?;
+            session
+                .run(ort::inputs!["input" => dummy])
+                .map_err(|e| anyhow!("warm-up run: {e}"))?;
+            Ok(())
+        })
+        .with_context(|| format!("loading {}", path.display()))?;
         Ok((
             Self {
                 session: Mutex::new(session),
@@ -134,7 +137,8 @@ impl Detector {
     /// With `drop_cut` set, detections touching an interior view edge are
     /// discarded.
     fn run_view(&self, img: &RgbImage, view: View, drop_cut: bool) -> Result<Vec<Cand>> {
-        let (data, scale, pad_x, pad_y) = letterbox(img, view)?;
+        let geo = Geometry::new(view);
+        let data = letterbox(img, &geo)?;
         let input = Tensor::from_array((vec![1i64, 3, SIDE as i64, SIDE as i64], data))
             .map_err(|e| anyhow!("{e}"))?;
         // (stride, cls, obj, bbox, kps)
@@ -175,12 +179,6 @@ impl Detector {
         let act = |x: f32| if sig { 1.0 / (1.0 + (-x).exp()) } else { x };
 
         let (vx, vy) = (view.x as f32, view.y as f32);
-        let to_img = |mx: f32, my: f32| {
-            (
-                (mx - pad_x as f32) / scale + vx,
-                (my - pad_y as f32) / scale + vy,
-            )
-        };
         let margin = EDGE_MARGIN * view.w.max(view.h) as f32;
         let (img_w, img_h) = (img.w as f32, img.h as f32);
         let mut out = Vec::new();
@@ -196,8 +194,15 @@ impl Detector {
                 let (col, row) = ((i % grid) as f32, (i / grid) as f32);
                 let (cx, cy) = ((bbox[i * 4] + col) * sf, (bbox[i * 4 + 1] + row) * sf);
                 let (bw, bh) = (bbox[i * 4 + 2].exp() * sf, bbox[i * 4 + 3].exp() * sf);
-                let (x0, y0) = to_img(cx - bw / 2.0, cy - bh / 2.0);
-                let (x1, y1) = to_img(cx + bw / 2.0, cy + bh / 2.0);
+                let mut k = [(0f32, 0f32); 5];
+                for (j, kp) in k.iter_mut().enumerate() {
+                    *kp = (
+                        (kps[i * 10 + 2 * j] + col) * sf,
+                        (kps[i * 10 + 2 * j + 1] + row) * sf,
+                    );
+                }
+                let cand = geo.to_cand((cx, cy, bw, bh), k, score);
+                let (x0, y0, x1, y1) = (cand.x, cand.y, cand.x + cand.w, cand.y + cand.h);
                 if drop_cut {
                     let cut = (view.x > 0 && x0 < vx + margin)
                         || (view.y > 0 && y0 < vy + margin)
@@ -207,24 +212,10 @@ impl Detector {
                         continue;
                     }
                 }
-                let mut k = [(0f32, 0f32); 5];
-                for (j, kp) in k.iter_mut().enumerate() {
-                    *kp = to_img(
-                        (kps[i * 10 + 2 * j] + col) * sf,
-                        (kps[i * 10 + 2 * j + 1] + row) * sf,
-                    );
-                }
                 if x1 <= x0 || y1 <= y0 || x0 >= img_w || y0 >= img_h || x1 <= 0.0 || y1 <= 0.0 {
                     continue;
                 }
-                out.push(Cand {
-                    x: x0,
-                    y: y0,
-                    w: x1 - x0,
-                    h: y1 - y0,
-                    kps: k,
-                    score,
-                });
+                out.push(cand);
             }
         }
         Ok(out)
@@ -245,10 +236,66 @@ fn tile_views(w: usize, h: usize) -> Vec<View> {
     v
 }
 
-/// Letterboxes `view` of `img` into a 640x640 BGR NCHW buffer (YuNet was
-/// trained on OpenCV's BGR). Returns `(data, scale, pad_x, pad_y)` where
-/// `scale` is network px per image px.
-fn letterbox(img: &RgbImage, view: View) -> Result<(Vec<f32>, f32, usize, usize)> {
+/// How one `View` is placed inside the 640x640 network input: network px per
+/// image px, the padding that centres it, and the resized size.
+struct Geometry {
+    view: View,
+    scale: f32,
+    pad_x: usize,
+    pad_y: usize,
+    nw: usize,
+    nh: usize,
+}
+
+impl Geometry {
+    fn new(view: View) -> Self {
+        let scale = (SIDE as f32 / view.w as f32).min(SIDE as f32 / view.h as f32);
+        let nw = ((view.w as f32 * scale).round() as usize).clamp(1, SIDE);
+        let nh = ((view.h as f32 * scale).round() as usize).clamp(1, SIDE);
+        Self {
+            view,
+            scale,
+            pad_x: (SIDE - nw) / 2,
+            pad_y: (SIDE - nh) / 2,
+            nw,
+            nh,
+        }
+    }
+
+    /// Network-input pixel to full-image pixel: undo the padding and scale,
+    /// then add the view's origin.
+    fn to_img(&self, (mx, my): (f32, f32)) -> (f32, f32) {
+        (
+            (mx - self.pad_x as f32) / self.scale + self.view.x as f32,
+            (my - self.pad_y as f32) / self.scale + self.view.y as f32,
+        )
+    }
+
+    /// A detection in network-input pixels (`(cx, cy, w, h)` plus landmarks)
+    /// as a candidate in full-image pixels.
+    fn to_cand(
+        &self,
+        (cx, cy, bw, bh): (f32, f32, f32, f32),
+        kps: [(f32, f32); 5],
+        score: f32,
+    ) -> Cand {
+        let (x0, y0) = self.to_img((cx - bw / 2.0, cy - bh / 2.0));
+        let (x1, y1) = self.to_img((cx + bw / 2.0, cy + bh / 2.0));
+        Cand {
+            x: x0,
+            y: y0,
+            w: x1 - x0,
+            h: y1 - y0,
+            kps: kps.map(|p| self.to_img(p)),
+            score,
+        }
+    }
+}
+
+/// Letterboxes the view into a 640x640 BGR NCHW buffer (YuNet was trained on
+/// OpenCV's BGR).
+fn letterbox(img: &RgbImage, geo: &Geometry) -> Result<Vec<f32>> {
+    let view = geo.view;
     let crop = if view.x == 0 && view.y == 0 && view.w == img.w as usize && view.h == img.h as usize
     {
         None
@@ -265,10 +312,7 @@ fn letterbox(img: &RgbImage, view: View) -> Result<(Vec<f32>, f32, usize, usize)
         })
     };
     let src = crop.as_ref().unwrap_or(img);
-    let scale = (SIDE as f32 / src.w as f32).min(SIDE as f32 / src.h as f32);
-    let nw = ((src.w as f32 * scale).round() as usize).clamp(1, SIDE);
-    let nh = ((src.h as f32 * scale).round() as usize).clamp(1, SIDE);
-    let (pad_x, pad_y) = ((SIDE - nw) / 2, (SIDE - nh) / 2);
+    let (nw, nh) = (geo.nw, geo.nh);
     let small =
         resize_with(src, nw as u32, nh as u32, FilterType::Box).map_err(|e| anyhow!("{e}"))?;
     let plane = SIDE * SIDE;
@@ -276,13 +320,13 @@ fn letterbox(img: &RgbImage, view: View) -> Result<(Vec<f32>, f32, usize, usize)
     for y in 0..nh {
         for x in 0..nw {
             let s = (y * nw + x) * 3;
-            let d = (y + pad_y) * SIDE + x + pad_x;
+            let d = (y + geo.pad_y) * SIDE + x + geo.pad_x;
             data[d] = f32::from(small.px[s + 2]);
             data[plane + d] = f32::from(small.px[s + 1]);
             data[2 * plane + d] = f32::from(small.px[s]);
         }
     }
-    Ok((data, scale, pad_x, pad_y))
+    Ok(data)
 }
 
 fn iou(a: &Cand, b: &Cand) -> f32 {
@@ -342,6 +386,70 @@ mod tests {
         assert_eq!(tiles[1].x + tiles[1].w, w);
         assert_eq!(tiles[2].y + tiles[2].h, h);
         assert!(tiles.iter().all(|t| t.w < w && t.h < h));
+    }
+
+    #[test]
+    fn bottom_right_tile_detection_maps_to_full_frame() {
+        let (w, h) = (2560usize, 1707usize);
+        let view = tile_views(w, h)[3];
+        // ceil(2560 / 1.85) x ceil(1707 / 1.85), anchored at the bottom-right.
+        assert_eq!((view.x, view.y, view.w, view.h), (1176, 784, 1384, 923));
+        let geo = Geometry::new(view);
+        // 640 / 1384 per px; 923 px tall -> 427 rows, centred: (640 - 427) / 2.
+        assert!((geo.scale - 640.0 / 1384.0).abs() < 1e-6);
+        assert_eq!((geo.pad_x, geo.pad_y, geo.nw, geo.nh), (0, 106, 640, 427));
+
+        // A 300x400 px face with its top-left at (2000, 1100) in the full frame,
+        // landmarks at known positions inside it.
+        let (face_x, face_y, face_w, face_h) = (2000.0f32, 1100.0f32, 300.0f32, 400.0f32);
+        let marks_img = [
+            (2080.0f32, 1200.0f32),
+            (2220.0, 1200.0),
+            (2150.0, 1290.0),
+            (2095.0, 1390.0),
+            (2205.0, 1390.0),
+        ];
+        // Forward map written independently of `to_img`: tile origin, scale, pad.
+        let fwd = |(x, y): (f32, f32)| {
+            (
+                (x - 1176.0) * (640.0 / 1384.0),
+                (y - 784.0) * (640.0 / 1384.0) + 106.0,
+            )
+        };
+        let (m0, m1) = (
+            fwd((face_x, face_y)),
+            fwd((face_x + face_w, face_y + face_h)),
+        );
+        let centre = ((m0.0 + m1.0) / 2.0, (m0.1 + m1.1) / 2.0);
+        let cand = geo.to_cand(
+            (centre.0, centre.1, m1.0 - m0.0, m1.1 - m0.1),
+            marks_img.map(fwd),
+            0.9,
+        );
+        let face = to_face(&cand, w, h).expect("inside the frame");
+        let want = (
+            face_x / 2560.0,
+            face_y / 1707.0,
+            face_w / 2560.0,
+            face_h / 1707.0,
+        );
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        assert!(
+            close(face.bbox.0, want.0) && close(face.bbox.1, want.1),
+            "{:?}",
+            face.bbox
+        );
+        assert!(
+            close(face.bbox.2, want.2) && close(face.bbox.3, want.3),
+            "{:?}",
+            face.bbox
+        );
+        for (got, src) in face.landmarks.iter().zip(marks_img) {
+            assert!(
+                close(got.0, src.0 / 2560.0) && close(got.1, src.1 / 1707.0),
+                "{got:?}"
+            );
+        }
     }
 
     #[test]

@@ -127,7 +127,11 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
 
 async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let s = state.enrich.status();
-    Json(json!({"ai_backend": s.ai_backend, "queue": s.queue}))
+    Json(json!({
+        "ai_backend": s.ai_backend,
+        "embeddings": s.embeddings,
+        "queue": s.queue,
+    }))
 }
 
 async fn health() -> Json<serde_json::Value> {
