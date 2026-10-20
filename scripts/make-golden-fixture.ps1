@@ -10,6 +10,8 @@
     <Out>\DCIM\100NIKON\*.NEF
   Also writes <Out>\expected.toml with the counts the golden test asserts.
   Safe to re-run: the DCIM folder and expected.toml are rebuilt from scratch.
+  Refuses (deleting nothing) unless <Out> is new, empty, or carries the
+  .photosift-golden-fixture marker this script writes; never a drive root.
   The source files are only read, never modified.
 
 .PARAMETER Out
@@ -36,6 +38,24 @@ if (-not $Out) {
 if (-not [System.IO.File]::Exists($Manifest)) {
     throw "Manifest not found: $Manifest. Copy tests\golden\manifest.example.txt to tests\golden\manifest.txt and list your own files."
 }
+
+$Out = [System.IO.Path]::GetFullPath($Out)
+$root = [System.IO.Path]::GetPathRoot($Out)
+if ($Out.TrimEnd([char]92, [char]47) -eq $root.TrimEnd([char]92, [char]47)) {
+    throw "Refusing to use a drive root as the fixture dir: $Out"
+}
+
+# Data-safety guard: this script deletes <Out>\DCIM, so it only does so in a
+# directory it created itself (marker file) or one that is new/empty. A real
+# card or library passed by mistake is left untouched.
+$marker = Join-Path $Out '.photosift-golden-fixture'
+$outExists = [System.IO.Directory]::Exists($Out)
+$outEmpty = (-not $outExists) -or (-not (@([System.IO.Directory]::EnumerateFileSystemEntries($Out)).Count))
+if (-not ($outEmpty -or [System.IO.File]::Exists($marker))) {
+    throw "Refusing to touch $Out : it is not empty and has no .photosift-golden-fixture marker, so it was not created by this script. Nothing was deleted. Point -Out / PHOTOSIFT_GOLDEN_DIR at a new or empty folder."
+}
+[System.IO.Directory]::CreateDirectory($Out) | Out-Null
+[System.IO.File]::WriteAllText($marker, "Created by scripts/make-golden-fixture.ps1; safe to rebuild.`r`n", (New-Object System.Text.UTF8Encoding $false))
 
 $dcim = Join-Path $Out 'DCIM'
 if ([System.IO.Directory]::Exists($dcim)) { [System.IO.Directory]::Delete($dcim, $true) }

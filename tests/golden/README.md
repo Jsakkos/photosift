@@ -20,6 +20,11 @@ public, so no photos, previews or real file names are ever committed. Only
    `PHOTOSIFT_GOLDEN_DIR` (or pass `-Out`) to build it elsewhere. Re-running
    rebuilds the card from scratch; your originals are only read.
 
+   Safety guard: the script deletes `<Out>\DCIM` on every run, so it first
+   requires `<Out>` to be new, empty, or to contain the
+   `.photosift-golden-fixture` marker it wrote itself, and it refuses a drive
+   root. Pointing it at a real card or library throws and deletes nothing.
+
 `expected.toml` holds `photos` (RAW count, computed), `cameras` and `events`
 (fixed by the manifest design: two camera bodies; three proposed events with
 zero camera offsets). If you build a different mix, edit those two numbers.
