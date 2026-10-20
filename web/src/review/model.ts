@@ -182,22 +182,50 @@ export function plural(n: number, one: string, many: string): string {
 }
 
 /**
- * A freshly fetched photo map, except that photos with a request in flight keep
- * the value on screen: the server has not seen that change yet, and showing its
- * older answer would flicker the outcome back.
+ * A freshly fetched photo map, except that photos for which `keepLocal` says so
+ * keep the value on screen: the answer predates a change the user made.
  */
 export function mergePhotos(
   fetched: PhotoMap,
   current: PhotoMap,
-  inFlight: ReadonlyMap<number, number>,
+  keepLocal: (photoId: number) => boolean,
 ): PhotoMap {
   const merged: PhotoMap = {};
   for (const [key, photo] of Object.entries(fetched)) {
     const mine = current[key];
     merged[key] =
-      mine && (inFlight.get(photo.id) ?? 0) > 0
+      mine && keepLocal(photo.id)
         ? { ...photo, outcome: mine.outcome, blooper: mine.blooper }
         : photo;
   }
   return merged;
+}
+
+/**
+ * Orders local changes against fetches. A GET that started before a change (or
+ * before that change's POST settled) may carry the old value even if it
+ * resolves later, so its answer must not overwrite the photo.
+ */
+export class MutationClock {
+  private now = 0;
+  private touched = new Map<number, number>();
+
+  /** Call when a fetch starts; pass the result to `changedSince` when it resolves. */
+  begin(): number {
+    return this.now;
+  }
+
+  /** Call when a photo changes locally and again when its POST settles. */
+  touch(photoId: number): void {
+    this.now += 1;
+    this.touched.set(photoId, this.now);
+  }
+
+  changedSince(photoId: number, began: number): boolean {
+    return (this.touched.get(photoId) ?? 0) > began;
+  }
+
+  reset(): void {
+    this.touched.clear();
+  }
 }

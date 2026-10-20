@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { ReviewPhoto, ShootReview } from "../api/types";
-import { buildView, burstOf, mergePhotos, momentTitle, stepMoment, stepPhoto } from "./model";
+import {
+  MutationClock,
+  buildView,
+  burstOf,
+  mergePhotos,
+  momentTitle,
+  stepMoment,
+  stepPhoto,
+} from "./model";
 
 function photo(id: number, outcome: ReviewPhoto["outcome"] = "unreviewed"): ReviewPhoto {
   return {
@@ -106,16 +114,47 @@ describe("momentTitle", () => {
 });
 
 describe("mergePhotos", () => {
-  it("keeps the on-screen value of a photo with a request in flight", () => {
+  it("keeps the on-screen value of photos the caller marks as newer than the fetch", () => {
     const fetched = { "1": photo(1, "unreviewed"), "2": photo(2, "unreviewed") };
     const current = { "1": photo(1, "album"), "2": photo(2, "library") };
-    const merged = mergePhotos(fetched, current, new Map([[1, 1]]));
+    const merged = mergePhotos(fetched, current, (id) => id === 1);
     expect(merged["1"]!.outcome).toBe("album");
     expect(merged["2"]!.outcome).toBe("unreviewed");
   });
 
   it("drops photos the server no longer lists", () => {
-    const merged = mergePhotos({ "1": photo(1) }, { "1": photo(1), "9": photo(9) }, new Map());
+    const merged = mergePhotos({ "1": photo(1) }, { "1": photo(1), "9": photo(9) }, () => false);
     expect(Object.keys(merged)).toEqual(["1"]);
+  });
+});
+
+describe("MutationClock", () => {
+  it("treats a GET that began before a change as stale for that photo only", () => {
+    const clock = new MutationClock();
+    const began = clock.begin();
+    clock.touch(1);
+    expect(clock.changedSince(1, began)).toBe(true);
+    expect(clock.changedSince(2, began)).toBe(false);
+  });
+
+  it("stays stale when the POST settles after the GET began, then trusts a later GET", () => {
+    const clock = new MutationClock();
+    clock.touch(1); // pressed
+    const during = clock.begin(); // GET issued while the POST is in flight
+    clock.touch(1); // POST settled
+    expect(clock.changedSince(1, during)).toBe(true);
+    const after = clock.begin();
+    expect(clock.changedSince(1, after)).toBe(false);
+  });
+
+  it("a stale GET that resolves after the POST does not flip the photo back", () => {
+    const clock = new MutationClock();
+    const began = clock.begin(); // GET starts, the server still says unreviewed
+    clock.touch(1); // A pressed
+    clock.touch(1); // POST settled, nothing in flight any more
+    const fetched = { "1": photo(1, "unreviewed") };
+    const onScreen = { "1": photo(1, "album") };
+    const merged = mergePhotos(fetched, onScreen, (id) => clock.changedSince(id, began));
+    expect(merged["1"]!.outcome).toBe("album");
   });
 });

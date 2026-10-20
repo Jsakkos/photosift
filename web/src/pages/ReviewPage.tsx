@@ -71,6 +71,7 @@ export function ReviewPage() {
   // The default first focus must not scroll the page away from the highlights.
   const skipScroll = useRef(false);
   const lastIndex = useRef(0);
+  const loupeShown = useRef<number | null>(null);
 
   const view = useMemo(
     () => (review ? buildView(review, photos, filter) : null),
@@ -154,6 +155,10 @@ export function ReviewPage() {
     reload();
   }, [shootId, notify, reload]);
 
+  // In the loupe the focus can be ahead of the picture (it waits for its
+  // decode), and a rating must never land on a photo the user has not seen.
+  const onScreen = (id: number) => mode !== "loupe" || loupeShown.current === id;
+
   const act = (action: Action, repeat: boolean) => {
     if (!view) return;
     if (help) {
@@ -173,11 +178,13 @@ export function ReviewPage() {
         if (mode !== "compare") setFocusId(stepMoment(view, focusId, action.delta));
         break;
       case "outcome":
-        if (focusId !== null && !repeat) setOutcome(focusId, action.outcome);
+        if (focusId !== null && !repeat && onScreen(focusId)) setOutcome(focusId, action.outcome);
         break;
       case "blooper": {
         const photo = focusId === null ? undefined : photos[String(focusId)];
-        if (photo && !repeat) setOutcome(photo.id, photo.outcome, !photo.blooper);
+        if (photo && !repeat && onScreen(photo.id)) {
+          setOutcome(photo.id, photo.outcome, !photo.blooper);
+        }
         break;
       }
       case "loupe":
@@ -289,6 +296,7 @@ export function ReviewPage() {
           position={view.order.indexOf(focusId) + 1}
           total={view.order.length}
           prefetcher={prefetcher}
+          shownRef={loupeShown}
         />
       )}
       {mode === "compare" && (

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getReview, setOutcome as postOutcome } from "../api/client";
 import type { Outcome, ServerEvent, ShootReview } from "../api/types";
 import { useServerEvents } from "../api/ws";
-import { mergePhotos, type PhotoMap } from "./model";
+import { MutationClock, mergePhotos, type PhotoMap } from "./model";
 
 export interface Notice {
   kind: "info" | "error";
@@ -43,6 +43,7 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
   const inFlight = useRef(new Map<number, number>());
   const confirmed = useRef(new Map<number, Confirmed>());
   const chains = useRef(new Map<number, Promise<void>>());
+  const clock = useRef(new MutationClock());
   const latest = useRef(0);
   const notifyRef = useRef(notify);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -53,16 +54,20 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
 
   const reload = useCallback(() => {
     const mine = ++latest.current;
+    const began = clock.current.begin();
+    // Stale for a photo: a change is in flight, or happened after this GET started.
+    const stale = (id: number) =>
+      (inFlight.current.get(id) ?? 0) > 0 || clock.current.changedSince(id, began);
     getReview(shootId).then(
       (fresh) => {
         if (mine !== latest.current) return;
         for (const photo of Object.values(fresh.photos)) {
-          if ((inFlight.current.get(photo.id) ?? 0) === 0) {
+          if (!stale(photo.id)) {
             confirmed.current.set(photo.id, { outcome: photo.outcome, blooper: photo.blooper });
           }
         }
         setReview(fresh);
-        setPhotos((current) => mergePhotos(fresh.photos, current, inFlight.current));
+        setPhotos((current) => mergePhotos(fresh.photos, current, stale));
         setError(null);
       },
       (e: unknown) => {
@@ -77,12 +82,14 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
     setPhotos({});
     setProgress(null);
     inFlight.current.clear();
+    clock.current.reset();
     confirmed.current.clear();
     chains.current.clear();
     reload();
     return () => {
       latest.current += 1;
       clearTimeout(timer.current);
+      timer.current = undefined;
     };
   }, [reload]);
 
@@ -122,6 +129,7 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
           return photo ? { ...p, [key]: { ...photo, ...value } } : p;
         });
       apply({ outcome, blooper: blooper ?? before.blooper });
+      clock.current.touch(photoId);
       inFlight.current.set(photoId, (inFlight.current.get(photoId) ?? 0) + 1);
 
       const run = async () => {
@@ -143,6 +151,7 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
           const truth = confirmed.current.get(photoId);
           if (truth && (inFlight.current.get(photoId) ?? 0) <= 1) apply(truth);
         } finally {
+          clock.current.touch(photoId);
           inFlight.current.set(photoId, Math.max(0, (inFlight.current.get(photoId) ?? 1) - 1));
         }
       };

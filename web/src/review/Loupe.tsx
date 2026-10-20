@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
 
 import { previewUrl } from "../api/client";
 import type { ReviewPhoto } from "../api/types";
@@ -11,6 +11,8 @@ interface Props {
   position: number;
   total: number;
   prefetcher: Prefetcher;
+  /** Kept equal to the photo on screen; the page rates only that one. */
+  shownRef: RefObject<number | null>;
 }
 
 /**
@@ -19,7 +21,7 @@ interface Props {
  * wait zero. It has no key handling of its own: the page binds the keys, so
  * they work wherever focus is.
  */
-export function Loupe({ id, photo, position, total, prefetcher }: Props) {
+export function Loupe({ id, photo, position, total, prefetcher, shownRef }: Props) {
   const [shown, setShown] = useState(id);
   useEffect(() => {
     let current = true;
@@ -30,6 +32,15 @@ export function Loupe({ id, photo, position, total, prefetcher }: Props) {
       current = false;
     };
   }, [id, prefetcher]);
+
+  // The focus moves at once but the picture waits for its decode; a rating key
+  // in that gap would rate a photo nobody has seen, so the page checks this.
+  useLayoutEffect(() => {
+    shownRef.current = shown;
+    return () => {
+      shownRef.current = null;
+    };
+  }, [shown, shownRef]);
 
   return (
     <div className="loupe" data-testid="loupe" role="dialog" aria-label="Full-size photo">

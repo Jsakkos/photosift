@@ -1,15 +1,10 @@
 import { useMemo, type ReactNode } from "react";
 
-import { packRows } from "../lib/justify";
+import { packRows, type JustifyItem } from "../lib/justify";
 import { useMeasuredWidth } from "./useMeasuredWidth";
 
-export interface JustifiedItem {
-  id: number;
-  aspect: number;
-}
-
 interface Props {
-  items: readonly JustifiedItem[];
+  items: readonly JustifyItem[];
   targetHeight: number;
   gap: number;
   className?: string;

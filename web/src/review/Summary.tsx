@@ -60,12 +60,24 @@ export function Summary({
             className={`chip chip-${outcome}`}
             aria-pressed={filter === outcome}
             title={`Show only ${OUTCOME_LABEL[outcome]} (${i + 1})`}
-            onClick={() => onFilter(outcome)}
+            onClick={(e) => {
+              onFilter(outcome);
+              // Enter and Space belong to the review keys, not to this button.
+              e.currentTarget.blur();
+            }}
           >
             <span>{OUTCOME_LABEL[outcome]}</span> <b>{counts[outcome]}</b>
           </button>
         ))}
-        <button type="button" className="help-button" onClick={onHelp} aria-label="Keyboard shortcuts">
+        <button
+          type="button"
+          className="help-button"
+          aria-label="Keyboard shortcuts"
+          onClick={(e) => {
+            onHelp();
+            e.currentTarget.blur();
+          }}
+        >
           ?
         </button>
       </div>

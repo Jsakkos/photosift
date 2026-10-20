@@ -24,7 +24,6 @@ export function prefetchWindow(order: readonly number[], index: number): number[
  */
 export class Prefetcher {
   private held = new Map<number, HTMLImageElement>();
-  private decoded = new Set<number>();
 
   around(order: readonly number[], index: number): void {
     if (index < 0) return;
@@ -32,9 +31,7 @@ export class Prefetcher {
     const current = order[index];
     if (current !== undefined) wanted.add(current);
     for (const id of [...this.held.keys()]) {
-      if (wanted.has(id)) continue;
-      this.held.delete(id);
-      this.decoded.delete(id);
+      if (!wanted.has(id)) this.held.delete(id);
     }
     for (const id of wanted) this.load(id);
   }
@@ -48,14 +45,8 @@ export class Prefetcher {
     }
   }
 
-  /** True once `id`'s preview is decoded, so showing it needs no wait. */
-  isDecoded(id: number): boolean {
-    return this.decoded.has(id);
-  }
-
   clear(): void {
     this.held.clear();
-    this.decoded.clear();
   }
 
   private load(id: number): HTMLImageElement {
@@ -63,13 +54,7 @@ export class Prefetcher {
     if (!img) {
       img = new Image();
       img.src = previewUrl(id);
-      const held = img;
-      held.decode().then(
-        () => {
-          if (this.held.get(id) === held) this.decoded.add(id);
-        },
-        () => {},
-      );
+      img.decode().catch(() => {});
       this.held.set(id, img);
     }
     return img;

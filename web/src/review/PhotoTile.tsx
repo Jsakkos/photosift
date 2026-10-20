@@ -11,7 +11,7 @@ interface Props {
   src: string;
   focused: boolean;
   lazy?: boolean;
-  /** Frames in this photo's burst (the tests and the strip use it). */
+  /** Frames in this photo's burst; only exposed as `data-burst-size` for tests. */
   burstSize?: number;
   onSelect: (id: number) => void;
   onOpen?: (id: number) => void;

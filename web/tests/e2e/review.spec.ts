@@ -52,9 +52,10 @@ test.describe("review screen", () => {
     ).json()) as ShootReview;
     expect(review.moments).toHaveLength(3);
     await expect(page.locator(".moment")).toHaveCount(3);
-    if (review.highlights.length > 0) {
-      await expect(page.locator(".highlights img").first()).toBeVisible();
-    }
+    // The shoot is fully enriched (importShoot waits for it), so the server has
+    // scored every burst and there must be highlights, shown on the page.
+    expect(review.highlights.length).toBeGreaterThan(0);
+    await expect(page.locator(".highlights img")).toHaveCount(review.highlights.length);
 
     const imgs = page.locator(".highlights img, .moment img");
     const count = await imgs.count();
@@ -76,6 +77,15 @@ test.describe("review screen", () => {
       if (natural < 1) sawPortrait = true;
     }
     expect(sawPortrait).toBe(true);
+
+    // Highlights are the large row: taller on average than a moment's large frames.
+    const meanHeight = (selector: string) =>
+      page.locator(selector).evaluateAll(
+        (els) => els.reduce((sum, el) => sum + el.getBoundingClientRect().height, 0) / els.length,
+      );
+    expect(await meanHeight(".highlights img")).toBeGreaterThan(
+      await meanHeight('.tile[data-large="true"] img'),
+    );
   });
 
   test("A sets album, survives a reload and writes the sidecar", async ({ page }) => {
@@ -131,6 +141,66 @@ test.describe("review screen", () => {
       "data-outcome",
       "album",
     );
+  });
+
+  test("ratings in the loupe wait for the picture the user is looking at", async ({ page }) => {
+    const review = (await (
+      await page.request.get(`/api/shoots/${shootId}/review`)
+    ).json()) as ShootReview;
+    const nextMoment = review.moments[1]!.bursts[0]!.photo_ids[0]!;
+    // Highlights load their previews with the page, which would put this one in
+    // the browser cache and make the held route moot.
+    expect(review.highlights).not.toContain(nextMoment);
+
+    // Hold that preview so the focus moves on while the old picture stays up.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route(`**/media/preview/${nextMoment}`, async (route) => {
+      await held;
+      await route.continue();
+    });
+    const posts: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/outcome") && r.method() === "POST") posts.push(r.url());
+    });
+
+    await openReview(page, shootId);
+    const first = await focusedId(page);
+    await page.keyboard.press("Enter");
+    const image = page.getByTestId("loupe-image");
+    await expect(image).toHaveAttribute("data-photo-id", String(first));
+
+    await page.keyboard.press("ArrowDown");
+    await expect(page.getByTestId("loupe")).toContainText(/\d+ \/ 40/);
+    // The picture has not changed, so neither a rating nor a blooper key may land.
+    await page.keyboard.press("a");
+    await page.keyboard.press("x");
+    await page.keyboard.press("b");
+    await page.waitForTimeout(400);
+    expect(posts).toEqual([]);
+    await expect(image).toHaveAttribute("data-photo-id", String(first));
+
+    release();
+    await expect(image).toHaveAttribute("data-photo-id", String(nextMoment));
+    const response = nextOutcomeResponse(page);
+    await page.keyboard.press("a");
+    const saved = await response;
+    expect(saved.id).toBe(nextMoment);
+    expect(posts).toHaveLength(1);
+  });
+
+  test("clicking a chip or ? hands Enter back to the review keys", async ({ page }) => {
+    await openReview(page, shootId);
+    await page.getByRole("button", { name: /^Album 0$/ }).click();
+    await page.getByRole("button", { name: /^Album 0$/ }).click();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("loupe")).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: "Keyboard shortcuts" }).click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("loupe")).toBeVisible();
   });
 
   test("X marks two for deletion and the Recycle Bin batch removes them", async ({ page }) => {
