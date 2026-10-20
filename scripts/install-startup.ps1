@@ -32,11 +32,11 @@ $ErrorActionPreference = 'Stop'
 
 if ($Uninstall) {
     if ($WhatIf) {
-        Write-Host "[WhatIf] Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"
+        Write-Host "[WhatIf] Unregister-ScheduledTask -TaskPath '\' -TaskName '$TaskName' -Confirm:`$false"
         return
     }
-    if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    if (Get-ScheduledTask -TaskPath '\' -TaskName $TaskName -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskPath '\' -TaskName $TaskName -Confirm:$false
         Write-Host "Removed scheduled task '$TaskName'."
     }
     else {
@@ -72,13 +72,13 @@ if ($WhatIf) {
     Write-Host '$settings  = New-ScheduledTaskSettingsSet -Hidden -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `'
     Write-Host '    -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew `'
     Write-Host '    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable'
-    Write-Host "Register-ScheduledTask -TaskName '$TaskName' -Action `$action -Trigger `$trigger -Principal `$principal -Settings `$settings -Force"
+    Write-Host "Register-ScheduledTask -TaskPath '\' -TaskName '$TaskName' -Action `$action -Trigger `$trigger -Principal `$principal -Settings `$settings -Force"
     Write-Host ''
     Write-Host 'Resolved settings:'
     $settings | Format-List Hidden, RestartCount, RestartInterval, ExecutionTimeLimit, MultipleInstances, DisallowStartIfOnBatteries, StopIfGoingOnBatteries, StartWhenAvailable | Out-String | Write-Host
     return
 }
 
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+Register-ScheduledTask -TaskPath '\' -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 Write-Host "Registered scheduled task '$TaskName' (at logon of $user): $ExePath"
-Write-Host "Start it now with: Start-ScheduledTask -TaskName $TaskName"
+Write-Host "Start it now with: Start-ScheduledTask -TaskPath '\' -TaskName $TaskName"

@@ -56,7 +56,7 @@ async fn second_launch_with_open_exits_zero_and_leaves_first_running() {
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(took < Duration::from_secs(2), "took {took:?}");
+    assert!(took < Duration::from_secs(5), "took {took:?}");
     let health = reqwest::get(format!("{}/api/health", first.base_url))
         .await
         .unwrap();
@@ -74,7 +74,7 @@ async fn port_held_by_something_else_fails_with_clear_message() {
             .unwrap();
 
     assert!(!out.status.success());
-    assert!(took < Duration::from_secs(5), "took {took:?}");
+    assert!(took < Duration::from_secs(10), "took {took:?}");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains(&format!("port {port}")) && stderr.contains("not PhotoSift"),

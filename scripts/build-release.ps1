@@ -16,6 +16,13 @@
   user PATH), or they are copied next to the exe by this script. Without them
   the server logs a CUDA init failure and falls back to CPU (never fatal).
 
+  onnxruntime_providers_cuda.dll imports only cudart64_12, cublas64_12, cublasLt64_12,
+  cufft64_11 and cudnn64_9 (checked by scanning its import strings), so curand is not bundled.
+
+  The release folder is deleted and recreated on each run, but only if it is empty
+  or holds the .photosift-release stamp this script writes; the repo and its
+  ancestors are refused outright.
+
   Output goes to a log file, not a console: <data root>\logs\photosift.log.
 
 .PARAMETER OutDir
@@ -41,6 +48,26 @@ if (-not $CudaDllDir) {
     if (Test-Path -LiteralPath $legacy) { $CudaDllDir = $legacy }
 }
 
+# Validate the output folder before spending minutes on a build.
+$dest = [System.IO.Path]::GetFullPath((Join-Path $OutDir 'photosift')).TrimEnd('\')
+$stampName = '.photosift-release'
+$stamp = Join-Path $dest $stampName
+
+# Never delete anything that is not a previous release folder of ours: refuse
+# the repo (or an ancestor of it) outright, then only wipe a folder that is
+# empty or carries the stamp this script writes.
+$repoFull = [System.IO.Path]::GetFullPath($repo).TrimEnd('\')
+$isRepoOrAncestor = ($repoFull -eq $dest) -or $repoFull.StartsWith($dest + '\', [StringComparison]::OrdinalIgnoreCase)
+if ($isRepoOrAncestor) {
+    throw "Refusing to use '$dest' as the release folder: it is the repo or contains it. Pick a different -OutDir."
+}
+if (Test-Path -LiteralPath $dest) {
+    $isEmpty = -not (Get-ChildItem -LiteralPath $dest -Force | Select-Object -First 1)
+    if (-not $isEmpty -and -not (Test-Path -LiteralPath $stamp)) {
+        throw "Refusing to delete '$dest': it is not empty and has no $stampName stamp, so it was not created by this script. Choose another -OutDir or clear it yourself."
+    }
+}
+
 function Invoke-Native([string]$What, [scriptblock]$Command) {
     & $Command
     if ($LASTEXITCODE -ne 0) { throw "$What failed (exit $LASTEXITCODE)" }
@@ -59,9 +86,9 @@ $manifest = Join-Path $repo 'server\Cargo.toml'
 Invoke-Native 'cargo build' { cargo build --release --manifest-path $manifest }
 
 $release = Join-Path $repo 'server\target\release'
-$dest = Join-Path $OutDir 'photosift'
 if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
+[System.IO.File]::WriteAllText($stamp, 'created by scripts/build-release.ps1', (New-Object System.Text.UTF8Encoding($false)))
 
 Copy-Item -LiteralPath (Join-Path $release 'photosift.exe') -Destination $dest
 Copy-Item -LiteralPath (Join-Path $web 'dist') -Destination (Join-Path $dest 'web') -Recurse
@@ -86,7 +113,12 @@ if ($CudaDllDir -and (Test-Path -LiteralPath $CudaDllDir)) {
             $copied++
         }
     }
-    Write-Host "== bundled $copied CUDA/cuDNN DLLs from $CudaDllDir"
+    if ($copied -eq 0) {
+        Write-Warning "-CudaDllDir '$CudaDllDir' exists but contains none of the expected CUDA/cuDNN DLLs; nothing was bundled."
+    }
+    else {
+        Write-Host "== bundled $copied CUDA/cuDNN DLLs from $CudaDllDir"
+    }
 }
 else {
     Write-Warning ('No -CudaDllDir (and the legacy folder is absent): CUDA/cuDNN DLLs are not bundled. ' +

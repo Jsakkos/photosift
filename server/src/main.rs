@@ -16,6 +16,8 @@ use photosift::{
     instance,
 };
 
+/// How long a second launch waits for a half-started first instance to answer.
+const HEALTH_PATIENCE: Duration = Duration::from_secs(3);
 const CARD_POLL: Duration = Duration::from_secs(2);
 
 #[tokio::main]
@@ -34,10 +36,12 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => {
             // Binding is the single-instance lock: a failed bind plus a
             // PhotoSift health answer means we are the second launch.
-            if instance::health_answers(addr) {
+            if instance::wait_for_health(addr, HEALTH_PATIENCE) {
                 println!("PhotoSift is already running at {url}");
                 if open && !no_browser {
-                    instance::open_browser(&url)?;
+                    if let Err(e) = instance::open_browser(&url) {
+                        eprintln!("could not open the browser: {e}");
+                    }
                 }
                 return Ok(());
             }

@@ -9,12 +9,41 @@ use std::{
 };
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1000);
+const LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Keeps one previous generation: a log over `max_bytes` becomes `<name>.1`
+/// (replacing an older one) so the next run starts a fresh file.
+pub fn rotate_log(log: &Path, max_bytes: u64) {
+    let too_big = std::fs::metadata(log).is_ok_and(|m| m.len() > max_bytes);
+    if too_big {
+        let mut rotated = log.as_os_str().to_owned();
+        rotated.push(".1");
+        let rotated = std::path::PathBuf::from(rotated);
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(log, rotated);
+    }
+}
 
 /// True when something at `addr` answers `GET /api/health` with PhotoSift's
 /// `{"ok": true, "version": ...}` body. Blocking, bounded by `PROBE_TIMEOUT`
 /// per step; the sent `Host` header satisfies the server's DNS-rebinding guard.
 pub fn health_answers(addr: SocketAddr) -> bool {
     probe(addr).unwrap_or(false)
+}
+
+/// Like `health_answers`, but keeps trying until `patience` runs out: the
+/// first instance may have bound the port and not yet started serving.
+pub fn wait_for_health(addr: SocketAddr, patience: Duration) -> bool {
+    let deadline = std::time::Instant::now() + patience;
+    loop {
+        if health_answers(addr) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn probe(addr: SocketAddr) -> std::io::Result<bool> {
@@ -89,11 +118,13 @@ pub fn redirect_stdio_if_detached(data_root: &Path) {
             }
         }
         let dir = data_root.join("logs");
+        let log = dir.join("photosift.log");
         let opened = std::fs::create_dir_all(&dir).and_then(|_| {
+            rotate_log(&log, LOG_MAX_BYTES);
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(dir.join("photosift.log"))
+                .open(&log)
         });
         let Ok(file) = opened else { return };
         let handle = file.as_raw_handle() as Handle;
@@ -111,6 +142,26 @@ pub fn redirect_stdio_if_detached(data_root: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotates_only_oversized_logs_and_replaces_old_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("photosift.log");
+        let rotated = dir.path().join("photosift.log.1");
+
+        std::fs::write(&log, b"small").unwrap();
+        rotate_log(&log, 10);
+        assert!(log.exists() && !rotated.exists());
+
+        std::fs::write(&rotated, b"old generation").unwrap();
+        std::fs::write(&log, b"this one is over the limit").unwrap();
+        rotate_log(&log, 10);
+        assert!(!log.exists());
+        assert_eq!(
+            std::fs::read(&rotated).unwrap(),
+            b"this one is over the limit"
+        );
+    }
 
     #[test]
     fn recognises_health_body() {
