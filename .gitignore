@@ -45,3 +45,9 @@ tests/e2e/__diff__/
 # Local real-photo fixture (never commit: public repo)
 tests/golden/manifest.txt
 .photosift-golden/
+
+# Server + web rewrite build output
+server/target/
+web/node_modules/
+web/dist/
+web/test-results/

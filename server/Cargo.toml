@@ -1,0 +1,27 @@
+[package]
+name = "photosift"
+version = "0.1.0"
+edition = "2021"
+description = "PhotoSift localhost server"
+
+[lib]
+name = "photosift"
+path = "src/lib.rs"
+
+[[bin]]
+name = "photosift"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+toml = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tempfile = "3"
