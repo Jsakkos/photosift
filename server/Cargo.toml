@@ -20,6 +20,7 @@ dirs = "6"
 fast_image_resize = "5"
 jpeg-encoder = "0.6"
 kamadak-exif = "0.5"
+ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
 rayon = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive", "rc"] }
@@ -44,4 +45,10 @@ opt-level = 3
 [profile.dev.package.jpeg-encoder]
 opt-level = 3
 [profile.dev.package.fast_image_resize]
+opt-level = 3
+
+# ONNX inference in dev profile is >1 s/image without these (see src-tauri).
+[profile.dev.package.ort]
+opt-level = 3
+[profile.dev.package.ort-sys]
 opt-level = 3

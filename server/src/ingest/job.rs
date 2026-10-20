@@ -20,10 +20,11 @@ use super::events::EventKind;
 use super::naming::folder_path;
 use super::scan::{CardScan, ItemKind, ScanItem};
 use crate::db::photos::{
-    attach_jpegs, commit_import_event, known_hashes, photo_for_file_hash, Attachment, NewFile,
-    NewPhoto, NewShoot, PhotoBundle, ShootKind,
+    attach_jpegs, commit_import_event, known_hashes, photo_for_file_hash, shoot_ids_of_photos,
+    Attachment, NewFile, NewPhoto, NewShoot, PhotoBundle, ShootKind,
 };
 use crate::db::DbPool;
+use crate::enrich::job::EnrichWorker;
 use crate::events::{EventHub, ServerEvent};
 use crate::media::{embedded, exif, phash, render};
 
@@ -97,6 +98,7 @@ pub fn validate(scan: &CardScan, req: &ImportRequest) -> Result<(), String> {
 pub struct JobCtx {
     pub db: DbPool,
     pub events: EventHub,
+    pub enrich: EnrichWorker,
     pub library_root: PathBuf,
     /// `<data root>\cache`, holding `preview`, `thumb` and a scratch `tmp`.
     pub cache_root: PathBuf,
@@ -107,6 +109,9 @@ struct Summary {
     copied: usize,
     skipped: usize,
     shoot_ids: Vec<i64>,
+    /// Shoots whose existing photos gained a camera JPEG. Not new shoots, so
+    /// they stay out of `ImportDone`, but enrichment still revisits them.
+    attached_shoot_ids: Vec<i64>,
 }
 
 /// Runs the job to completion and reports the outcome as an event. Shoots that
@@ -115,8 +120,8 @@ struct Summary {
 pub fn run(ctx: &JobCtx, job_id: &str, scan: &CardScan, req: &ImportRequest) {
     let mut summary = Summary::default();
     let result = run_events(ctx, job_id, scan, req, &mut summary);
-    for &shoot_id in &summary.shoot_ids {
-        crate::enrich::job::enqueue(shoot_id);
+    for &shoot_id in summary.shoot_ids.iter().chain(&summary.attached_shoot_ids) {
+        ctx.enrich.enqueue(shoot_id);
     }
     ctx.events.send(match result {
         Ok(()) => ServerEvent::ImportDone {
@@ -258,6 +263,10 @@ fn run_events(
         if !attachments.is_empty() {
             attach_jpegs(&ctx.db, &attachments).context("recording attached JPEGs")?;
             summary.copied += attachments.len();
+            let photo_ids: Vec<i64> = attachments.iter().map(|a| a.photo_id).collect();
+            if let Ok(ids) = shoot_ids_of_photos(&ctx.db, &photo_ids) {
+                summary.attached_shoot_ids.extend(ids);
+            }
         }
         if let Some(e) = first_error {
             return Err(e);

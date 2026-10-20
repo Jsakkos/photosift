@@ -456,3 +456,158 @@ pub fn set_outcome(
         )
     })
 }
+
+/// Distinct shoots owning the given photos.
+pub fn shoot_ids_of_photos(pool: &DbPool, photo_ids: &[i64]) -> anyhow::Result<Vec<i64>> {
+    pool.with(|c| {
+        let mut out = HashSet::new();
+        for chunk in photo_ids.chunks(HASH_CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let mut stmt = c.prepare(&format!(
+                "SELECT DISTINCT shoot_id FROM photos WHERE id IN ({placeholders})"
+            ))?;
+            for row in stmt.query_map(params_from_iter(chunk), |r| r.get::<_, i64>(0))? {
+                out.insert(row?);
+            }
+        }
+        let mut ids: Vec<i64> = out.into_iter().collect();
+        ids.sort_unstable();
+        Ok(ids)
+    })
+}
+
+/// Shoots with at least one photo the enrichment worker has not seen yet.
+pub fn shoots_needing_enrichment(pool: &DbPool) -> anyhow::Result<Vec<i64>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT DISTINCT shoot_id FROM photos WHERE enriched_at IS NULL ORDER BY shoot_id",
+        )?;
+        let ids = stmt.query_map([], |r| r.get(0))?.collect();
+        ids
+    })
+}
+
+pub fn unenriched_photo_ids(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<i64>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id FROM photos WHERE shoot_id = ?1 AND enriched_at IS NULL ORDER BY id",
+        )?;
+        let ids = stmt.query_map([shoot_id], |r| r.get(0))?.collect();
+        ids
+    })
+}
+
+/// One detected face, boxes and landmarks normalized 0-1 in display orientation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewFace {
+    pub bbox: (f32, f32, f32, f32),
+    pub landmarks: [(f32, f32); 5],
+    pub score: f32,
+    pub embedding: Option<Vec<f32>>,
+    pub sharpness: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaceRow {
+    pub id: i64,
+    pub photo_id: i64,
+    pub bbox: (f32, f32, f32, f32),
+    pub score: Option<f32>,
+    pub landmarks: Option<[(f32, f32); 5]>,
+    pub embedding: Option<Vec<f32>>,
+    pub sharpness: Option<f64>,
+}
+
+/// Quality columns written by the enrichment worker; all `None` when the
+/// photo could not be analysed.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct QualityColumns {
+    pub sharpness: Option<f64>,
+    pub face_sharpness: Option<f64>,
+    pub mean_luma: Option<f64>,
+    pub clip_hi: Option<f64>,
+    pub clip_lo: Option<f64>,
+}
+
+/// Replaces the photo's faces and quality columns and marks it enriched, in
+/// one transaction, so a crash never leaves faces without the enriched flag
+/// (or the reverse). Re-running for a photo is idempotent.
+pub fn save_enrichment(
+    pool: &DbPool,
+    photo_id: i64,
+    quality: &QualityColumns,
+    faces: &[NewFace],
+) -> anyhow::Result<()> {
+    pool.with(|c| {
+        let tx = c.unchecked_transaction()?;
+        tx.execute("DELETE FROM faces WHERE photo_id = ?1", [photo_id])?;
+        for f in faces {
+            let landmarks = serde_json::to_string(&f.landmarks.map(|(x, y)| [x, y]))
+                .expect("landmarks serialize");
+            let blob: Option<Vec<u8>> = f
+                .embedding
+                .as_ref()
+                .map(|e| e.iter().flat_map(|v| v.to_le_bytes()).collect());
+            tx.execute(
+                "INSERT INTO faces(photo_id, x, y, w, h, score, landmarks, embedding, sharpness) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    photo_id,
+                    f.bbox.0,
+                    f.bbox.1,
+                    f.bbox.2,
+                    f.bbox.3,
+                    f.score,
+                    landmarks,
+                    blob,
+                    f.sharpness
+                ],
+            )?;
+        }
+        tx.execute(
+            "UPDATE photos SET sharpness = ?1, face_sharpness = ?2, mean_luma = ?3, \
+             clip_hi = ?4, clip_lo = ?5, enriched_at = ?6 WHERE id = ?7",
+            params![
+                quality.sharpness,
+                quality.face_sharpness,
+                quality.mean_luma,
+                quality.clip_hi,
+                quality.clip_lo,
+                fmt_datetime(Some(chrono::Local::now().naive_local())),
+                photo_id
+            ],
+        )?;
+        tx.commit()
+    })
+}
+
+pub fn list_faces(pool: &DbPool, photo_id: i64) -> anyhow::Result<Vec<FaceRow>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, photo_id, x, y, w, h, score, landmarks, embedding, sharpness \
+             FROM faces WHERE photo_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([photo_id], |r| {
+            let landmarks: Option<String> = r.get(7)?;
+            let landmarks = landmarks
+                .and_then(|s| serde_json::from_str::<[[f32; 2]; 5]>(&s).ok())
+                .map(|l| l.map(|[x, y]| (x, y)));
+            let embedding: Option<Vec<u8>> = r.get(8)?;
+            let embedding = embedding.map(|b| {
+                b.chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect()
+            });
+            Ok(FaceRow {
+                id: r.get(0)?,
+                photo_id: r.get(1)?,
+                bbox: (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?),
+                score: r.get(6)?,
+                landmarks,
+                embedding,
+                sharpness: r.get(9)?,
+            })
+        })?;
+        rows.collect()
+    })
+}

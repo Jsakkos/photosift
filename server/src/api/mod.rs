@@ -10,6 +10,7 @@ use std::{
 };
 
 use axum::{
+    extract::State,
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
@@ -19,7 +20,10 @@ use axum::{
 use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::{config::Settings, db::DbPool, events::EventHub, ingest::scan::CardScan};
+use crate::{
+    config::Settings, db::DbPool, enrich::job::EnrichWorker, events::EventHub,
+    ingest::scan::CardScan,
+};
 
 /// Scans kept for the import step; older ones are dropped, which just makes
 /// the client scan again.
@@ -33,6 +37,7 @@ pub struct AppState {
     /// The port actually bound; the Host/Origin guard compares against it.
     pub port: u16,
     pub events: EventHub,
+    pub enrich: EnrichWorker,
     pub scans: ScanCache,
     /// Set while an import job runs; see `api::import`.
     pub import_busy: Arc<AtomicBool>,
@@ -100,6 +105,7 @@ impl IntoResponse for ApiError {
 pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
     let api = Router::new()
         .route("/health", get(health))
+        .route("/status", get(status))
         .route("/scan", post(scan::scan))
         .route("/import", post(import::start))
         .fallback(|| async { StatusCode::NOT_FOUND })
@@ -117,6 +123,11 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
     };
     // Last, so it wraps every route including /ws and the static fallback.
     app.layer(guard)
+}
+
+async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let s = state.enrich.status();
+    Json(json!({"ai_backend": s.ai_backend, "queue": s.queue}))
 }
 
 async fn health() -> Json<serde_json::Value> {

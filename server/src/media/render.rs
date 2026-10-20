@@ -29,11 +29,15 @@ pub struct Rendered {
     pub thumb_h: u32,
 }
 
-struct Rgb {
-    w: u32,
-    h: u32,
-    px: Vec<u8>,
+/// Packed RGB8 pixels, row-major.
+pub struct Rgb {
+    pub w: u32,
+    pub h: u32,
+    pub px: Vec<u8>,
 }
+
+/// The name analysis code (faces, identity) uses for decoded pixels.
+pub type RgbImage = Rgb;
 
 pub fn make_previews(
     jpeg: &[u8],
@@ -65,6 +69,10 @@ pub fn make_previews(
     })
 }
 
+pub fn decode_jpeg(bytes: &[u8]) -> Result<Rgb, MediaError> {
+    decode(bytes)
+}
+
 fn decode(bytes: &[u8]) -> Result<Rgb, MediaError> {
     // Non-strict: Nikon NEF previews carry trailing/odd data that strict mode rejects.
     let options = DecoderOptions::default()
@@ -89,6 +97,12 @@ fn decode(bytes: &[u8]) -> Result<Rgb, MediaError> {
 }
 
 fn resize(src: &Rgb, w: u32, h: u32) -> Result<Rgb, MediaError> {
+    resize_with(src, w, h, FilterType::CatmullRom)
+}
+
+/// Resizes to exactly `w`x`h`. Box averages fixed rectangles (cheap, alias-free
+/// for big shrinks: used for analysis); CatmullRom keeps display detail.
+pub fn resize_with(src: &Rgb, w: u32, h: u32, filter: FilterType) -> Result<Rgb, MediaError> {
     let err = |e: &dyn std::fmt::Display| MediaError::Resize(e.to_string());
     let from = ImageRef::new(src.w, src.h, &src.px, PixelType::U8x3).map_err(|e| err(&e))?;
     let mut to = Image::new(w, h, PixelType::U8x3);
@@ -96,7 +110,7 @@ fn resize(src: &Rgb, w: u32, h: u32) -> Result<Rgb, MediaError> {
         .resize(
             &from,
             &mut to,
-            &ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::CatmullRom)),
+            &ResizeOptions::new().resize_alg(ResizeAlg::Convolution(filter)),
         )
         .map_err(|e| err(&e))?;
     Ok(Rgb {

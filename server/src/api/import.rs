@@ -58,6 +58,7 @@ pub async fn start(
     let ctx = JobCtx {
         db: state.db.clone(),
         events: state.events.clone(),
+        enrich: state.enrich.clone(),
         library_root: state.settings.library_root.clone(),
         cache_root: state.data_root.join("cache"),
     };

@@ -23,12 +23,15 @@ pub fn build_app(
 ) -> anyhow::Result<axum::Router> {
     let settings = config::load(data_root)?;
     let db = db::open(&data_root.join("photosift.db"))?;
+    let events = EventHub::new();
+    let enrich = enrich::job::EnrichWorker::start(db.clone(), events.clone(), data_root);
     let state = AppState {
         settings: Arc::new(settings),
         db,
         port,
         data_root: data_root.to_path_buf(),
-        events: EventHub::new(),
+        events,
+        enrich,
         scans: Default::default(),
         import_busy: Default::default(),
     };
