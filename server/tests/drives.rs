@@ -177,7 +177,15 @@ fn failed_scan_is_not_retried_until_the_card_is_reinserted() {
     for _ in 0..3 {
         rig.watcher.tick();
     }
-    assert!(rig.events().is_empty());
+    // The UI hears about it once (not every tick), so a broken card is never
+    // ignored silently.
+    match rig.events().as_slice() {
+        [ServerEvent::CardScanFailed { source, error }] => {
+            assert_eq!(source, &card.path().to_string_lossy());
+            assert!(error.contains("unreadable card"), "{error}");
+        }
+        other => panic!("{other:?}"),
+    }
     assert_eq!(rig.scans.load(Ordering::SeqCst), 1);
 
     // Pulling a card the UI never heard about is not announced either.
@@ -234,7 +242,10 @@ fn panicking_scan_is_contained_and_not_retried() {
     for _ in 0..3 {
         rig.watcher.tick();
     }
-    assert!(rig.events().is_empty());
+    assert!(matches!(
+        rig.events().as_slice(),
+        [ServerEvent::CardScanFailed { .. }]
+    ));
     assert_eq!(rig.scans.load(Ordering::SeqCst), 1);
 
     rig.set(&[bad.path(), good.path()]);

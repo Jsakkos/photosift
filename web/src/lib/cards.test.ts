@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { CardScanSummary } from "../api/types";
-import { mergeFetchedCards, type CardEventLog } from "./cards";
+import { mergeFetchedCards, withFailure, withoutFailure, type CardEventLog } from "./cards";
 
 function card(scanId: string, source: string): CardScanSummary {
   return {
@@ -53,5 +53,24 @@ describe("mergeFetchedCards", () => {
     const fetched = { ...card("a", "E:\\"), already_imported: 35 };
 
     expect(mergeFetchedCards([held], [fetched], 9, log([["a", 4]]))).toEqual([fetched]);
+  });
+});
+
+describe("card failures", () => {
+  it("keeps one entry per source, newest error wins", () => {
+    const first = withFailure([], { source: "F:\\", error: "unreadable" });
+    const again = withFailure(first, { source: "F:\\", error: "still unreadable" });
+
+    expect(again).toEqual([{ source: "F:\\", error: "still unreadable" }]);
+  });
+
+  it("drops a failure when its card is removed or scanned fine", () => {
+    const failures = [
+      { source: "F:\\", error: "x" },
+      { source: "G:\\", error: "y" },
+    ];
+
+    expect(withoutFailure(failures, "F:\\")).toEqual([{ source: "G:\\", error: "y" }]);
+    expect(withoutFailure(failures, "H:\\")).toEqual(failures);
   });
 });

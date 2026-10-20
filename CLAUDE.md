@@ -72,10 +72,10 @@ Routes in `server/src/api/mod.rs`. JSON bodies, errors are `{"error": "..."}`. M
 | `GET /api/cards`, `/api/settings` | inserted cards the watcher announced; read-only settings (library root) |
 | `POST /api/scan`, `GET /api/scan/{id}`, `POST /api/scan/{id}/events`, `POST /api/slug` | scan a card/folder, re-group into events, slugify a name |
 | `POST /api/import`, `GET /api/import/current`, `GET /api/import/{job}` | start / observe the single import job |
-| `GET /api/shoots`, `GET /api/shoots/{id}/review`, `POST /api/shoots/{id}/trash` | shoot list, review data, approved delete |
-| `POST /api/photos/{id}/outcome` | set outcome (+ blooper) and rewrite the sidecar |
+| `GET /api/shoots`, `GET /api/shoots/{id}/review`, `POST /api/shoots/{id}/trash` | shoot list, review data, approved delete (body `{photo_ids}`: only those pending deletes are trashed) |
+| `POST /api/photos/{id}/outcome` | set outcome (+ blooper) and rewrite the sidecar (409 for a trashed photo) |
 | `GET /media/preview/{id}`, `/media/thumb/{id}`, `/media/scan/{scan}/{idx}` | JPEGs served from the cache |
-| `GET /ws` | `ServerEvent` stream: import/enrichment progress, `card_detected` |
+| `GET /ws` | `ServerEvent` stream: import/enrichment progress, `card_detected`, `card_scan_failed` |
 
 Anything else under `/` serves `web/dist` with an SPA fallback to `index.html`.
 

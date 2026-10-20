@@ -123,6 +123,14 @@ impl Watcher {
         }
     }
 
+    fn scan_failed(&mut self, mount_point: String, error: String) {
+        self.hub.send(ServerEvent::CardScanFailed {
+            source: mount_point.clone(),
+            error,
+        });
+        self.tracked.insert(mount_point, Tracked::ScanFailed);
+    }
+
     /// Publishes announced cards into `cards` (the registry the API serves).
     pub fn with_registry(mut self, cards: CardRegistry) -> Self {
         self.cards = cards;
@@ -173,12 +181,13 @@ impl Watcher {
                         .insert(d.mount_point, Tracked::Announced(source));
                 }
                 Ok(Err(e)) => {
-                    eprintln!("card scan of {} failed: {e:#}", d.mount_point);
-                    self.tracked.insert(d.mount_point, Tracked::ScanFailed);
+                    let error = format!("{e:#}");
+                    eprintln!("card scan of {} failed: {error}", d.mount_point);
+                    self.scan_failed(d.mount_point, error);
                 }
                 Err(_) => {
                     eprintln!("card scan of {} panicked", d.mount_point);
-                    self.tracked.insert(d.mount_point, Tracked::ScanFailed);
+                    self.scan_failed(d.mount_point, "the scan crashed on a corrupt file".into());
                 }
             }
         }

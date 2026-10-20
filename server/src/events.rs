@@ -25,6 +25,13 @@ pub enum ServerEvent {
     CardRemoved {
         source: String,
     },
+    /// A card with a `DCIM` folder was inserted but could not be scanned. The
+    /// watcher does not retry until the card is reinserted; the user can still
+    /// import it by hand from the Shoots page.
+    CardScanFailed {
+        source: String,
+        error: String,
+    },
     ImportProgress {
         job_id: String,
         done: usize,
@@ -254,6 +261,19 @@ mod tests {
             total: 10,
             current: "x.jpg".into(),
         }
+    }
+
+    #[test]
+    fn card_scan_failed_serialises_with_its_wire_name() {
+        let json = serde_json::to_value(ServerEvent::CardScanFailed {
+            source: "F:\\".into(),
+            error: "unreadable".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "card_scan_failed", "source": "F:\\", "error": "unreadable"})
+        );
     }
 
     #[test]

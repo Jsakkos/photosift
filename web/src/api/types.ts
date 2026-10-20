@@ -224,6 +224,7 @@ export interface CardScanSummary {
 export type ServerEvent =
   | { type: "card_detected"; scan: CardScanSummary }
   | { type: "card_removed"; source: string }
+  | { type: "card_scan_failed"; source: string; error: string }
   | {
       type: "import_progress";
       job_id: string;
@@ -247,6 +248,7 @@ export type ServerEventType = ServerEvent["type"];
 export const SERVER_EVENT_TYPES: readonly ServerEventType[] = [
   "card_detected",
   "card_removed",
+  "card_scan_failed",
   "import_progress",
   "import_done",
   "import_failed",

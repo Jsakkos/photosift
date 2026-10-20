@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Link, useNavigate } from "react-router";
 
-import { listShoots } from "../api/client";
+import { scan, listShoots } from "../api/client";
 import type { ServerEvent, ShootSummary } from "../api/types";
 import { useServerEvents } from "../api/ws";
 
@@ -18,6 +18,50 @@ function shootDates(shoot: ShootSummary): string {
   const { date_start: start, date_end: end } = shoot;
   if (!start) return "";
   return end && end !== start ? `${start} to ${end}` : start;
+}
+
+/** Manual import for when no card was announced (or the watcher could not read it). */
+function ImportFromFolder() {
+  const navigate = useNavigate();
+  const [source, setSource] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const path = source.trim();
+    if (!path || busy) return;
+    setBusy(true);
+    setError(null);
+    scan(path).then(
+      (result) => void navigate(`/import/${result.scan_id}`),
+      (err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+        setBusy(false);
+      },
+    );
+  };
+
+  return (
+    <form className="import-folder" onSubmit={submit}>
+      <input
+        type="text"
+        aria-label="Folder or card to import"
+        placeholder="Folder or card path, e.g. F:\ or D:\Pictures\Trip"
+        value={source}
+        onChange={(e) => setSource(e.target.value)}
+        disabled={busy}
+      />
+      <button type="submit" disabled={busy || source.trim() === ""}>
+        {busy ? "Scanning..." : "Import from folder…"}
+      </button>
+      {error && (
+        <p className="error hint" role="alert">
+          Could not scan: {error}
+        </p>
+      )}
+    </form>
+  );
 }
 
 export function ShootsPage() {
@@ -83,6 +127,7 @@ export function ShootsPage() {
           ))}
         </ul>
       )}
+      <ImportFromFolder />
     </section>
   );
 }

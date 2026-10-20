@@ -76,11 +76,28 @@ pub struct CardScan {
 
 /// Blocking: call from `spawn_blocking` inside async handlers.
 pub fn scan(source: &Path, db: &DbPool, settings: &Settings) -> anyhow::Result<CardScan> {
-    let (files, warnings) = walk(source)?;
+    scan_with(source, db, settings, &|p| fs::metadata(p))
+}
 
+/// `stat` is injectable because a file that lists but cannot be stat'ed is
+/// awkward to stage portably in tests.
+fn scan_with(
+    source: &Path,
+    db: &DbPool,
+    settings: &Settings,
+    stat: &dyn Fn(&Path) -> std::io::Result<Metadata>,
+) -> anyhow::Result<CardScan> {
+    let (files, mut warnings) = walk(source)?;
+
+    // One unreadable file must not hide the rest of the card: it is skipped
+    // and reported instead of failing the whole scan.
     let mut items = Vec::new();
     for paired in pair(files) {
-        items.push(build_item(paired)?);
+        let primary = paired.primary.clone();
+        match build_item(paired, stat, &mut warnings) {
+            Ok(item) => items.push(item),
+            Err(e) => warnings.push(format!("skipped {}: {e:#}", primary.display())),
+        }
     }
     items.sort_by(|a, b| {
         a.capture_time
@@ -330,11 +347,21 @@ fn pair(files: Vec<PathBuf>) -> Vec<Paired> {
 
 // --- per-item metadata ----------------------------------------------------
 
-fn build_item(p: Paired) -> anyhow::Result<ScanItem> {
-    let meta = fs::metadata(&p.primary).with_context(|| format!("stat {}", p.primary.display()))?;
+fn build_item(
+    p: Paired,
+    stat: &dyn Fn(&Path) -> std::io::Result<Metadata>,
+    warnings: &mut Vec<String>,
+) -> anyhow::Result<ScanItem> {
+    let meta = stat(&p.primary).context("cannot stat")?;
     let mut bytes = meta.len();
     if let Some(j) = &p.sibling_jpeg {
-        bytes += fs::metadata(j).map(|m| m.len()).unwrap_or(0);
+        match stat(j) {
+            Ok(m) => bytes += m.len(),
+            Err(e) => warnings.push(format!(
+                "cannot stat {}: {e}; its size is not counted",
+                j.display()
+            )),
+        }
     }
 
     let info = match p.kind {
@@ -343,7 +370,7 @@ fn build_item(p: Paired) -> anyhow::Result<ScanItem> {
     };
     let (capture_time, time_source) = match info.capture_time {
         Some(t) => (t, TimeSource::Exif),
-        None => (mtime_local(&meta, &p.primary)?, TimeSource::Mtime),
+        None => (mtime_local(&meta)?, TimeSource::Mtime),
     };
     Ok(ScanItem {
         idx: 0,
@@ -387,10 +414,8 @@ fn read_prefix(path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 /// Whole seconds, to match EXIF precision and the stored datetime format.
-fn mtime_local(meta: &Metadata, path: &Path) -> anyhow::Result<NaiveDateTime> {
-    let modified = meta
-        .modified()
-        .with_context(|| format!("mtime of {}", path.display()))?;
+fn mtime_local(meta: &Metadata) -> anyhow::Result<NaiveDateTime> {
+    let modified = meta.modified().context("cannot read the modified time")?;
     Ok(DateTime::<Local>::from(modified)
         .naive_local()
         .with_nanosecond(0)
@@ -427,6 +452,38 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("bad"), "{warnings:?}");
         assert!(warnings[0].contains("denied"), "{warnings:?}");
+    }
+
+    #[test]
+    fn unreadable_file_is_a_warning_not_a_failed_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("BAD0001.JPG");
+        fs::write(dir.path().join("OK0001.JPG"), b"x").unwrap();
+        fs::write(&bad, b"x").unwrap();
+        let pool = crate::db::open(&dir.path().join("t.db")).unwrap();
+
+        let stat = |p: &Path| {
+            if p == bad {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "denied",
+                ))
+            } else {
+                fs::metadata(p)
+            }
+        };
+        let scan = scan_with(dir.path(), &pool, &Settings::default(), &stat)
+            .expect("one bad file must not abort the scan");
+
+        assert_eq!(scan.items.len(), 1);
+        assert!(scan.items[0].primary.ends_with("OK0001.JPG"));
+        assert_eq!(scan.warnings.len(), 1, "{:?}", scan.warnings);
+        assert!(
+            scan.warnings[0].contains("BAD0001.JPG"),
+            "{:?}",
+            scan.warnings
+        );
+        assert!(scan.warnings[0].contains("denied"), "{:?}", scan.warnings);
     }
 
     #[test]

@@ -31,3 +31,19 @@ export function mergeFetchedCards(
   }
   return [...byId.values()].filter((c) => (log.removed.get(c.source) ?? 0) <= sentAt);
 }
+
+/** A card the server saw but could not scan. */
+export interface CardFailure {
+  source: string;
+  error: string;
+}
+
+/** `failures` with this card's entry added, replacing an earlier one for the same source. */
+export function withFailure(failures: CardFailure[], failure: CardFailure): CardFailure[] {
+  return [...failures.filter((f) => f.source !== failure.source), failure];
+}
+
+/** `failures` without the card at `source`, once it is pulled or scanned fine after all. */
+export function withoutFailure(failures: CardFailure[], source: string): CardFailure[] {
+  return failures.filter((f) => f.source !== source);
+}
