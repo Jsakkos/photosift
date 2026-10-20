@@ -84,7 +84,15 @@ pub struct NewPhoto {
     pub phash: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// JSON numbers are f64 in JS; a 64-bit hash would lose its low bits.
+fn phash_as_string<S: serde::Serializer>(v: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
+    match v {
+        Some(h) => s.serialize_some(&h.to_string()),
+        None => s.serialize_none(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PhotoRow {
     pub id: i64,
     pub shoot_id: i64,
@@ -99,6 +107,7 @@ pub struct PhotoRow {
     pub orientation: Option<i64>,
     pub width: Option<i64>,
     pub height: Option<i64>,
+    #[serde(serialize_with = "phash_as_string")]
     pub phash: Option<u64>,
     pub sharpness: Option<f64>,
     pub face_sharpness: Option<f64>,

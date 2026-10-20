@@ -1,5 +1,6 @@
 mod guard;
 mod import;
+mod photos;
 mod scan;
 mod ws;
 
@@ -108,6 +109,7 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/status", get(status))
         .route("/scan", post(scan::scan))
         .route("/import", post(import::start))
+        .route("/photos/{id}/outcome", post(photos::set_outcome))
         .fallback(|| async { StatusCode::NOT_FOUND })
         .with_state(state.clone());
     let guard = middleware::from_fn_with_state(state.clone(), guard::check);
