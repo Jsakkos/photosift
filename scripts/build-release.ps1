@@ -29,9 +29,9 @@
   Folder that receives the photosift\ release folder. Default <repo>\dist.
 
 .PARAMETER CudaDllDir
-  Folder holding the CUDA 12 / cuDNN 9 runtime DLLs to bundle. Defaults to
-  C:\Github\photosift\src-tauri\target\debug when that exists (the legacy Tauri
-  setup; it is deleted in Task 18, so point this at a permanent folder then).
+  Folder holding the CUDA 12 / cuDNN 9 runtime DLLs to bundle (for example the
+  folder the pip nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels were extracted
+  into). If omitted, the DLLs are not bundled and must be on PATH.
 #>
 [CmdletBinding()]
 param(
@@ -43,10 +43,6 @@ $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $repo 'dist' }
-if (-not $CudaDllDir) {
-    $legacy = 'C:\Github\photosift\src-tauri\target\debug'
-    if (Test-Path -LiteralPath $legacy) { $CudaDllDir = $legacy }
-}
 
 # Validate the output folder before spending minutes on a build.
 $dest = [System.IO.Path]::GetFullPath((Join-Path $OutDir 'photosift')).TrimEnd('\')
@@ -121,7 +117,7 @@ if ($CudaDllDir -and (Test-Path -LiteralPath $CudaDllDir)) {
     }
 }
 else {
-    Write-Warning ('No -CudaDllDir (and the legacy folder is absent): CUDA/cuDNN DLLs are not bundled. ' +
+    Write-Warning ('No -CudaDllDir given (or it does not exist): CUDA/cuDNN DLLs are not bundled. ' +
         'They must be on PATH for photosift.exe, or inference falls back to CPU.')
 }
 

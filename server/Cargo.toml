@@ -50,7 +50,7 @@ opt-level = 3
 [profile.dev.package.fast_image_resize]
 opt-level = 3
 
-# ONNX inference in dev profile is >1 s/image without these (see src-tauri).
+# ONNX inference in dev profile is >1 s/image without these (measured on the earlier prototype).
 [profile.dev.package.ort]
 opt-level = 3
 [profile.dev.package.ort-sys]

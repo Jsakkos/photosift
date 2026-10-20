@@ -73,7 +73,7 @@ The harness writes `face_count_pred`, `max_confidence`, `min_confidence`,
 count-MAE overall; plus recall restricted to rows where each condition
 flag is Y. A systematically high `missed` rate on `has_small_face=Y` rows
 points straight at the YuNet confidence threshold (currently 0.6 in
-`src-tauri/src/ai/face.rs`) — lowering it trades precision for recall.
+`server/src/enrich/faces.rs`) — lowering it trades precision for recall.
 
 ### Groups sheet
 
@@ -114,7 +114,7 @@ scale** after percentile-mapping the raw sharpness into 1–10, and
 ## Why the variability you're seeing
 
 PhotoSift's whole-image sharpness is `laplacian_variance()` over the
-grayscale preview (see `src-tauri/src/ai/sharpness.rs`), normalized
+grayscale preview (see `server/src/enrich/quality.rs`), normalized
 against a fixed calibration scale and then bucketed per-shoot into
 percentiles at display time. Two related sources of apparent variance:
 
