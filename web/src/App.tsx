@@ -1,10 +1,13 @@
-import { Link, Route, Routes, useParams } from "react-router";
+import { Link, Route, Routes, useLocation } from "react-router";
 
 import { CardBanner } from "./components/CardBanner";
 import { ImportPage } from "./pages/ImportPage";
+import { ReviewPage } from "./pages/ReviewPage";
 import { ShootsPage } from "./pages/ShootsPage";
 
 export function App() {
+  // The review screen uses the whole window: photos are the content.
+  const wide = useLocation().pathname.startsWith("/review/");
   return (
     <div className="app">
       <header className="app-header">
@@ -12,22 +15,15 @@ export function App() {
           PhotoSift
         </Link>
       </header>
-      <main className="app-main">
+      <main className={wide ? "app-main app-main-wide" : "app-main"}>
         <CardBanner />
         <Routes>
           <Route path="/" element={<ShootsPage />} />
           <Route path="/import/:scanId" element={<ImportPage />} />
-          <Route path="/review/:shootId" element={<ReviewPlaceholder />} />
+          <Route path="/review/:shootId" element={<ReviewPage />} />
           <Route path="*" element={<p className="muted">Page not found.</p>} />
         </Routes>
       </main>
     </div>
   );
-}
-
-// The review screen arrives in a later task; the route exists now so links
-// from the shoot list and the import result already resolve.
-function ReviewPlaceholder() {
-  const { shootId } = useParams();
-  return <p className="muted">Review of shoot {shootId}: coming soon.</p>;
 }

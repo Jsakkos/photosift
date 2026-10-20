@@ -1,0 +1,121 @@
+import { describe, expect, it } from "vitest";
+
+import type { ReviewPhoto, ShootReview } from "../api/types";
+import { buildView, burstOf, mergePhotos, momentTitle, stepMoment, stepPhoto } from "./model";
+
+function photo(id: number, outcome: ReviewPhoto["outcome"] = "unreviewed"): ReviewPhoto {
+  return {
+    id,
+    w: 640,
+    h: 480,
+    capture_time: null,
+    camera: null,
+    outcome,
+    blooper: false,
+    face_count: 0,
+    signal_score: null,
+    has_video: false,
+  };
+}
+
+const review: Pick<ShootReview, "moments" | "highlights"> = {
+  highlights: [2, 5],
+  moments: [
+    {
+      idx: 0,
+      start: "2024-05-01T15:48:00",
+      end: null,
+      bursts: [
+        { idx: 0, photo_ids: [2, 1] },
+        { idx: 1, photo_ids: [3] },
+      ],
+    },
+    { idx: 1, start: null, end: null, bursts: [{ idx: 2, photo_ids: [5, 4, 6] }] },
+  ],
+};
+const photos = Object.fromEntries(
+  [photo(1), photo(2, "album"), photo(3), photo(4, "album"), photo(5), photo(6)].map((p) => [
+    String(p.id),
+    p,
+  ]),
+);
+
+describe("buildView", () => {
+  it("lists large frames before strip frames inside a moment", () => {
+    const view = buildView(review, photos, null);
+    expect(view.moments[0]!.order).toEqual([2, 3, 1]);
+    expect(view.moments[1]!.order).toEqual([5, 4, 6]);
+    expect(view.order).toEqual([2, 3, 1, 5, 4, 6]);
+  });
+
+  it("counts every shot of a moment whatever the filter", () => {
+    const view = buildView(review, photos, "album");
+    expect(view.moments[0]!.shots).toBe(3);
+    expect(view.moments[0]!.byOutcome.album).toBe(1);
+  });
+
+  it("filters photos, promotes the next frame to large and drops empty moments", () => {
+    const view = buildView(review, photos, "album");
+    expect(view.order).toEqual([2, 4]);
+    expect(view.moments.map((m) => m.bursts.map((b) => b.top))).toEqual([[2], [4]]);
+    expect(view.highlights).toEqual([2]);
+    expect(buildView(review, photos, "delete").moments).toEqual([]);
+  });
+
+  it("skips ids the photo map does not know", () => {
+    const view = buildView(review, { "2": photo(2) }, null);
+    expect(view.order).toEqual([2]);
+  });
+});
+
+describe("navigation", () => {
+  const view = buildView(review, photos, null);
+
+  it("steps and clamps", () => {
+    expect(stepPhoto(view.order, 2, 1)).toBe(3);
+    expect(stepPhoto(view.order, 6, 1)).toBe(6);
+    expect(stepPhoto(view.order, 2, -1)).toBe(2);
+    expect(stepPhoto(view.order, null, 1)).toBe(2);
+    expect(stepPhoto(view.order, 999, 1)).toBe(2);
+    expect(stepPhoto([], 1, 1)).toBeNull();
+  });
+
+  it("jumps to the first photo of the neighbouring moment", () => {
+    expect(stepMoment(view, 1, 1)).toBe(5);
+    expect(stepMoment(view, 4, -1)).toBe(2);
+    expect(stepMoment(view, 2, -1)).toBe(2);
+  });
+
+  it("finds the burst of a strip frame, large frame first", () => {
+    expect(burstOf(view, 1)).toEqual([2, 1]);
+    expect(burstOf(view, 999)).toEqual([]);
+  });
+});
+
+describe("momentTitle", () => {
+  it("formats the camera-local clock without a timezone shift", () => {
+    expect(momentTitle("2024-05-01T15:48:00")).toBe("3:48 pm");
+    expect(momentTitle("2024-05-01T00:05:00")).toBe("12:05 am");
+    expect(momentTitle(null)).toBe("Undated");
+  });
+
+  it("adds the day when the shoot spans several", () => {
+    expect(momentTitle("2026-10-18T15:48:00", true)).toBe("Oct 18 · 3:48 pm");
+    expect(momentTitle("2026-10-18T15:48:00", false)).toBe("3:48 pm");
+  });
+});
+
+describe("mergePhotos", () => {
+  it("keeps the on-screen value of a photo with a request in flight", () => {
+    const fetched = { "1": photo(1, "unreviewed"), "2": photo(2, "unreviewed") };
+    const current = { "1": photo(1, "album"), "2": photo(2, "library") };
+    const merged = mergePhotos(fetched, current, new Map([[1, 1]]));
+    expect(merged["1"]!.outcome).toBe("album");
+    expect(merged["2"]!.outcome).toBe("unreviewed");
+  });
+
+  it("drops photos the server no longer lists", () => {
+    const merged = mergePhotos({ "1": photo(1) }, { "1": photo(1), "9": photo(9) }, new Map());
+    expect(Object.keys(merged)).toEqual(["1"]);
+  });
+});

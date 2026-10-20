@@ -1,9 +1,12 @@
 //! Writes a fake memory card of synthetic JPEGs for UI and end-to-end tests.
 //!
 //! `make-synthetic-card <out dir> <json | @file>` where the JSON is a list of
-//! `{name, time: "YYYY-MM-DDTHH:MM:SS", camera, w, h, orientation}`. `camera`
-//! becomes the EXIF Make, so the server reports exactly that string as the
-//! camera. `w`, `h` and `orientation` default to 640, 480 and 1.
+//! `{name, time: "YYYY-MM-DDTHH:MM:SS", camera, w, h, orientation, pattern}`.
+//! `camera` becomes the EXIF Make, so the server reports exactly that string as
+//! the camera. `w`, `h` and `orientation` default to 640, 480 and 1. `pattern`
+//! (`"blocks"` or `"stripes"`) defaults to alternating by position, which keeps
+//! neighbouring frames visually distinct; give consecutive frames the same
+//! pattern and size to make them a near-duplicate burst.
 
 use std::{fs, path::Path};
 
@@ -23,6 +26,7 @@ struct CardFile {
     h: u32,
     #[serde(default = "default_orientation")]
     orientation: u16,
+    pattern: Option<String>,
 }
 
 fn default_w() -> u32 {
@@ -54,10 +58,12 @@ fn main() -> anyhow::Result<()> {
             format!("{}.jpg", f.name)
         };
         // Alternating patterns keep neighbouring frames visually distinct.
-        let pattern = if i % 2 == 0 {
-            Pattern::Blocks
-        } else {
-            Pattern::Stripes
+        let pattern = match f.pattern.as_deref() {
+            Some("blocks") => Pattern::Blocks,
+            Some("stripes") => Pattern::Stripes,
+            Some(other) => bail!("unknown pattern {other:?} (blocks | stripes)"),
+            None if i % 2 == 0 => Pattern::Blocks,
+            None => Pattern::Stripes,
         };
         let taken = f.time.format("%Y:%m:%d %H:%M:%S").to_string();
         let jpeg = synthetic_jpeg_with_exif(

@@ -1,0 +1,439 @@
+/* Review screen. Palette extends styles.css; outcome colours are the only new hues. */
+.review {
+  --album: #6fbf73;
+  --library: #6aa6ff;
+  --archive: #8a8a96;
+  --delete: #ff7b7b;
+  --call: #e8c27a;
+  --blooper: #e3a6d2;
+  --sticky: 4.25rem;
+  padding-bottom: 6rem;
+}
+
+.review .muted {
+  color: var(--muted);
+}
+
+/* --- summary / filter bar ------------------------------------------------ */
+
+.summary {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  margin: 0 -1.5rem;
+  padding: 0.75rem 1.5rem;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.summary-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.summary h1 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.summary-progress {
+  font-size: 0.85rem;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.chip {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  border-radius: 999px;
+  padding: 0.25rem 0.8rem;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.chip b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.chip-album b { color: var(--album); }
+.chip-library b { color: var(--library); }
+.chip-unreviewed b { color: var(--call); }
+.chip-delete b { color: var(--delete); }
+
+.chip[aria-pressed="true"] {
+  background: #2a2f3a;
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.help-button {
+  border-radius: 999px;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--muted);
+}
+
+/* --- highlights ---------------------------------------------------------- */
+
+.highlights {
+  margin-top: 1.5rem;
+}
+
+.review h2 {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* --- moments ------------------------------------------------------------- */
+
+.moments {
+  margin-top: 1.5rem;
+}
+
+.moment {
+  border-top: 1px solid var(--border);
+  padding: 1rem 0 1.25rem;
+}
+
+.moment-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.moment-head h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.empty-filter {
+  margin-top: 2rem;
+}
+
+/* --- photo tiles --------------------------------------------------------- */
+
+.frame {
+  position: relative;
+  background: #1a1a1e;
+  border-radius: 3px;
+  cursor: pointer;
+  /* Keep the focused tile clear of the sticky bar when scrolled into view. */
+  scroll-margin: var(--sticky) 0 1.5rem;
+}
+
+.tile .frame {
+  scroll-margin-top: calc(var(--sticky) + 0.5rem);
+}
+
+.frame img {
+  display: block;
+  border-radius: 3px;
+  object-fit: contain;
+  user-select: none;
+}
+
+/* The outcome shows as a coloured edge; focus is a white ring outside it. */
+[data-outcome="album"] > .frame { box-shadow: inset 0 0 0 3px var(--album); }
+[data-outcome="library"] > .frame { box-shadow: inset 0 0 0 3px var(--library); }
+[data-outcome="delete"] > .frame { box-shadow: inset 0 0 0 3px var(--delete); }
+[data-outcome="delete"] > .frame img { opacity: 0.55; }
+[data-outcome="archive"] > .frame img { opacity: 0.8; }
+
+[data-focused="true"] > .frame {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.frame:hover {
+  filter: brightness(1.08);
+}
+
+.why {
+  min-height: 1.4rem;
+  padding-top: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.1rem;
+  margin-top: 0.8rem;
+  align-items: flex-start;
+}
+
+.strip-burst {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+}
+
+.kind-strip img {
+  opacity: 0.5;
+  transition: opacity 0.12s;
+}
+
+.kind-strip .frame:hover img,
+.kind-strip[data-focused="true"] img,
+.kind-strip:not([data-outcome="unreviewed"]) img {
+  opacity: 1;
+}
+
+.badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  max-width: calc(100% - 12px);
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.badge ~ .badge {
+  top: 28px;
+}
+
+.badge-album { background: #2d5a30; color: #d6f2d8; }
+.badge-library { background: #1e3f6e; color: #d4e5ff; }
+.badge-delete { background: #7a2a2a; color: #ffdada; }
+.badge-archive { background: rgba(0, 0, 0, 0.72); color: #cfcfd6; }
+.badge-blooper { background: #6a2f5a; color: #f6d3ec; }
+.badge-video { background: #333; }
+
+.kind-strip .badge {
+  top: 3px;
+  left: 3px;
+  padding: 0 5px;
+  font-size: 0.6rem;
+}
+
+.kind-strip .badge ~ .badge {
+  top: 18px;
+}
+
+/* --- delete bar ---------------------------------------------------------- */
+
+.delete-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-top: 1rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+button.danger {
+  border-color: var(--delete);
+  color: var(--delete);
+  background: transparent;
+}
+
+button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--delete) 18%, transparent);
+}
+
+/* --- loupe / compare ----------------------------------------------------- */
+
+.loupe,
+.compare {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0a0a0c;
+}
+
+.loupe-image {
+  max-width: 100vw;
+  max-height: 100vh;
+  object-fit: contain;
+  user-select: none;
+}
+
+.loupe-hud {
+  position: absolute;
+  top: 1rem;
+  left: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  font-size: 0.9rem;
+  text-shadow: 0 1px 3px #000;
+}
+
+.loupe-hud .badge {
+  position: static;
+}
+
+.loupe-keys {
+  position: absolute;
+  bottom: 0.9rem;
+  left: 0;
+  right: 0;
+  width: fit-content;
+  margin: 0 auto;
+  padding: 0.2rem 0.8rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 0.8rem;
+}
+
+.compare-body {
+  width: calc(100% - 3rem);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.compare-row {
+  display: flex;
+  justify-content: center;
+}
+
+.compare-frame .frame {
+  cursor: pointer;
+}
+
+/* --- dialogs / toasts ---------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.dialog {
+  width: min(34rem, calc(100vw - 2rem));
+  padding: 1.25rem 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.dialog h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
+.dialog p {
+  margin: 0.5rem 0;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1.25rem;
+}
+
+.help table {
+  width: 100%;
+  margin-bottom: 1rem;
+  border-collapse: collapse;
+}
+
+.help th {
+  width: 5rem;
+  text-align: left;
+  font-weight: 400;
+  padding: 0.2rem 0;
+}
+
+.help td {
+  padding: 0.2rem 0;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 1.6rem;
+  padding: 0 0.4rem;
+  text-align: center;
+  font: 0.8rem/1.5 inherit;
+  background: var(--bg);
+  border: 1px solid #555;
+  border-radius: 4px;
+}
+
+.toasts {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: min(28rem, calc(100vw - 2.5rem));
+}
+
+.toast {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.6rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+.toast-error {
+  border-color: var(--delete);
+}
+
+.toast button {
+  margin-left: auto;
+  padding: 0 0.4rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kind-strip img {
+    transition: none;
+  }
+}

@@ -26,6 +26,8 @@ export interface CardFile {
   w?: number;
   h?: number;
   orientation?: number;
+  /** Same pattern and size on consecutive frames makes them a near-duplicate burst. */
+  pattern?: "blocks" | "stripes";
 }
 
 export interface TestServer {
@@ -129,7 +131,10 @@ async function startServer(): Promise<{ server: TestServer; stop: () => Promise<
     async makeCard(files) {
       cards += 1;
       const dir = path.join(home, `card-${cards}`);
-      await run(CARD_BIN, [dir, JSON.stringify(files)]);
+      // A file, not an argument: 400 entries overflow the Windows command line.
+      const spec = path.join(home, `card-${cards}.json`);
+      await fs.writeFile(spec, JSON.stringify(files));
+      await run(CARD_BIN, [dir, `@${spec}`]);
       return dir;
     },
     async scanCard(cardDir) {

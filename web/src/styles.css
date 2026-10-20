@@ -297,3 +297,7 @@ button:focus-visible {
 .warnings {
   color: var(--danger);
 }
+
+.app-main-wide {
+  max-width: none;
+}
