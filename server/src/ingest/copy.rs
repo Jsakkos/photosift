@@ -80,7 +80,7 @@ pub fn copy_verified_expecting(
                 None => hash_file(src)?,
             };
             let member = Member::of(&name, &sha);
-            let n = free_suffix(dest_dir, &[member], &|_| false);
+            let n = free_suffix(dest_dir, &[member], true, &|_| false);
             with_stem(&name, &suffixed(&member_stem(&name), n))
         }
     };
@@ -137,7 +137,7 @@ pub fn write_verified(
     let target = match stem_override {
         Some(stem) => with_stem(src_name, stem),
         None => {
-            let n = free_suffix(dest_dir, &[Member::of(src_name, &sha256)], &|_| false);
+            let n = free_suffix(dest_dir, &[Member::of(src_name, &sha256)], true, &|_| false);
             with_stem(src_name, &suffixed(&member_stem(src_name), n))
         }
     };
@@ -288,7 +288,12 @@ fn slot(path: &Path, sha256: &str) -> Slot {
 /// `.xmp` sidecar name are usable. A member slot is usable when free or when it
 /// already holds identical bytes. The sidecar name must be free, unless a
 /// member already holds identical bytes (it is then that frame's own sidecar).
-fn free_suffix(dir: &Path, members: &[Member], reserved: &dyn Fn(&Path) -> bool) -> u32 {
+fn free_suffix(
+    dir: &Path,
+    members: &[Member],
+    sidecar: bool,
+    reserved: &dyn Fn(&Path) -> bool,
+) -> u32 {
     let primary_stem = member_stem(members[0].name);
     for n in 0.. {
         let mut usable = true;
@@ -303,11 +308,13 @@ fn free_suffix(dir: &Path, members: &[Member], reserved: &dyn Fn(&Path) -> bool)
             }
             paths.push(path);
         }
-        let xmp = dir.join(format!("{}.xmp", suffixed(&primary_stem, n)));
-        if xmp.exists() && !resuming {
-            usable = false;
+        if sidecar {
+            let xmp = dir.join(format!("{}.xmp", suffixed(&primary_stem, n)));
+            if xmp.exists() && !resuming {
+                usable = false;
+            }
+            paths.push(xmp);
         }
-        paths.push(xmp);
         if usable && !paths.iter().any(|p| reserved(p)) {
             return n;
         }
@@ -333,14 +340,26 @@ impl NameClaims {
     /// frame's `.xmp`. Returns the suffix (0 = no suffix); apply it to each
     /// member's own stem with [`suffixed_stem`].
     pub fn claim(&self, dir: &Path, members: &[Member]) -> u32 {
+        self.claim_inner(dir, members, true)
+    }
+
+    /// For a JPEG joining a RAW that is already in the library: the frame's
+    /// sidecar is the RAW's own and must not push the JPEG to a new name.
+    pub fn claim_sibling(&self, dir: &Path, member: Member) -> u32 {
+        self.claim_inner(dir, &[member], false)
+    }
+
+    fn claim_inner(&self, dir: &Path, members: &[Member], sidecar: bool) -> u32 {
         let mut reserved = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
-        let n = free_suffix(dir, members, &|p| reserved.contains(&key(p)));
+        let n = free_suffix(dir, members, sidecar, &|p| reserved.contains(&key(p)));
         for m in members {
             let name = with_stem(m.name, &suffixed(&member_stem(m.name), n));
             reserved.insert(key(&dir.join(name)));
         }
-        let xmp = format!("{}.xmp", suffixed(&member_stem(members[0].name), n));
-        reserved.insert(key(&dir.join(xmp)));
+        if sidecar {
+            let xmp = format!("{}.xmp", suffixed(&member_stem(members[0].name), n));
+            reserved.insert(key(&dir.join(xmp)));
+        }
         n
     }
 }
@@ -539,7 +558,7 @@ mod tests {
     fn existing_sidecar_forces_a_new_name() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("A.xmp"), b"<xmp/>").unwrap();
-        let n = free_suffix(dir.path(), &[Member::of("A.RAF", "raw")], &|_| false);
+        let n = free_suffix(dir.path(), &[Member::of("A.RAF", "raw")], true, &|_| false);
         assert_eq!(n, 1);
     }
 }

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::Context;
-use chrono::Duration;
+use chrono::{Datelike, Duration};
 use rayon::prelude::*;
 use serde::Deserialize;
 
@@ -20,7 +20,8 @@ use super::events::EventKind;
 use super::naming::folder_path;
 use super::scan::{CardScan, ItemKind, ScanItem};
 use crate::db::photos::{
-    commit_import_event, known_hashes, NewFile, NewPhoto, NewShoot, PhotoBundle, ShootKind,
+    attach_jpegs, commit_import_event, known_hashes, photo_for_file_hash, Attachment, NewFile,
+    NewPhoto, NewShoot, PhotoBundle, ShootKind,
 };
 use crate::db::DbPool;
 use crate::events::{EventHub, ServerEvent};
@@ -47,8 +48,9 @@ pub struct ImportRequest {
     pub camera_offsets: HashMap<String, i64>,
 }
 
-/// Rejects requests that refer to items the scan does not have, or that would
-/// import one item twice.
+/// Rejects requests that refer to items the scan does not have, that would
+/// import one item twice, or that file an Everyday event spanning several
+/// months into a single month folder (files never move after ingest).
 pub fn validate(scan: &CardScan, req: &ImportRequest) -> Result<(), String> {
     if req.events.is_empty() {
         return Err("no events to import".into());
@@ -67,6 +69,25 @@ pub fn validate(scan: &CardScan, req: &ImportRequest) -> Result<(), String> {
             }
             if !seen.insert(idx) {
                 return Err(format!("item {idx} is selected more than once"));
+            }
+        }
+        if ev.kind == EventKind::Everyday {
+            let months: HashSet<(i32, u32)> = ev
+                .item_idxs
+                .iter()
+                .map(|&i| {
+                    let it = &scan.items[i];
+                    let secs = req.camera_offsets.get(&it.camera).copied().unwrap_or(0);
+                    let t = it.capture_time + Duration::seconds(secs);
+                    (t.year(), t.month())
+                })
+                .collect();
+            if months.len() > 1 {
+                return Err(
+                    "an Everyday event cannot span more than one calendar month; \
+                            split it by month or make it a named event"
+                        .into(),
+                );
             }
         }
     }
@@ -199,7 +220,7 @@ fn run_events(
         // A crash leaves .partial files that no later run would ever name again.
         sweep_partials(&folder);
 
-        let results: Vec<anyhow::Result<Option<Processed>>> = pool.install(|| {
+        let results: Vec<anyhow::Result<Outcome>> = pool.install(|| {
             items
                 .par_iter()
                 .map(|it| process_item(&shared, it, &folder))
@@ -207,11 +228,13 @@ fn run_events(
         });
 
         let mut processed = Vec::new();
+        let mut attachments = Vec::new();
         let mut first_error = None;
         for (item, r) in items.iter().zip(results) {
             match r {
-                Ok(Some(p)) => processed.push(p),
-                Ok(None) => summary.skipped += 1,
+                Ok(Outcome::New(p)) => processed.push(*p),
+                Ok(Outcome::Attached(a)) => attachments.push(a),
+                Ok(Outcome::Skipped) => summary.skipped += 1,
                 Err(e) => {
                     first_error.get_or_insert(e.context(format!("{}", item.primary.display())));
                 }
@@ -232,6 +255,10 @@ fn run_events(
             };
             commit_event(ctx, &shoot, &items, &req.camera_offsets, processed, summary)?;
         }
+        if !attachments.is_empty() {
+            attach_jpegs(&ctx.db, &attachments).context("recording attached JPEGs")?;
+            summary.copied += attachments.len();
+        }
         if let Some(e) = first_error {
             return Err(e);
         }
@@ -241,6 +268,15 @@ fn run_events(
 
 fn offset_for(shared: &Shared, item: &ScanItem) -> Duration {
     Duration::seconds(shared.offsets.get(&item.camera).copied().unwrap_or(0))
+}
+
+/// What became of one scanned item.
+enum Outcome {
+    /// Content already in the library; nothing copied.
+    Skipped,
+    New(Box<Processed>),
+    /// Only a camera JPEG was new: its RAW was imported earlier.
+    Attached(Attachment),
 }
 
 /// An item that was copied and is waiting for its rows.
@@ -300,27 +336,24 @@ fn commit_event(
     Ok(())
 }
 
-/// Copies one item. `Ok(None)` means its content was already in the library.
-fn process_item(
-    shared: &Shared,
-    item: &ScanItem,
-    folder: &Path,
-) -> anyhow::Result<Option<Processed>> {
-    let name = item
-        .primary
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let processed = match item.kind {
+fn process_item(shared: &Shared, item: &ScanItem, folder: &Path) -> anyhow::Result<Outcome> {
+    let name = file_name_string(&item.primary);
+    let outcome = match item.kind {
         ItemKind::Photo => process_photo(shared, item, &name, folder)?,
         ItemKind::Video => process_video(shared, item, &name, folder)?,
     };
     shared.tick(&name);
-    Ok(processed)
+    Ok(outcome)
 }
 
 fn size_of(path: &Path) -> i64 {
     fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0)
+}
+
+fn file_name_string(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn process_photo(
@@ -328,14 +361,84 @@ fn process_photo(
     item: &ScanItem,
     name: &str,
     folder: &Path,
-) -> anyhow::Result<Option<Processed>> {
+) -> anyhow::Result<Outcome> {
     // The one read of the source: hashed, copied, decoded and EXIF-read from memory.
     let bytes = fs::read(&item.primary).with_context(|| format!("reading {name}"))?;
     let sha256 = sha256_hex(&bytes);
     if !shared.is_fresh(&sha256)? {
-        return Ok(None);
+        // The RAW is already here, but its camera JPEG may be new (RAWs
+        // imported first, RAW+JPEG card later) and must not be lost.
+        return process_orphan_sibling(shared, item, folder, &sha256);
+    }
+    copy_photo(shared, item, name, folder, &bytes, &sha256)
+}
+
+/// The primary was a duplicate; handles its sibling JPEG on its own.
+fn process_orphan_sibling(
+    shared: &Shared,
+    item: &ScanItem,
+    folder: &Path,
+    primary_sha: &str,
+) -> anyhow::Result<Outcome> {
+    let Some(path) = &item.sibling_jpeg else {
+        return Ok(Outcome::Skipped);
+    };
+    let name = file_name_string(path);
+    let jpeg = fs::read(path).with_context(|| format!("reading {name}"))?;
+    let hash = sha256_hex(&jpeg);
+    if !shared.is_fresh(&hash)? {
+        return Ok(Outcome::Skipped);
     }
 
+    // Prefer attaching to the photo that owns the RAW, beside the RAW and
+    // under its stem; fall back to a JPEG-only photo in this event's folder.
+    let owner = photo_for_file_hash(&shared.ctx.db, primary_sha)?
+        .filter(|o| o.photo_jpeg_path.is_none())
+        .and_then(|o| {
+            let raw = PathBuf::from(&o.path);
+            let dir = raw.parent().filter(|d| d.is_dir())?.to_path_buf();
+            let stem = raw.file_stem()?.to_string_lossy().into_owned();
+            Some((o.photo_id, dir, stem))
+        });
+    if let Some((photo_id, dir, raw_stem)) = owner {
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let aligned = format!("{raw_stem}.{ext}");
+        let n = shared
+            .claims
+            .claim_sibling(&dir, Member::of(&aligned, &hash));
+        let copied = write_verified(&jpeg, &name, &dir, Some(&suffixed_stem(&aligned, n)))
+            .with_context(|| format!("copying {name}"))?;
+        return Ok(Outcome::Attached(Attachment {
+            photo_id,
+            file: NewFile {
+                sha256: copied.sha256,
+                path: copied.dest.to_string_lossy().into_owned(),
+                name,
+                size: jpeg.len() as i64,
+            },
+        }));
+    }
+
+    let jpeg_item = ScanItem {
+        primary: path.clone(),
+        sibling_jpeg: None,
+        ..item.clone()
+    };
+    copy_photo(shared, &jpeg_item, &name, folder, &jpeg, &hash)
+}
+
+/// Copies a photo whose primary hash `sha256` was just accepted as new.
+fn copy_photo(
+    shared: &Shared,
+    item: &ScanItem,
+    name: &str,
+    folder: &Path,
+    bytes: &[u8],
+    sha256: &str,
+) -> anyhow::Result<Outcome> {
     // A sibling whose content is already in the library is not copied again;
     // files.sha256 is unique, so registering it twice would fail the event.
     let sibling = match &item.sibling_jpeg {
@@ -343,26 +446,23 @@ fn process_photo(
             let jpeg = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
             let hash = sha256_hex(&jpeg);
             let fresh = shared.is_fresh(&hash)?;
-            fresh.then(|| {
-                let file_name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                (path.clone(), file_name, jpeg, hash)
-            })
+            fresh.then(|| (file_name_string(path), jpeg, hash))
         }
         None => None,
     };
 
     fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
-    let mut members = vec![Member::of(name, &sha256)];
-    if let Some((_, file_name, _, hash)) = &sibling {
+    let mut members = vec![Member::of(name, sha256)];
+    if let Some((file_name, _, hash)) = &sibling {
         members.push(Member::of(file_name, hash));
     }
     let n = shared.claims.claim(folder, &members);
-    let suffix = |file_name: &str| (n > 0).then(|| suffixed_stem(file_name, n));
+    // Always pass the claimed stem, even for n == 0: left to itself the writer
+    // would re-pick a name for that one file without the pair's context and
+    // could split the pair (e.g. a stray .xmp pushing only the JPEG to _1).
+    let stem_for = |file_name: &str| suffixed_stem(file_name, n);
 
-    let main = write_verified(&bytes, name, folder, suffix(name).as_deref())
+    let main = write_verified(bytes, name, folder, Some(&stem_for(name)))
         .with_context(|| format!("copying {name}"))?;
     let mut files = vec![NewFile {
         sha256: main.sha256.clone(),
@@ -371,8 +471,8 @@ fn process_photo(
         size: bytes.len() as i64,
     }];
     let mut jpeg_path = None;
-    if let Some((_, file_name, jpeg, _)) = &sibling {
-        let copied = write_verified(jpeg, file_name, folder, suffix(file_name).as_deref())
+    if let Some((file_name, jpeg, _)) = &sibling {
+        let copied = write_verified(jpeg, file_name, folder, Some(&stem_for(file_name)))
             .with_context(|| format!("copying {file_name}"))?;
         files.push(NewFile {
             sha256: copied.sha256,
@@ -396,7 +496,7 @@ fn process_photo(
         (Some(main_path), jpeg_path)
     };
 
-    let rendered = render_previews(shared, item, &bytes, &ext);
+    let rendered = render_previews(shared, item, bytes, &ext);
     let (previews, width, height, phash_value, orientation) = match rendered {
         Ok(r) => (
             Some(r.previews),
@@ -414,7 +514,7 @@ fn process_photo(
     };
 
     let offset = offset_for(shared, item);
-    Ok(Some(Processed {
+    Ok(Outcome::New(Box::new(Processed {
         bundle: PhotoBundle {
             photo: NewPhoto {
                 shoot_id: 0,
@@ -434,7 +534,7 @@ fn process_photo(
             files,
         },
         previews,
-    }))
+    })))
 }
 
 struct RenderedItem {
@@ -479,20 +579,20 @@ fn process_video(
     item: &ScanItem,
     name: &str,
     folder: &Path,
-) -> anyhow::Result<Option<Processed>> {
+) -> anyhow::Result<Outcome> {
     // Streamed twice (hash, then copy) rather than held in memory: a clip can
     // be gigabytes and 16 workers would otherwise hold 16 of them.
     let sha256 = hash_file(&item.primary).with_context(|| format!("hashing {name}"))?;
     if !shared.is_fresh(&sha256)? {
-        return Ok(None);
+        return Ok(Outcome::Skipped);
     }
     fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
     let n = shared.claims.claim(folder, &[Member::of(name, &sha256)]);
-    let stem = (n > 0).then(|| suffixed_stem(name, n));
-    let copied = copy_verified_expecting(&item.primary, folder, stem.as_deref(), Some(&sha256))
+    let stem = suffixed_stem(name, n);
+    let copied = copy_verified_expecting(&item.primary, folder, Some(&stem), Some(&sha256))
         .with_context(|| format!("copying {name}"))?;
     let dest = copied.dest.to_string_lossy().into_owned();
-    Ok(Some(Processed {
+    Ok(Outcome::New(Box::new(Processed {
         bundle: PhotoBundle {
             photo: NewPhoto {
                 shoot_id: 0,
@@ -517,5 +617,5 @@ fn process_video(
             }],
         },
         previews: None,
-    }))
+    })))
 }

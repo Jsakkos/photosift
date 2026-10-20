@@ -643,3 +643,182 @@ async fn extra_same_stem_jpeg_is_imported() {
     assert_eq!(count(&env.db(), "photos"), 2);
     assert_eq!(count(&env.db(), "files"), 3);
 }
+
+// --- fix round 1 -------------------------------------------------------------
+
+/// Large enough that a RAF's embedded JPEG passes the 10 KB thumbnail cutoff.
+fn big_jpeg(taken: &'static str, pattern: Pattern) -> Vec<u8> {
+    synthetic_jpeg_with_exif(
+        1600,
+        1200,
+        pattern,
+        &ExifSpec {
+            make: Some("FUJIFILM"),
+            model: Some("X100VI"),
+            taken: Some(taken),
+            ..Default::default()
+        },
+    )
+}
+
+#[tokio::test]
+async fn late_sibling_jpeg_attaches_to_the_already_imported_raw() {
+    let env = Env::new().await;
+    let raw_jpeg = big_jpeg("2026:10:18 10:00:00", Pattern::Blocks);
+    let raf = fake_raf(&raw_jpeg);
+
+    // Day 1: only the RAW was imported (say from a RAW-only card).
+    let first = tempfile::tempdir().unwrap();
+    write(&first.path().join("DSCF0001.RAF"), &raf);
+    let frames = env.import_all(first.path(), "named", "Test Day").await;
+    assert_eq!(terminal(&frames)["copied"], 1, "{frames:?}");
+
+    // Later: the same RAW arrives again, now with its camera JPEG.
+    let second = tempfile::tempdir().unwrap();
+    write(&second.path().join("DSCF0001.RAF"), &raf);
+    let camera_jpeg = big_jpeg("2026:10:18 10:00:00", Pattern::Stripes);
+    write(&second.path().join("DSCF0001.JPG"), &camera_jpeg);
+    let frames = env.import_all(second.path(), "named", "Test Day").await;
+
+    let done = terminal(&frames);
+    assert_eq!(done["type"], "import_done", "{frames:?}");
+    assert_eq!(done["copied"], 1, "the JPEG is a copy");
+    assert_eq!(done["skipped_duplicates"], 0);
+    let dir = event_dir(env.library.path());
+    assert_eq!(names_in(&dir), ["DSCF0001.JPG", "DSCF0001.RAF"]);
+    assert_eq!(
+        std::fs::read(dir.join("DSCF0001.JPG")).unwrap(),
+        camera_jpeg
+    );
+
+    let rows = env.photos();
+    assert_eq!(rows.len(), 1, "attached, not a second photo");
+    assert_eq!(
+        Path::new(rows[0].jpeg_path.as_deref().unwrap()),
+        dir.join("DSCF0001.JPG")
+    );
+    assert_eq!(count(&env.db(), "files"), 2);
+    let owner: i64 = env
+        .db()
+        .query_row(
+            "SELECT photo_id FROM files WHERE path = ?1",
+            [dir.join("DSCF0001.JPG").to_string_lossy().into_owned()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, rows[0].id);
+
+    // Importing that card a third time finds everything and copies nothing.
+    let frames = env.import_all(second.path(), "named", "Test Day").await;
+    assert_eq!(terminal(&frames)["copied"], 0, "{frames:?}");
+    assert_eq!(terminal(&frames)["skipped_duplicates"], 1);
+}
+
+#[tokio::test]
+async fn extra_jpeg_for_a_raw_that_already_has_one_becomes_its_own_photo() {
+    let env = Env::new().await;
+    let raf = fake_raf(&big_jpeg("2026:10:18 10:00:00", Pattern::Blocks));
+    let first = tempfile::tempdir().unwrap();
+    write(&first.path().join("DSCF0001.RAF"), &raf);
+    write(
+        &first.path().join("DSCF0001.JPG"),
+        &big_jpeg("2026:10:18 10:00:00", Pattern::Stripes),
+    );
+    env.import_all(first.path(), "named", "Test Day").await;
+
+    // A different JPEG for the same RAW: nothing to attach to, nothing to lose.
+    let second = tempfile::tempdir().unwrap();
+    write(&second.path().join("DSCF0001.RAF"), &raf);
+    write(
+        &second.path().join("DSCF0001.JPG"),
+        &big_jpeg("2026:10:18 10:00:05", Pattern::Stripes),
+    );
+    let frames = env.import_all(second.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["copied"], 1, "{frames:?}");
+    let dir = event_dir(env.library.path());
+    assert_eq!(
+        names_in(&dir),
+        ["DSCF0001.JPG", "DSCF0001.RAF", "DSCF0001_1.JPG"]
+    );
+    let rows = env.photos();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r.raw_path.is_none()
+        && Path::new(r.jpeg_path.as_deref().unwrap()) == dir.join("DSCF0001_1.JPG")));
+}
+
+#[tokio::test]
+async fn everyday_event_spanning_two_months_is_rejected() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    write(
+        &card.path().join("DSCF0001.JPG"),
+        &jpeg_taken("2026:10:31 23:30:00"),
+    );
+    write(
+        &card.path().join("DSCF0002.JPG"),
+        &jpeg_taken("2026:11:02 09:00:00"),
+    );
+    let scan = env.scan(card.path()).await;
+    let post = |offsets: Value| {
+        env.http
+            .post(env.url("/api/import"))
+            .json(&json!({
+                "scan_id": scan["scan_id"],
+                "events": [{ "item_idxs": [0, 1], "kind": "everyday", "name": "" }],
+                "camera_offsets": offsets,
+            }))
+            .send()
+    };
+
+    let resp = post(json!({})).await.unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("month"), "{body}");
+    assert!(!env.library.path().join("2026").exists());
+
+    // Offset-corrected times decide: +1h moves the first frame into November.
+    let mut ws = env.ws().await;
+    let resp = post(json!({ "FUJIFILM X100VI": 3600 })).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let job_id = resp.json::<Value>().await.unwrap()["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let frames = collect_until_terminal(&mut ws, &job_id).await;
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    assert!(env
+        .library
+        .path()
+        .join("2026")
+        .join("2026-11_Everyday")
+        .is_dir());
+}
+
+#[tokio::test]
+async fn resumed_pair_stays_together_even_with_a_sidecar_present() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    let raf = fake_raf(&big_jpeg("2026:10:18 10:00:00", Pattern::Blocks));
+    let jpeg = big_jpeg("2026:10:18 10:00:00", Pattern::Stripes);
+    write(&card.path().join("DSCF0001.RAF"), &raf);
+    write(&card.path().join("DSCF0001.JPG"), &jpeg);
+    // A crash left the RAW fully copied, and a sidecar sits beside it.
+    let dir = event_dir(env.library.path());
+    write(&dir.join("DSCF0001.RAF"), &raf);
+    write(&dir.join("DSCF0001.xmp"), b"<x:xmpmeta/>");
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    assert_eq!(
+        names_in(&dir),
+        ["DSCF0001.JPG", "DSCF0001.RAF", "DSCF0001.xmp"]
+    );
+    let rows = env.photos();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        Path::new(rows[0].jpeg_path.as_deref().unwrap()),
+        dir.join("DSCF0001.JPG")
+    );
+}

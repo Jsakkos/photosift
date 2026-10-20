@@ -347,6 +347,63 @@ pub fn commit_import_event(
     })
 }
 
+/// The photo a registered file belongs to.
+#[derive(Debug, Clone)]
+pub struct ExistingFile {
+    pub photo_id: i64,
+    /// Library path of the registered file itself.
+    pub path: String,
+    pub photo_jpeg_path: Option<String>,
+}
+
+/// Looks up the photo that owns the file with this content hash, if any.
+pub fn photo_for_file_hash(pool: &DbPool, sha256: &str) -> anyhow::Result<Option<ExistingFile>> {
+    pool.with(|c| {
+        c.query_row(
+            "SELECT f.photo_id, f.path, p.jpeg_path FROM files f              JOIN photos p ON p.id = f.photo_id WHERE f.sha256 = ?1",
+            [sha256],
+            |r| {
+                Ok(ExistingFile {
+                    photo_id: r.get(0)?,
+                    path: r.get(1)?,
+                    photo_jpeg_path: r.get(2)?,
+                })
+            },
+        )
+        .optional()
+    })
+}
+
+/// A camera JPEG copied for a photo whose RAW was imported earlier.
+#[derive(Debug, Clone)]
+pub struct Attachment {
+    pub photo_id: i64,
+    pub file: NewFile,
+}
+
+/// Registers late-arriving sibling JPEGs and sets `jpeg_path` where the photo
+/// has none yet (an existing JPEG is never replaced).
+pub fn attach_jpegs(pool: &DbPool, attachments: &[Attachment]) -> anyhow::Result<()> {
+    pool.with(|c| {
+        let tx = c.unchecked_transaction()?;
+        for a in attachments {
+            tx.execute(
+                "UPDATE photos SET jpeg_path = ?1 WHERE id = ?2 AND jpeg_path IS NULL",
+                params![a.file.path, a.photo_id],
+            )?;
+            insert_file_on(
+                &tx,
+                &a.file.sha256,
+                &a.file.path,
+                &a.file.name,
+                a.file.size,
+                Some(a.photo_id),
+            )?;
+        }
+        tx.commit()
+    })
+}
+
 /// Which of `hashes` are already registered in `files`.
 pub fn known_hashes(pool: &DbPool, hashes: &[String]) -> anyhow::Result<HashSet<String>> {
     pool.with(|c| {
