@@ -4,12 +4,13 @@ use axum::{http::StatusCode, routing::get, Json, Router};
 use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
 
-use crate::config::Settings;
+use crate::{config::Settings, db::DbPool};
 
 #[derive(Clone)]
 pub struct AppState {
     pub settings: Arc<Settings>,
     pub data_root: PathBuf,
+    pub db: DbPool,
 }
 
 pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
