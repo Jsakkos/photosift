@@ -156,6 +156,70 @@ fn embedded_ignores_tiny_thumbnails_and_errors_when_none() {
 }
 
 #[test]
+fn embedded_truncated_jpeg_without_eoi_is_no_jpeg() {
+    let mut jpeg = padded_jpeg(30_000);
+    jpeg.truncate(jpeg.len() - 2); // drop FF D9
+    assert!(matches!(
+        embedded::largest_jpeg(&jpeg, "bin"),
+        Err(MediaError::NoJpeg)
+    ));
+    // Cut mid-entropy-data as well.
+    jpeg.truncate(jpeg.len() - 100);
+    assert!(matches!(
+        embedded::largest_jpeg(&jpeg, "bin"),
+        Err(MediaError::NoJpeg)
+    ));
+}
+
+#[test]
+fn embedded_segment_length_overshooting_buffer_is_no_jpeg() {
+    let mut buf = vec![0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xFF];
+    buf.extend(junk(20_000, 4));
+    assert!(matches!(
+        embedded::largest_jpeg(&buf, "bin"),
+        Err(MediaError::NoJpeg)
+    ));
+    // Length that would overflow naive offset arithmetic near the end of the buffer.
+    let tail = [0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xFF, 0xFF, 0xFF];
+    assert!(matches!(
+        embedded::largest_jpeg(&tail, "bin"),
+        Err(MediaError::NoJpeg)
+    ));
+}
+
+#[test]
+fn embedded_sos_without_eoi_is_no_jpeg() {
+    // SOI, APP0 (len 2), SOS (len 2), then 20 KB of scan data and no FF D9.
+    let mut buf = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x02, 0xFF, 0xDA, 0x00, 0x02];
+    buf.extend(junk(20_000, 5));
+    assert!(matches!(
+        embedded::largest_jpeg(&buf, "bin"),
+        Err(MediaError::NoJpeg)
+    ));
+}
+
+#[test]
+fn embedded_scan_is_linear_on_many_eoi_less_headers() {
+    // 64-byte cells, each a valid SOI+SOS header; no FF D9 anywhere. A scan that
+    // restarts the EOI search per candidate would do ~65k searches of ~4 MB.
+    let cell = |_: usize| {
+        let mut c = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x02, 0xFF, 0xDA, 0x00, 0x02];
+        c.resize(64, 0x11);
+        c
+    };
+    let buf: Vec<u8> = (0..65_536).flat_map(cell).collect();
+    assert_eq!(buf.len(), 4 * 1024 * 1024);
+    let start = std::time::Instant::now();
+    let res = embedded::largest_jpeg(&buf, "bin");
+    assert!(matches!(res, Err(MediaError::NoJpeg)));
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "scan took {:?}",
+        start.elapsed()
+    );
+}
+
+#[test]
 fn embedded_nef_requires_tiff_magic() {
     let outer = padded_jpeg(30_000);
     let mut buf = junk(64, 9);
@@ -288,10 +352,9 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 #[ignore = "needs PHOTOSIFT_GOLDEN_DIR (real RAF/NEF fixture, built in Task 6)"]
 fn golden_raf_and_nef() {
-    let Some(dir) = std::env::var_os("PHOTOSIFT_GOLDEN_DIR") else {
-        eprintln!("PHOTOSIFT_GOLDEN_DIR unset; skipping golden_raf_and_nef");
-        return;
-    };
+    // Panic rather than skip: an --ignored run that checked nothing must not look green.
+    let dir = std::env::var_os("PHOTOSIFT_GOLDEN_DIR")
+        .expect("set PHOTOSIFT_GOLDEN_DIR; see tests/golden/README.md");
     let mut files = Vec::new();
     walk(Path::new(&dir), &mut files);
     let mut checked = 0;

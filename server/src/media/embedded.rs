@@ -80,39 +80,54 @@ fn scan_largest(data: &[u8]) -> Result<&[u8], MediaError> {
             continue;
         }
         match jpeg_end(data, i) {
-            Some(end) => {
+            JpegEnd::Found(end) => {
                 if end - i > MIN_PREVIEW_BYTES && best.is_none_or(|(s, e)| end - i > e - s) {
                     best = Some((i, end));
                 }
                 // Resuming after the blob also skips thumbnails nested in its APP segments.
                 i = end;
             }
-            None => i += 1,
+            JpegEnd::Malformed => i += 1,
+            // No FF D9 exists past this SOS, so no later candidate (whose scan data
+            // starts at or after it) can finish either. Without this stop, a crafted
+            // buffer full of SOI+SOS headers rescans the whole tail per candidate.
+            JpegEnd::NoEoi => break,
         }
     }
     best.map(|(s, e)| &data[s..e]).ok_or(MediaError::NoJpeg)
 }
 
-/// One past the EOI of the JPEG starting at `start`: walk segments by length
+enum JpegEnd {
+    /// One past the EOI.
+    Found(usize),
+    /// Header walk failed (bad lengths, ran off the buffer): only this candidate is bad.
+    Malformed,
+    /// Reached the scan data but no FF D9 follows anywhere in the buffer.
+    NoEoi,
+}
+
+/// The end of the JPEG starting at `start`: walk segments by length
 /// until SOS, then look for FF D9 (entropy data stuffs every FF with 00, so
 /// the first FF D9 is the true end even across progressive scans).
-fn jpeg_end(data: &[u8], start: usize) -> Option<usize> {
+fn jpeg_end(data: &[u8], start: usize) -> JpegEnd {
     let mut j = start + 2;
     while j + 4 <= data.len() && data[j] == 0xFF {
         let marker = data[j + 1];
         if marker == 0xD9 {
-            return Some(j + 2);
+            return JpegEnd::Found(j + 2);
         }
         let seg = u16::from_be_bytes([data[j + 2], data[j + 3]]) as usize;
         if marker == 0xDA {
             let body = j + 2 + seg;
-            let tail = data.get(body..)?;
-            return tail
-                .windows(2)
-                .position(|w| w == [0xFF, 0xD9])
-                .map(|k| body + k + 2);
+            let found = data
+                .get(body..)
+                .and_then(|tail| tail.windows(2).position(|w| w == [0xFF, 0xD9]));
+            return match found {
+                Some(k) => JpegEnd::Found(body + k + 2),
+                None => JpegEnd::NoEoi,
+            };
         }
         j += 2 + seg;
     }
-    None
+    JpegEnd::Malformed
 }
