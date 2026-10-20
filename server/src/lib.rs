@@ -7,6 +7,8 @@ pub mod events;
 pub mod ingest;
 pub mod media;
 pub mod outcome;
+#[doc(hidden)]
+pub mod testsupport;
 pub mod trash;
 pub mod xmp;
 

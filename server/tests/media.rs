@@ -267,7 +267,7 @@ fn embedded_jpeg_extension_returns_input_whole() {
 
 // --- exif -----------------------------------------------------------------
 
-fn spec() -> ExifSpec {
+fn spec() -> ExifSpec<'static> {
     ExifSpec {
         orientation: Some(6),
         make: Some("NIKON CORPORATION"),
