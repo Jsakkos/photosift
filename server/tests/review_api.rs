@@ -161,10 +161,22 @@ impl Env {
             .await
     }
 
+    /// Approves everything currently marked delete, like the confirm dialog
+    /// does when nothing changes while it is open.
     async fn trash(&self) -> Value {
+        let ids: Vec<i64> = photos::pending_deletes(&self.pool, self.shoot)
+            .unwrap()
+            .iter()
+            .map(|p| p.id)
+            .collect();
+        self.trash_ids(&ids).await
+    }
+
+    async fn trash_ids(&self, ids: &[i64]) -> Value {
         let resp = self
             .http
             .post(self.url(&format!("/api/shoots/{}/trash", self.shoot)))
+            .json(&json!({ "photo_ids": ids }))
             .send()
             .await
             .unwrap();
@@ -401,6 +413,7 @@ async fn review_of_unknown_shoot_is_404() {
     let resp = env
         .http
         .post(env.url("/api/shoots/9999/trash"))
+        .json(&json!({ "photo_ids": [1] }))
         .send()
         .await
         .unwrap();
@@ -756,4 +769,78 @@ async fn unavailable_library_folder_is_a_failure_not_a_trash() {
     std::fs::create_dir_all(env.folder.path()).unwrap();
     let body = env.trash().await;
     assert_eq!(body["trashed"], 1, "{body}");
+}
+
+#[tokio::test]
+async fn trash_only_touches_the_approved_ids() {
+    let mut env = Env::new().await;
+    let approved = env.add_photo("SEEN", 0);
+    let late = env.add_photo("LATE", 1);
+    let kept = env.add_photo("KEPT", 2);
+    env.set_outcome(approved, "delete");
+    env.set_outcome(kept, "album");
+    // Marked delete after the dialog listed `approved`; it was never shown.
+    env.set_outcome(late, "delete");
+
+    // `kept` is no pending delete and 9999 does not exist: both only skipped.
+    let body = env.trash_ids(&[approved, kept, 9999]).await;
+    assert_eq!(body["trashed"], 1, "{body}");
+    assert_eq!(body["skipped"], 2, "{body}");
+    assert!(body["failed"].as_array().unwrap().is_empty());
+
+    for ext in ["NEF", "JPG", "xmp"] {
+        assert!(!exists(&env.path(&format!("SEEN.{ext}"))));
+        assert!(exists(&env.path(&format!("LATE.{ext}"))), "LATE.{ext}");
+        assert!(exists(&env.path(&format!("KEPT.{ext}"))));
+    }
+    let row = photos::get_photo(&env.pool, late).unwrap().unwrap();
+    assert!(row.trashed_at.is_none());
+    assert_eq!(env.get_json("/api/shoots").await[0]["counts"]["delete"], 1);
+}
+
+#[tokio::test]
+async fn trash_requires_the_approved_ids() {
+    let mut env = Env::new().await;
+    let id = env.add_photo("A", 0);
+    env.set_outcome(id, "delete");
+    let resp = env
+        .http
+        .post(env.url(&format!("/api/shoots/{}/trash", env.shoot)))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_client_error(), "{}", resp.status());
+    assert!(exists(&env.path("A.NEF")));
+}
+
+#[tokio::test]
+async fn trash_never_removes_another_photos_sidecar() {
+    let env = Env::new().await;
+    let dir = env.folder.path();
+    // A has its RAW and a JPEG that landed under a different stem; B is a
+    // separate RAW-only photo whose sidecar is `A_1.xmp`.
+    for name in ["A.NEF", "A_1.JPG", "A.xmp", "A_1.NEF", "A_1.xmp"] {
+        std::fs::write(dir.join(name), b"x").unwrap();
+    }
+    let new = |raw: Option<&str>, jpg: Option<&str>, hash: &str| NewPhoto {
+        shoot_id: env.shoot,
+        raw_path: raw.map(|n| dir.join(n).to_string_lossy().into_owned()),
+        jpeg_path: jpg.map(|n| dir.join(n).to_string_lossy().into_owned()),
+        sha256: hash.into(),
+        capture_time: "2026-10-18T10:00:00".parse().ok(),
+        ..Default::default()
+    };
+    let a = photos::insert_photo(&env.pool, &new(Some("A.NEF"), Some("A_1.JPG"), "ha")).unwrap();
+    let b = photos::insert_photo(&env.pool, &new(Some("A_1.NEF"), None, "hb")).unwrap();
+    env.set_outcome(a, "delete");
+    env.set_outcome(b, "album");
+
+    let body = env.trash_ids(&[a]).await;
+    assert_eq!(body["trashed"], 1, "{body}");
+    for gone in ["A.NEF", "A_1.JPG", "A.xmp"] {
+        assert!(!exists(&env.path(gone)), "{gone}");
+    }
+    for kept in ["A_1.NEF", "A_1.xmp"] {
+        assert!(exists(&env.path(kept)), "{kept} belongs to the other photo");
+    }
 }

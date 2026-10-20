@@ -471,6 +471,89 @@ async fn endpoint_rejects_bad_requests() {
     assert_eq!(stored_outcome(&s), Outcome::Unreviewed);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_outcome_changes_leave_db_and_sidecar_in_agreement() {
+    let s = seeded(raw_photo).await;
+    let rating = |outcome: Outcome| match outcome {
+        Outcome::Album => "4",
+        _ => "3",
+    };
+    for round in 0..150 {
+        let a = post_outcome(&s, s.id, json!({"outcome": "album"}));
+        let b = post_outcome(&s, s.id, json!({"outcome": "library"}));
+        let c = post_outcome(&s, s.id, json!({"outcome": "album"}));
+        let d = post_outcome(&s, s.id, json!({"outcome": "library"}));
+        let results = tokio::join!(a, b, c, d);
+        for (status, body) in [results.0, results.1, results.2, results.3] {
+            assert_eq!(status, 200, "{body}");
+        }
+        let stored = stored_outcome(&s);
+        let xml = std::fs::read_to_string(sidecar(&s.files.path().join("IMG_0001.NEF"))).unwrap();
+        assert!(
+            xml.contains(&format!("xmp:Rating=\"{}\"", rating(stored))),
+            "round {round}: database says {stored:?} but the sidecar disagrees:
+{xml}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn outcome_write_happens_inside_the_critical_section() {
+    let s = seeded(raw_photo).await;
+    // Another request is mid-way through its database + sidecar section.
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _guard = photosift::outcome::OUTCOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        held_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    held_rx.recv().unwrap();
+
+    let id = s.id;
+    let url = s.server.base_url.clone();
+    let request = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("{url}/api/photos/{id}/outcome"))
+            .json(&json!({"outcome": "album"}))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(
+        stored_outcome(&s),
+        Outcome::Unreviewed,
+        "the database must not change outside the section that also writes the sidecar"
+    );
+
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    assert_eq!(request.await.unwrap(), 200);
+    assert_eq!(stored_outcome(&s), Outcome::Album);
+}
+
+#[tokio::test]
+async fn outcome_of_a_trashed_photo_is_a_conflict_and_writes_no_sidecar() {
+    let s = seeded(raw_photo).await;
+    open_db(&s.server)
+        .with(|c| {
+            c.execute(
+                "UPDATE photos SET trashed_at = '2026-10-18T13:00:00' WHERE id = ?1",
+                [s.id],
+            )
+        })
+        .unwrap();
+    let (status, body) = post_outcome(&s, s.id, json!({"outcome": "album"})).await;
+    assert_eq!(status, 409, "{body}");
+    assert!(!sidecar(&s.files.path().join("IMG_0001.NEF")).exists());
+    assert_eq!(stored_outcome(&s), Outcome::Unreviewed);
+}
+
 // ---- integrity ------------------------------------------------------------
 
 const LR_DECL: &str = "xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"";

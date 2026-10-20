@@ -1,7 +1,5 @@
 //! `POST /api/photos/{id}/outcome`: set a photo's outcome and mirror it to XMP.
 
-use std::path::PathBuf;
-
 use axum::{
     extract::{Path, State},
     Json,
@@ -10,9 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
 use crate::{
-    db::photos::{self, PhotoRow},
-    outcome::{xmp_fields, Outcome},
-    xmp,
+    db::photos::PhotoRow,
+    outcome::{self, ApplyError, Outcome},
 };
 
 #[derive(Deserialize)]
@@ -37,36 +34,14 @@ pub async fn set_outcome(
 ) -> Result<Json<OutcomeResponse>, ApiError> {
     let db = state.db.clone();
     let res = tokio::task::spawn_blocking(move || {
-        let photo = photos::set_outcome(&db, id, body.outcome, body.blooper)?;
-        let xmp_error = sidecar_target(&photo).and_then(|image| {
-            xmp::apply(&image, &xmp_fields(photo.outcome, photo.blooper))
-                .err()
-                .map(|e| e.to_string())
-        });
-        Ok::<_, anyhow::Error>(OutcomeResponse { photo, xmp_error })
+        outcome::set_and_mirror(&db, id, body.outcome, body.blooper)
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?;
     match res {
-        Ok(r) => Ok(Json(r)),
-        Err(e)
-            if matches!(
-                e.downcast_ref::<rusqlite::Error>(),
-                Some(rusqlite::Error::QueryReturnedNoRows)
-            ) =>
-        {
-            Err(ApiError::not_found(format!("no photo {id}")))
-        }
-        Err(e) => Err(ApiError::internal(format!("{e:#}"))),
+        Ok((photo, xmp_error)) => Ok(Json(OutcomeResponse { photo, xmp_error })),
+        Err(ApplyError::NotFound(_)) => Err(ApiError::not_found(format!("no photo {id}"))),
+        Err(e @ ApplyError::Trashed(_)) => Err(ApiError::conflict(e.to_string())),
+        Err(ApplyError::Other(e)) => Err(ApiError::internal(format!("{e:#}"))),
     }
-}
-
-/// The file whose `<stem>.xmp` carries the outcome: the RAW, else the JPEG.
-/// Videos get no sidecar.
-fn sidecar_target(photo: &PhotoRow) -> Option<PathBuf> {
-    photo
-        .raw_path
-        .as_deref()
-        .or(photo.jpeg_path.as_deref())
-        .map(PathBuf::from)
 }

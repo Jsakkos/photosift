@@ -110,16 +110,16 @@ describe("errors", () => {
 });
 
 describe("trashDeletes", () => {
-  it("posts to the shoot's trash endpoint without a body", async () => {
-    const fetchMock = mockFetch(jsonResponse({ trashed: 2, failed: [] }));
+  it("posts the approved photo ids to the shoot's trash endpoint", async () => {
+    const fetchMock = mockFetch(jsonResponse({ trashed: 2, failed: [], skipped: 0 }));
 
-    const report = await trashDeletes(3);
+    const report = await trashDeletes(3, [11, 12]);
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe("/api/shoots/3/trash");
     expect(init?.method).toBe("POST");
-    expect(init?.body).toBeUndefined();
-    expect(report).toEqual({ trashed: 2, failed: [] });
+    expect(JSON.parse(String(init?.body))).toEqual({ photo_ids: [11, 12] });
+    expect(report).toEqual({ trashed: 2, failed: [], skipped: 0 });
   });
 });
 

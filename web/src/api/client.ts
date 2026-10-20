@@ -117,8 +117,9 @@ export const setOutcome = (photoId: number, outcome: Outcome, blooper?: boolean)
   });
 
 /** The explicit batch approval: sends the shoot's `delete` photos to the Recycle Bin. */
-export const trashDeletes = (shootId: number) =>
-  request<TrashReport>("POST", `/api/shoots/${shootId}/trash`);
+/** Trashes only `photoIds`, the photos the confirm dialog listed. */
+export const trashDeletes = (shootId: number, photoIds: number[]) =>
+  request<TrashReport>("POST", `/api/shoots/${shootId}/trash`, { photo_ids: photoIds });
 
 export const previewUrl = (photoId: number) => `/media/preview/${photoId}`;
 /** A thumbnail of a picture still on the card, by scan and item index. */

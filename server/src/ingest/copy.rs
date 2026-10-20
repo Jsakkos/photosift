@@ -284,10 +284,28 @@ fn slot(path: &Path, sha256: &str) -> Slot {
     }
 }
 
+/// Extensions that make a file "a photo or clip": any of them beside the
+/// frame's stem would share its `<stem>.xmp`, which Lightroom pairs by stem.
+const MEDIA_EXTS: [&str; 7] = ["raf", "nef", "jpg", "jpeg", "mov", "mp4", "xmp"];
+
+/// Lowercased names in `dir` that are media files or sidecars.
+fn media_names(dir: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_ascii_lowercase())
+        .filter(|name| MEDIA_EXTS.contains(&member_ext(name).as_str()))
+        .collect()
+}
+
 /// Lowest suffix `n` at which every member's file and the first member's
 /// `.xmp` sidecar name are usable. A member slot is usable when free or when it
-/// already holds identical bytes. The sidecar name must be free, unless a
-/// member already holds identical bytes (it is then that frame's own sidecar).
+/// already holds identical bytes. The sidecar stem must be free: no other
+/// media file (any of RAF/NEF/JPG/JPEG/MOV/MP4) or `.xmp` may already carry it,
+/// because a different photo sharing the stem would share the sidecar too.
+/// Only the frame's own identical members (a resumed import) are exempt.
 fn free_suffix(
     dir: &Path,
     members: &[Member],
@@ -295,22 +313,40 @@ fn free_suffix(
     reserved: &dyn Fn(&Path) -> bool,
 ) -> u32 {
     let primary_stem = member_stem(members[0].name);
+    let existing = if sidecar {
+        media_names(dir)
+    } else {
+        Vec::new()
+    };
     for n in 0.. {
         let mut usable = true;
         let mut resuming = false;
+        let mut own = HashSet::new();
         let mut paths = Vec::with_capacity(members.len() + 1);
         for m in members {
-            let path = dir.join(with_stem(m.name, &suffixed(&member_stem(m.name), n)));
+            let name = with_stem(m.name, &suffixed(&member_stem(m.name), n));
+            let path = dir.join(&name);
             match slot(&path, m.sha256) {
                 Slot::Free => {}
-                Slot::Same => resuming = true,
+                Slot::Same => {
+                    resuming = true;
+                    own.insert(name.to_ascii_lowercase());
+                }
                 Slot::Different => usable = false,
             }
             paths.push(path);
         }
         if sidecar {
-            let xmp = dir.join(format!("{}.xmp", suffixed(&primary_stem, n)));
-            if xmp.exists() && !resuming {
+            let stem = suffixed(&primary_stem, n);
+            let xmp = dir.join(format!("{stem}.xmp"));
+            let stem_lc = stem.to_ascii_lowercase();
+            // On a resume the frame's own sidecar is expected to be there.
+            let foreign = existing.iter().any(|name| {
+                member_stem(name) == stem_lc
+                    && !own.contains(name)
+                    && !(resuming && name.ends_with(".xmp"))
+            });
+            if foreign {
                 usable = false;
             }
             paths.push(xmp);

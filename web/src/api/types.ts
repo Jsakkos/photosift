@@ -182,6 +182,8 @@ export interface OutcomeResponse extends PhotoRow {
 export interface TrashReport {
   trashed: number;
   failed: { photo_id: number; error: string }[];
+  /** Approved ids that were no longer pending deletes. */
+  skipped: number;
 }
 
 /** The read-only settings the page needs. */

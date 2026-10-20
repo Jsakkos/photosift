@@ -748,6 +748,57 @@ async fn extra_jpeg_for_a_raw_that_already_has_one_becomes_its_own_photo() {
 }
 
 #[tokio::test]
+async fn unrelated_jpeg_only_photo_never_shares_a_raws_sidecar_stem() {
+    let env = Env::new().await;
+    // Day 1: a RAW-only photo.
+    let first = tempfile::tempdir().unwrap();
+    write(
+        &first.path().join("DSCF0001.RAF"),
+        &fake_raf(&big_jpeg("2026:10:18 10:00:00", Pattern::Blocks)),
+    );
+    env.import_all(first.path(), "named", "Test Day").await;
+
+    // Later: a different photo, JPEG-only, whose camera reused the number.
+    let second = tempfile::tempdir().unwrap();
+    write(
+        &second.path().join("DSCF0001.JPG"),
+        &big_jpeg("2026:10:18 11:30:00", Pattern::Stripes),
+    );
+    let frames = env.import_all(second.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["copied"], 1, "{frames:?}");
+    let dir = event_dir(env.library.path());
+    assert_eq!(names_in(&dir), ["DSCF0001.RAF", "DSCF0001_1.JPG"]);
+    let rows = env.photos();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r.raw_path.is_none()
+        && Path::new(r.jpeg_path.as_deref().unwrap()) == dir.join("DSCF0001_1.JPG")));
+
+    // And the other way round: a JPEG-only photo first, then an unrelated RAW.
+    let third = tempfile::tempdir().unwrap();
+    write(
+        &third.path().join("DSCF0002.JPG"),
+        &big_jpeg("2026:10:18 12:00:00", Pattern::Blocks),
+    );
+    env.import_all(third.path(), "named", "Test Day").await;
+    let fourth = tempfile::tempdir().unwrap();
+    write(
+        &fourth.path().join("DSCF0002.RAF"),
+        &fake_raf(&big_jpeg("2026:10:18 12:30:00", Pattern::Stripes)),
+    );
+    env.import_all(fourth.path(), "named", "Test Day").await;
+    assert_eq!(
+        names_in(&dir),
+        [
+            "DSCF0001.RAF",
+            "DSCF0001_1.JPG",
+            "DSCF0002.JPG",
+            "DSCF0002_1.RAF"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn everyday_event_spanning_two_months_is_rejected() {
     let env = Env::new().await;
     let card = tempfile::tempdir().unwrap();

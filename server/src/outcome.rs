@@ -1,6 +1,64 @@
-use std::str::FromStr;
+use std::{path::PathBuf, str::FromStr, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
+
+use crate::{
+    db::{
+        photos::{self, PhotoRow},
+        DbPool,
+    },
+    xmp,
+};
+
+/// Serialises "write the outcome, then mirror it to the sidecar". Without it
+/// two requests could update the database A then B but write the sidecar B then
+/// A, leaving them disagreeing. Taken before `xmp`'s own lock, never inside it.
+pub static OUTCOME_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Debug, thiserror::Error)]
+pub enum ApplyError {
+    #[error("no photo {0}")]
+    NotFound(i64),
+    #[error("photo {0} is in the Recycle Bin")]
+    Trashed(i64),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+/// The file whose `<stem>.xmp` carries the outcome: the RAW, else the JPEG.
+/// Videos get no sidecar.
+pub fn sidecar_target(photo: &PhotoRow) -> Option<PathBuf> {
+    photo
+        .raw_path
+        .as_deref()
+        .or(photo.jpeg_path.as_deref())
+        .map(PathBuf::from)
+}
+
+/// Persists the outcome and rewrites the sidecar as one critical section.
+/// Returns the stored row and, if the sidecar could not be written, why (the
+/// database change stands). A photo already in the Recycle Bin is refused so no
+/// sidecar reappears beside a file that left.
+pub fn set_and_mirror(
+    db: &DbPool,
+    id: i64,
+    outcome: Outcome,
+    blooper: Option<bool>,
+) -> Result<(PhotoRow, Option<String>), ApplyError> {
+    let _guard = OUTCOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    match photos::get_photo(db, id)? {
+        None => return Err(ApplyError::NotFound(id)),
+        Some(p) if p.trashed_at.is_some() => return Err(ApplyError::Trashed(id)),
+        Some(_) => {}
+    }
+    let photo = photos::set_outcome(db, id, outcome, blooper)?;
+    let xmp_error = sidecar_target(&photo).and_then(|image| {
+        xmp::apply(&image, &xmp_fields(photo.outcome, photo.blooper))
+            .err()
+            .map(|e| e.to_string())
+    });
+    Ok((photo, xmp_error))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

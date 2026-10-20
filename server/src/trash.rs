@@ -2,7 +2,10 @@
 //!
 //! Only `trash::delete_all` is used; nothing here can delete permanently.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 
@@ -24,17 +27,21 @@ pub struct TrashFailure {
 pub struct TrashReport {
     pub trashed: usize,
     pub failed: Vec<TrashFailure>,
+    /// Approved ids that were not pending deletes of this shoot any more
+    /// (unknown, other shoot, outcome changed since, already trashed).
+    pub skipped: usize,
 }
 
-/// Every file the photo owns: the RAW and the JPEG with the `.xmp` sidecar
-/// beside each, and the video.
+/// Every file the photo owns: its RAW, JPEG and video, plus exactly one
+/// sidecar, the one `api/photos.rs` writes (`<stem>.xmp` of the RAW, else of
+/// the JPEG). A JPEG attached to a RAW under a different stem has no sidecar
+/// of its own, and `<jpeg stem>.xmp` may belong to another photo.
 fn owned_files(photo: &PhotoRow) -> Vec<PathBuf> {
-    let images = [photo.raw_path.as_deref(), photo.jpeg_path.as_deref()];
     let mut paths: Vec<PathBuf> = Vec::new();
-    for image in images.into_iter().flatten().map(PathBuf::from) {
-        paths.push(xmp::sidecar_path(&image));
-        paths.push(image);
-    }
+    let sidecar_of = photo.raw_path.as_deref().or(photo.jpeg_path.as_deref());
+    paths.extend(sidecar_of.map(|p| xmp::sidecar_path(Path::new(p))));
+    paths.extend(photo.raw_path.as_deref().map(PathBuf::from));
+    paths.extend(photo.jpeg_path.as_deref().map(PathBuf::from));
     paths.extend(photo.video_path.as_deref().map(PathBuf::from));
     paths.sort();
     paths.dedup();
@@ -47,10 +54,24 @@ fn present(path: &Path) -> bool {
     path.try_exists().unwrap_or(false)
 }
 
-/// Trashes every `delete` photo of the shoot. See `trash_photos`.
-pub fn trash_approved_deletes(db: &DbPool, shoot_id: i64) -> anyhow::Result<TrashReport> {
-    let snapshot = photos::pending_deletes(db, shoot_id)?;
-    Ok(trash_photos(db, shoot_id, snapshot))
+/// Trashes the pending deletes of the shoot that the user approved, i.e. the
+/// ones in `approved` (the exact set the confirm dialog listed). A photo marked
+/// delete after that dialog opened is not in `approved` and stays. See
+/// `trash_photos`.
+pub fn trash_approved_deletes(
+    db: &DbPool,
+    shoot_id: i64,
+    approved: &[i64],
+) -> anyhow::Result<TrashReport> {
+    let wanted: HashSet<i64> = approved.iter().copied().collect();
+    let snapshot: Vec<PhotoRow> = photos::pending_deletes(db, shoot_id)?
+        .into_iter()
+        .filter(|p| wanted.contains(&p.id))
+        .collect();
+    let skipped = wanted.len() - snapshot.len();
+    let mut report = trash_photos(db, shoot_id, snapshot);
+    report.skipped += skipped;
+    Ok(report)
 }
 
 /// Trashes the snapshot one photo at a time, so a locked file fails only its

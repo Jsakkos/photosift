@@ -65,6 +65,8 @@ export function ReviewPage() {
   const [mode, setMode] = useState<Mode>("grid");
   const [help, setHelp] = useState(false);
   const [confirm, setConfirm] = useState<"closed" | "open" | "busy">("closed");
+  // Exactly the photos the dialog counts; what is sent is what was shown.
+  const [approved, setApproved] = useState<number[]>([]);
   const [focusId, setFocusId] = useState<number | null>(null);
   const prefetcher = useMemo(() => new Prefetcher(), []);
   const restored = useRef(false);
@@ -132,10 +134,19 @@ export function ReviewPage() {
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [focusId, mode]);
 
+  const openConfirm = () => {
+    setApproved(
+      Object.values(photos)
+        .filter((p) => p.outcome === "delete")
+        .map((p) => p.id),
+    );
+    setConfirm("open");
+  };
+
   const confirmTrash = useCallback(async () => {
     setConfirm("busy");
     try {
-      const report = await trashDeletes(shootId);
+      const report = await trashDeletes(shootId, approved);
       if (report.failed.length > 0) {
         notify({
           kind: "error",
@@ -153,7 +164,7 @@ export function ReviewPage() {
     }
     setConfirm("closed");
     reload();
-  }, [shootId, notify, reload]);
+  }, [shootId, approved, notify, reload]);
 
   // In the loupe the focus can be ahead of the picture (it waits for its
   // decode), and a rating must never land on a photo the user has not seen.
@@ -281,7 +292,7 @@ export function ReviewPage() {
           type="button"
           className="danger"
           disabled={counts.delete === 0}
-          onClick={() => setConfirm("open")}
+          onClick={openConfirm}
         >
           Delete? ({counts.delete}) — Move to Recycle Bin
         </button>
@@ -305,7 +316,7 @@ export function ReviewPage() {
       {help && <HelpOverlay onClose={() => setHelp(false)} />}
       {confirm !== "closed" && (
         <DeleteDialog
-          count={counts.delete}
+          count={approved.length}
           busy={confirm === "busy"}
           onCancel={() => setConfirm("closed")}
           onConfirm={() => void confirmTrash()}
