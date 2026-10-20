@@ -41,3 +41,7 @@ tests/e2e/__diff__/
 
 # Claude Code runtime artifacts (per-session, never commit)
 .claude/*.lock
+
+# Local real-photo fixture (never commit: public repo)
+tests/golden/manifest.txt
+.photosift-golden/

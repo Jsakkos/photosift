@@ -1,0 +1,15 @@
+[project]
+name = "stack-bench-py"
+version = "0.0.0"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pillow",
+  "numpy",
+  "opencv-python-headless",
+  "onnxruntime-gpu==1.24.*",
+  "exifread",
+  "psutil",
+  "httpx>=0.28.1",
+]
