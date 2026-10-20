@@ -518,3 +518,44 @@ async fn golden_burst_groups_near_identicals() {
         "DSCF1765/1766 are in adjacent bursts"
     );
 }
+
+#[test]
+fn assign_racing_a_trash_never_leaves_stale_indexes() {
+    let dir = tempfile::tempdir().unwrap();
+    let pool = photosift::db::open(&dir.path().join("p.db")).unwrap();
+    let s = shoot(&pool, "a");
+    // 400 s apart: every photo is its own moment, so a stale write is visible.
+    let ids: Vec<i64> = (0..60)
+        .map(|n| photos::insert_photo(&pool, &photo(s, n, n as i64 * 400, Some(0))).unwrap())
+        .collect();
+    let settings = Settings::default();
+    let done = std::sync::atomic::AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+        // The enrichment worker regrouping while the trash handler runs.
+        scope.spawn(|| {
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                assign(&pool, s, &settings).unwrap();
+            }
+        });
+        for id in ids.iter().take(40) {
+            pool.with(|c| {
+                c.execute(
+                    "UPDATE photos SET trashed_at = '2026-10-18T12:00:00' WHERE id = ?1",
+                    [id],
+                )
+            })
+            .unwrap();
+            assign(&pool, s, &settings).unwrap();
+        }
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+    // One last pass after both are idle settles whatever the race left.
+    let snapshot: Vec<_> = ids.iter().map(|&id| cols(&pool, id)).collect();
+    assign(&pool, s, &settings).unwrap();
+    let settled: Vec<_> = ids.iter().map(|&id| cols(&pool, id)).collect();
+    assert_eq!(snapshot, settled, "a racing assign left stale values");
+    assert!(settled[..40].iter().all(|c| *c == (None, None, None)));
+    let moments: Vec<_> = settled[40..].iter().map(|c| c.0).collect();
+    assert_eq!(moments, (0..20).map(Some).collect::<Vec<_>>());
+}

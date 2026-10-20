@@ -43,7 +43,7 @@ When the design doc and the code disagree, the code wins — flag the divergence
 - `media/` — `embedded` (largest embedded JPEG), `exif`, `render` (orient → preview/thumb JPEGs), `phash`
 - `enrich/` — `faces` (YuNet with tiling), `identity` (SFace), `quality` (sharpness, exposure), `moments` (moments + bursts + signal score, pure), `job` (background worker)
 - `outcome.rs` — `Outcome` enum + XMP field mapping; `xmp.rs` merge-write sidecar; `trash.rs` approved delete
-- `drives.rs` — removable-drive watcher (injectable lister); `events.rs` — `ServerEvent` + WebSocket broadcast hub
+- `drives.rs` — removable-drive watcher (injectable lister); `events.rs` — `ServerEvent` + WebSocket broadcast hub; `logging.rs` — `plog!` timestamped log macro
 - `bin/make-synthetic-card.rs` — writes a fake card of synthetic JPEGs for tests
 - `testsupport.rs` — synthetic JPEG/EXIF builders shared by tests and the bin; `tests/` — integration tests (`common/mod.rs` boots a test server on a temp data root)
 
@@ -165,6 +165,7 @@ Only summarize what you actually observed. Don't say "works" on the strength of 
 - **Dev profile** sets `opt-level = 3` for `ort`, `ort-sys`, `fast_image_resize` and image/JPEG crates; ONNX inference is >1 s/image without it. Don't lower without measuring.
 - **Port 7420 (release) / 7421 (debug)** is the single-instance lock. A second `photosift.exe` on the same port finds the first via `/api/health` and exits. Debug uses its own port and library so it coexists with the logon-started release. Orphaned dev servers hold their port, and Vite pins `5173` (`strictPort`). Kill both before ending a session.
 - **Release exe is a GUI-subsystem build**: no console; output goes to `<data root>\logs\photosift.log`.
+- **Logging.** Use `plog!("tag", ...)` (not `eprintln!`) for server diagnostics: lines carry a local timestamp and module tag, and the unattended release's log file is the debugging surface.
 - **Types** are mirrored by hand: change a response in `server/src/api/*`, update `web/src/api/types.ts` in the same commit.
 - Conventional commits (`feat:`, `fix:`, `refactor!:` ...).
 - Rust: `rustfmt` and `clippy -D warnings` clean; `anyhow` at handler boundaries, `thiserror` inside modules. TypeScript: strict, no `any`, functional components with hooks.

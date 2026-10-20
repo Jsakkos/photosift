@@ -164,6 +164,11 @@ export function folderPreview(
   return `${root}\\${year}\\${leaf}`;
 }
 
+/** Whether a Named event has no name yet; the server refuses those. */
+export function hasUnnamedEvent(drafts: DraftEvent[]): boolean {
+  return drafts.some((d) => d.kind === "named" && d.name.trim() === "");
+}
+
 export function toEventSpecs(drafts: DraftEvent[]): EventSpec[] {
   return drafts.map((d) =>
     d.kind === "named"

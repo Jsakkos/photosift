@@ -141,62 +141,33 @@ struct Candidate {
 /// Excluded rows are reset to NULL so indexes stay contiguous after a trash.
 /// A photo with no capture time gets a score but no moment or burst.
 pub fn assign(db: &DbPool, shoot_id: i64, settings: &Settings) -> anyhow::Result<()> {
-    let candidates = db.with(|c| {
-        let mut stmt = c.prepare(
-            "SELECT p.id, p.capture_time, p.phash, p.sharpness, p.face_sharpness, \
-                    p.clip_hi, p.clip_lo, COUNT(f.id), COALESCE(MAX(f.w * f.h), 0.0) \
-             FROM photos p LEFT JOIN faces f ON f.photo_id = p.id \
-             WHERE p.shoot_id = ?1 AND p.trashed_at IS NULL \
-               AND (p.raw_path IS NOT NULL OR p.jpeg_path IS NOT NULL) \
-             GROUP BY p.id \
-             ORDER BY p.capture_time, p.id",
-        )?;
-        let rows = stmt
-            .query_map([shoot_id], |r| {
-                let time: Option<String> = r.get(1)?;
-                Ok(Candidate {
-                    id: r.get(0)?,
-                    time: time.and_then(|t| NaiveDateTime::parse_from_str(&t, DATETIME_FMT).ok()),
-                    phash: r.get(2)?,
-                    signals: Signals {
-                        face_count: r.get::<_, i64>(7)? as usize,
-                        largest_face_area: r.get::<_, f64>(8)? as f32,
-                        face_sharpness: r.get(4)?,
-                        sharpness: r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
-                        clip_hi: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
-                        clip_lo: r.get::<_, Option<f64>>(6)?.unwrap_or(0.0),
-                    },
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>();
-        rows
-    })?;
-
-    let timed: Vec<(&Candidate, NaiveDateTime)> = candidates
-        .iter()
-        .filter_map(|c| c.time.map(|t| (c, t)))
-        .collect();
-    let inputs: Vec<MomentInput> = timed
-        .iter()
-        .map(|(c, t)| MomentInput {
-            capture_time: *t,
-            phash: c.phash,
-        })
-        .collect();
-    let groups = split(&inputs, &SplitParams::from(settings));
-
+    // Read, group and write under one lock and one transaction: the trash
+    // handler and the enrichment worker both call this, and a trash landing
+    // between a separate read and write would be overwritten with stale rows.
     db.with(|c| {
         let tx = c.unchecked_transaction()?;
+        let candidates = read_candidates(&tx, shoot_id)?;
+
+        let timed: Vec<(&Candidate, NaiveDateTime)> = candidates
+            .iter()
+            .filter_map(|c| c.time.map(|t| (c, t)))
+            .collect();
+        let inputs: Vec<MomentInput> = timed
+            .iter()
+            .map(|(c, t)| MomentInput {
+                capture_time: *t,
+                phash: c.phash,
+            })
+            .collect();
+        let groups = split(&inputs, &SplitParams::from(settings));
+
         tx.execute(
-            "UPDATE photos SET moment_idx = NULL, burst_idx = NULL, signal_score = NULL \
-             WHERE shoot_id = ?1 AND (trashed_at IS NOT NULL \
-                OR (raw_path IS NULL AND jpeg_path IS NULL))",
+            "UPDATE photos SET moment_idx = NULL, burst_idx = NULL, signal_score = NULL              WHERE shoot_id = ?1 AND (trashed_at IS NOT NULL                 OR (raw_path IS NULL AND jpeg_path IS NULL))",
             [shoot_id],
         )?;
         {
             let mut set = tx.prepare(
-                "UPDATE photos SET moment_idx = ?1, burst_idx = ?2, signal_score = ?3 \
-                 WHERE id = ?4",
+                "UPDATE photos SET moment_idx = ?1, burst_idx = ?2, signal_score = ?3                  WHERE id = ?4",
             )?;
             for ((cand, _), (moment, burst)) in timed.iter().zip(&groups) {
                 let score = f64::from(signal_score(&cand.signals));
@@ -209,4 +180,29 @@ pub fn assign(db: &DbPool, shoot_id: i64, settings: &Settings) -> anyhow::Result
         }
         tx.commit()
     })
+}
+
+fn read_candidates(c: &rusqlite::Connection, shoot_id: i64) -> rusqlite::Result<Vec<Candidate>> {
+    let mut stmt = c.prepare(
+        "SELECT p.id, p.capture_time, p.phash, p.sharpness, p.face_sharpness,                 p.clip_hi, p.clip_lo, COUNT(f.id), COALESCE(MAX(f.w * f.h), 0.0)          FROM photos p LEFT JOIN faces f ON f.photo_id = p.id          WHERE p.shoot_id = ?1 AND p.trashed_at IS NULL            AND (p.raw_path IS NOT NULL OR p.jpeg_path IS NOT NULL)          GROUP BY p.id          ORDER BY p.capture_time, p.id",
+    )?;
+    let rows = stmt
+        .query_map([shoot_id], |r| {
+            let time: Option<String> = r.get(1)?;
+            Ok(Candidate {
+                id: r.get(0)?,
+                time: time.and_then(|t| NaiveDateTime::parse_from_str(&t, DATETIME_FMT).ok()),
+                phash: r.get(2)?,
+                signals: Signals {
+                    face_count: r.get::<_, i64>(7)? as usize,
+                    largest_face_area: r.get::<_, f64>(8)? as f32,
+                    face_sharpness: r.get(4)?,
+                    sharpness: r.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+                    clip_hi: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                    clip_lo: r.get::<_, Option<f64>>(6)?.unwrap_or(0.0),
+                },
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>();
+    rows
 }

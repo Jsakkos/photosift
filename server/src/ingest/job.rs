@@ -72,6 +72,10 @@ pub fn validate(scan: &CardScan, req: &ImportRequest) -> Result<(), String> {
                 return Err(format!("item {idx} is selected more than once"));
             }
         }
+        if ev.kind == EventKind::Named && ev.name.trim().is_empty() {
+            // Two same-day "Untitled" events would silently share one folder.
+            return Err("a named event needs a name".into());
+        }
         if ev.kind == EventKind::Everyday {
             let months: HashSet<(i32, u32)> = ev
                 .item_idxs
@@ -266,7 +270,7 @@ fn run_events(
             let photo_ids: Vec<i64> = attachments.iter().map(|a| a.photo_id).collect();
             match shoot_ids_of_photos(&ctx.db, &photo_ids) {
                 Ok(ids) => summary.attached_shoot_ids.extend(ids),
-                Err(e) => eprintln!("photosift: finding shoots of attached JPEGs: {e:#}"),
+                Err(e) => crate::plog!("import", "finding shoots of attached JPEGs: {e:#}"),
             }
         }
         if let Some(e) = first_error {
@@ -518,7 +522,7 @@ fn copy_photo(
         Err(e) => {
             // The file is safely copied; losing one preview must not abort a
             // 500-photo import. The row simply has no dimensions yet.
-            eprintln!("photosift: no preview for {name}: {e:#}");
+            crate::plog!("import", "no preview for {name}: {e:#}");
             (None, None, None, None, None)
         }
     };

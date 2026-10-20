@@ -182,11 +182,11 @@ impl Watcher {
                 }
                 Ok(Err(e)) => {
                     let error = format!("{e:#}");
-                    eprintln!("card scan of {} failed: {error}", d.mount_point);
+                    crate::plog!("drives", "card scan of {} failed: {error}", d.mount_point);
                     self.scan_failed(d.mount_point, error);
                 }
                 Err(_) => {
-                    eprintln!("card scan of {} panicked", d.mount_point);
+                    crate::plog!("drives", "card scan of {} panicked", d.mount_point);
                     self.scan_failed(d.mount_point, "the scan crashed on a corrupt file".into());
                 }
             }

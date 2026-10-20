@@ -119,7 +119,7 @@ impl EnrichWorker {
             .name("enrich".into())
             .spawn(move || worker_loop(&thread_shared, &ctx));
         if let Err(e) = spawned {
-            eprintln!("photosift: could not start the enrichment thread: {e}");
+            crate::plog!("enrich", "could not start the enrichment thread: {e}");
         }
         let worker = Self {
             _shutdown: Arc::new(ShutdownOnDrop(Arc::clone(&shared))),
@@ -127,7 +127,7 @@ impl EnrichWorker {
         };
         match photos::shoots_needing_enrichment(&db) {
             Ok(ids) => ids.into_iter().for_each(|id| worker.enqueue(id)),
-            Err(e) => eprintln!("photosift: could not look for unenriched photos: {e:#}"),
+            Err(e) => crate::plog!("enrich", "could not look for unenriched photos: {e:#}"),
         }
         worker
     }
@@ -157,7 +157,7 @@ fn load_models(dir: &Path) -> Option<Models> {
     let (detector, detector_backend) = match Detector::load(dir, true) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("photosift: face detection unavailable: {e:#}");
+            crate::plog!("enrich", "face detection unavailable: {e:#}");
             return None;
         }
     };
@@ -171,7 +171,7 @@ fn load_models(dir: &Path) -> Option<Models> {
             (Some(e), both)
         }
         Err(e) => {
-            eprintln!("photosift: face identity unavailable: {e:#}");
+            crate::plog!("enrich", "face identity unavailable: {e:#}");
             (None, detector_backend)
         }
     };
@@ -198,7 +198,7 @@ fn worker_loop(shared: &Shared, ctx: &Ctx) {
             }
         };
         if catch_unwind(AssertUnwindSafe(|| run_shoot(ctx, shoot_id))).is_err() {
-            eprintln!("photosift: enrichment of shoot {shoot_id} panicked");
+            crate::plog!("enrich", "enrichment of shoot {shoot_id} panicked");
             // A UI waiting on this shoot must not hang; its photos stay
             // unenriched and are retried at the next start.
             ctx.events.send(ServerEvent::EnrichDone { shoot_id });
@@ -211,7 +211,7 @@ fn run_shoot(ctx: &Ctx, shoot_id: i64) {
     let ids = match photos::unenriched_photo_ids(&ctx.db, shoot_id) {
         Ok(ids) => ids,
         Err(e) => {
-            eprintln!("photosift: listing photos of shoot {shoot_id}: {e:#}");
+            crate::plog!("enrich", "listing photos of shoot {shoot_id}: {e:#}");
             ctx.events.send(ServerEvent::EnrichDone { shoot_id });
             return;
         }
@@ -230,7 +230,7 @@ fn run_shoot(ctx: &Ctx, shoot_id: i64) {
         // A bad file must not stall the shoot: record it as analysed-with-nothing.
         let analysed = catch_unwind(AssertUnwindSafe(|| enrich_photo(ctx, id)));
         if analysed.is_err() {
-            eprintln!("photosift: enrichment of photo {id} panicked");
+            crate::plog!("enrich", "enrichment of photo {id} panicked");
             save(ctx, id, &QualityColumns::default(), &[]);
         }
         progress(done.fetch_add(1, Ordering::SeqCst) + 1);
@@ -244,14 +244,14 @@ fn run_shoot(ctx: &Ctx, shoot_id: i64) {
 /// without sections.
 fn after_shoot_enriched(ctx: &Ctx, shoot_id: i64) {
     if let Err(e) = moments::assign(&ctx.db, shoot_id, &ctx.settings) {
-        eprintln!("photosift: grouping shoot {shoot_id} into moments: {e:#}");
+        crate::plog!("enrich", "grouping shoot {shoot_id} into moments: {e:#}");
     }
 }
 
 fn save(ctx: &Ctx, photo_id: i64, quality: &QualityColumns, faces: &[NewFace]) {
     if let Err(e) = photos::save_enrichment(&ctx.db, photo_id, quality, faces) {
         // Left unenriched, so the next start retries it.
-        eprintln!("photosift: saving enrichment of photo {photo_id}: {e:#}");
+        crate::plog!("enrich", "saving enrichment of photo {photo_id}: {e:#}");
     }
 }
 
@@ -260,12 +260,15 @@ fn enrich_photo(ctx: &Ctx, id: i64) {
         Ok(Some(row)) => row,
         Ok(None) => return,
         Err(e) => {
-            eprintln!("photosift: reading photo {id}: {e:#}");
+            crate::plog!("enrich", "reading photo {id}: {e:#}");
             return;
         }
     };
     let Some(img) = load_preview(ctx, &row) else {
-        eprintln!("photosift: photo {id}: no usable preview; recording no signals");
+        crate::plog!(
+            "enrich",
+            "photo {id}: no usable preview; recording no signals"
+        );
         save(ctx, id, &QualityColumns::default(), &[]);
         return;
     };
@@ -281,7 +284,7 @@ fn analyse(models: Option<&Models>, img: &RgbImage) -> (Vec<NewFace>, QualityCol
                 match e.embed(img, &f.landmarks_px(img.w, img.h)) {
                     Ok(v) => Some(v.to_vec()),
                     Err(err) => {
-                        eprintln!("photosift: embedding failed: {err:#}");
+                        crate::plog!("enrich", "embedding failed: {err:#}");
                         None
                     }
                 }
@@ -342,7 +345,7 @@ fn load_preview(ctx: &Ctx, row: &PhotoRow) -> Option<RgbImage> {
         return Some(img);
     }
     if let Err(e) = regenerate_preview(ctx, row) {
-        eprintln!("photosift: photo {}: cannot rebuild preview: {e:#}", row.id);
+        crate::plog!("enrich", "photo {}: cannot rebuild preview: {e:#}", row.id);
         return None;
     }
     read()

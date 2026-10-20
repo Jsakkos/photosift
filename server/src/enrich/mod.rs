@@ -72,7 +72,7 @@ fn with_cpu_fallback<T>(cuda: bool, attempt: impl Fn(bool) -> Result<T>) -> Resu
     if cuda {
         match attempt(true) {
             Ok(v) => return Ok((v, Backend::Cuda)),
-            Err(e) => eprintln!("photosift: CUDA unavailable ({e:#}); using CPU"),
+            Err(e) => crate::plog!("enrich", "CUDA unavailable ({e:#}); using CPU"),
         }
     }
     Ok((attempt(false)?, Backend::Cpu))

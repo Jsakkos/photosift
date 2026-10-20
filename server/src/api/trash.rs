@@ -33,7 +33,7 @@ pub async fn trash_shoot(
         if report.trashed > 0 {
             // Re-number moments and bursts without the trashed frames.
             if let Err(e) = moments::assign(&state.db, id, &state.settings) {
-                eprintln!("photosift: regrouping shoot {id} after trash: {e:#}");
+                crate::plog!("trash", "regrouping shoot {id} after trash: {e:#}");
             }
         }
         Ok::<_, anyhow::Error>(Some(report))

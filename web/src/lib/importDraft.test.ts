@@ -7,6 +7,7 @@ import {
   draftsFromProposed,
   eventSpan,
   folderPreview,
+  hasUnnamedEvent,
   mergeWithNext,
   offsetsToSeconds,
   splitBefore,
@@ -171,5 +172,17 @@ describe("countDays and formatSpan", () => {
     expect(formatSpan("2026-10-18T23:00:00", "2026-10-19T01:00:00")).toBe(
       "2026-10-18 23:00 to 2026-10-19 01:00",
     );
+  });
+});
+
+describe("hasUnnamedEvent", () => {
+  it("flags a named event with a blank name but not an everyday one", () => {
+    const [named, everyday] = draftsFromProposed([proposed([0]), proposed([1], "everyday")], []);
+    if (!named || !everyday) throw new Error("expected two drafts");
+
+    expect(hasUnnamedEvent([named, everyday])).toBe(true);
+    expect(hasUnnamedEvent([{ ...named, name: "   " }])).toBe(true);
+    expect(hasUnnamedEvent([{ ...named, name: "Picnic" }, everyday])).toBe(false);
+    expect(hasUnnamedEvent([everyday])).toBe(false);
   });
 });

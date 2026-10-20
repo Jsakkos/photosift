@@ -23,7 +23,7 @@ const CARD_POLL: Duration = Duration::from_secs(2);
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let data_root = config::data_root();
-    instance::redirect_stdio_if_detached(&data_root);
+    let detached = instance::redirect_stdio_if_detached(&data_root);
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
     let (open, no_browser) = (flag("--open"), flag("--no-browser"));
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("PhotoSift is already running at {url}");
                 if open && !no_browser {
                     if let Err(e) = instance::open_browser(&url) {
-                        eprintln!("could not open the browser: {e}");
+                        photosift::plog!("main", "could not open the browser: {e}");
                     }
                 }
                 return Ok(());
@@ -51,16 +51,22 @@ async fn main() -> anyhow::Result<()> {
             );
         }
     };
+    // Only the instance that owns the port may rotate the shared log.
+    if detached {
+        instance::rotate_detached_log(&data_root);
+    }
     let state = photosift::build_state(&data_root, listener.local_addr()?.port())?;
     spawn_card_watcher(&state);
     let app = api::router(state, config::web_dist());
-    println!(
-        "PhotoSift listening on http://{addr} (data root {})",
+    photosift::plog!(
+        "main",
+        "PhotoSift {} listening on http://{addr} (data root {})",
+        env!("CARGO_PKG_VERSION"),
         data_root.display()
     );
     if open && !no_browser {
         if let Err(e) = instance::open_browser(&url) {
-            eprintln!("could not open the browser: {e}");
+            photosift::plog!("main", "could not open the browser: {e}");
         }
     }
     axum::serve(listener, app).await?;
@@ -92,11 +98,11 @@ fn spawn_card_watcher(state: &api::AppState) {
         .name("card-watcher".into())
         .spawn(move || loop {
             if catch_unwind(AssertUnwindSafe(|| watcher.tick())).is_err() {
-                eprintln!("card watcher tick panicked; continuing");
+                photosift::plog!("main", "card watcher tick panicked; continuing");
             }
             std::thread::sleep(CARD_POLL);
         });
     if let Err(e) = spawned {
-        eprintln!("could not start card watcher: {e}");
+        photosift::plog!("main", "could not start card watcher: {e}");
     }
 }

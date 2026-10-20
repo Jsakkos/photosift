@@ -139,6 +139,7 @@ test("a card imported twice announces what is already in the library and copies 
   const card = await server.makeCard(twoDayCard());
   const first = await server.scanCard(card);
   await page.goto(`/import/${first.scan_id}`);
+  await page.getByLabel("Event name").fill("Test Day");
   await page.getByRole("button", { name: /^Import 35 photos/ }).click();
   await expect(page.getByTestId("import-result")).toContainText("Copied 35");
 
@@ -158,6 +159,7 @@ test("a card imported twice announces what is already in the library and copies 
   await expect(page.getByTestId("card-banner")).toHaveCount(0);
   await expect(page.getByText("35 already imported")).toBeVisible();
 
+  await page.getByLabel("Event name").fill("Test Day");
   await page.getByRole("button", { name: /^Import 35 photos/ }).click();
 
   const result = page.getByTestId("import-result");
@@ -371,6 +373,7 @@ test("a missed import_done is recovered when the socket reconnects", async ({ pa
   await page.goto(`/import/${scan.scan_id}`);
   await expect(page.getByTestId("event")).toHaveCount(2);
 
+  await page.getByLabel("Event name").fill("Test Day");
   await page.getByRole("button", { name: /^Import 35 photos/ }).click();
   // The server finishes, but the page never hears about it.
   await expect
@@ -387,4 +390,19 @@ test("a missed import_done is recovered when the socket reconnects", async ({ pa
   await expect(page.getByTestId("import-result")).toContainText("Copied 35");
   await expect(page.getByRole("link", { name: /^Review/ })).toHaveCount(2);
   await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+});
+
+test("a named event cannot be imported until it has a name", async ({ page, server }) => {
+  const card = await server.makeCard(twoDayCard());
+  const scan = await server.scanCard(card);
+  await page.goto(`/import/${scan.scan_id}`);
+  await expect(page.getByTestId("event")).toHaveCount(2);
+
+  const importButton = page.getByRole("button", { name: /^Import 35 photos/ });
+  await expect(importButton).toBeDisabled();
+  await expect(page.getByTestId("name-hint")).toContainText("Name each Named event");
+
+  await page.getByLabel("Event name").fill("Picnic");
+  await expect(importButton).toBeEnabled();
+  await expect(page.getByTestId("name-hint")).toHaveCount(0);
 });

@@ -30,6 +30,7 @@ import {
   eventSpan,
   folderPreview,
   formatSpan,
+  hasUnnamedEvent,
   mergeWithNext,
   offsetsToSeconds,
   shiftTime,
@@ -369,7 +370,10 @@ function ImportEditor({
   const anyRunning = Object.values(jobs).some((j) => j.status === "running");
   const started = jobId !== null && job?.status !== "failed";
   const busy = starting || anyRunning || started;
-  const cannotImport = busy || drafts.length === 0 || regroupPending || regroupError !== null;
+  // Two same-day "Untitled" events would share one folder, so a name is required.
+  const unnamed = hasUnnamedEvent(drafts);
+  const cannotImport =
+    busy || drafts.length === 0 || regroupPending || regroupError !== null || unnamed;
   // Offsets and events are fixed once a job has been accepted.
   const locked = starting || started;
 
@@ -477,6 +481,12 @@ function ImportEditor({
         >
           Import {describeCount(counts.photos, counts.videos).replace(", ", " and ")}
         </button>
+        {unnamed && !busy && (
+          <span className="muted" data-testid="name-hint">
+            {" "}
+            Name each Named event, or make it Everyday, to import.
+          </span>
+        )}
         {anyRunning && !started && (
           <span className="muted"> Another import is running.</span>
         )}

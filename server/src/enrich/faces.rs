@@ -109,7 +109,7 @@ impl Detector {
         match self.try_detect(img, tiled) {
             Ok(faces) => faces,
             Err(e) => {
-                eprintln!("photosift: face detection failed: {e:#}");
+                crate::plog!("enrich", "face detection failed: {e:#}");
                 Vec::new()
             }
         }

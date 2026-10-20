@@ -94,46 +94,85 @@ pub fn open_browser(url: &str) -> std::io::Result<()> {
     }
 }
 
+/// `<data root>\logs\photosift.log`, created (and with `rotate`, rotated
+/// first) and opened for appending.
+fn open_log(data_root: &Path, rotate: bool) -> std::io::Result<std::fs::File> {
+    let dir = data_root.join("logs");
+    let log = dir.join("photosift.log");
+    std::fs::create_dir_all(&dir)?;
+    if rotate {
+        rotate_log(&log, LOG_MAX_BYTES);
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+}
+
+/// Points stdout/stderr at `file`; the handle is leaked on purpose because the
+/// std handles must stay valid for the whole process.
+#[cfg(windows)]
+fn attach_std_handles(file: std::fs::File) {
+    use std::os::windows::io::AsRawHandle;
+    type Handle = *mut core::ffi::c_void;
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
+    extern "system" {
+        fn SetStdHandle(which: u32, handle: Handle) -> i32;
+    }
+    let handle = file.as_raw_handle() as Handle;
+    // SAFETY: plain kernel32 call; `file` is forgotten below so the handle is
+    // never closed while it is installed.
+    unsafe {
+        SetStdHandle(STD_OUTPUT_HANDLE, handle);
+        SetStdHandle(STD_ERROR_HANDLE, handle);
+    }
+    std::mem::forget(file);
+}
+
 /// A GUI-subsystem process (release builds, so the logon task shows no
 /// window) starts with no standard handles, and its output would be dropped.
 /// Point stdout/stderr at `<data root>\logs\photosift.log` instead. No-op when
-/// stderr is already a console, pipe or file.
-pub fn redirect_stdio_if_detached(data_root: &Path) {
+/// stderr is already a console, pipe or file. Returns whether it redirected.
+///
+/// Does not rotate: a second launch also runs this before it knows whether it
+/// owns the port, and must not rotate the live instance's log. The instance
+/// that wins the bind calls `rotate_detached_log` afterwards.
+pub fn redirect_stdio_if_detached(data_root: &Path) -> bool {
     #[cfg(windows)]
     {
-        use std::os::windows::io::AsRawHandle;
         type Handle = *mut core::ffi::c_void;
-        const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
         const STD_ERROR_HANDLE: u32 = -12i32 as u32;
         extern "system" {
             fn GetStdHandle(which: u32) -> Handle;
-            fn SetStdHandle(which: u32, handle: Handle) -> i32;
         }
-        // SAFETY: both are plain kernel32 calls; the file handle stays alive
-        // (leaked below) for the whole process, as the std handles require.
-        unsafe {
-            let err = GetStdHandle(STD_ERROR_HANDLE);
-            if !err.is_null() && err as isize != -1 {
-                return;
+        // SAFETY: a plain kernel32 query.
+        let err = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+        if !err.is_null() && err as isize != -1 {
+            return false;
+        }
+        match open_log(data_root, false) {
+            Ok(file) => {
+                attach_std_handles(file);
+                true
             }
+            Err(_) => false,
         }
-        let dir = data_root.join("logs");
-        let log = dir.join("photosift.log");
-        let opened = std::fs::create_dir_all(&dir).and_then(|_| {
-            rotate_log(&log, LOG_MAX_BYTES);
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log)
-        });
-        let Ok(file) = opened else { return };
-        let handle = file.as_raw_handle() as Handle;
-        // SAFETY: see above; `file` is forgotten so the handle is never closed.
-        unsafe {
-            SetStdHandle(STD_OUTPUT_HANDLE, handle);
-            SetStdHandle(STD_ERROR_HANDLE, handle);
-        }
-        std::mem::forget(file);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = data_root;
+        false
+    }
+}
+
+/// For the instance that owns the port: if the log has outgrown its limit,
+/// move it aside and continue in a fresh file. Only meaningful after
+/// `redirect_stdio_if_detached` returned true.
+pub fn rotate_detached_log(data_root: &Path) {
+    #[cfg(windows)]
+    if let Ok(file) = open_log(data_root, true) {
+        attach_std_handles(file);
     }
     #[cfg(not(windows))]
     let _ = data_root;
@@ -161,6 +200,25 @@ mod tests {
             std::fs::read(&rotated).unwrap(),
             b"this one is over the limit"
         );
+    }
+
+    #[test]
+    fn opening_the_log_rotates_only_when_asked() {
+        let root = tempfile::tempdir().unwrap();
+        let logs = root.path().join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let log = logs.join("photosift.log");
+        std::fs::write(&log, vec![b'x'; (LOG_MAX_BYTES + 1) as usize]).unwrap();
+
+        // A second launch must leave the live instance's log alone.
+        open_log(root.path(), false).unwrap();
+        assert!(!logs.join("photosift.log.1").exists());
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), LOG_MAX_BYTES + 1);
+
+        // The owner of the port starts a fresh one.
+        open_log(root.path(), true).unwrap();
+        assert!(logs.join("photosift.log.1").exists());
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
     }
 
     #[test]

@@ -609,6 +609,40 @@ async fn unknown_scan_and_bad_indexes_are_rejected() {
 }
 
 #[tokio::test]
+async fn a_named_event_without_a_name_is_rejected() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let scan = env.scan(card.path()).await;
+    for name in ["", "   "] {
+        let resp = env
+            .http
+            .post(env.url("/api/import"))
+            .json(&json!({
+                "scan_id": scan["scan_id"],
+                "events": [{ "item_idxs": [0, 1, 2], "kind": "named", "name": name }],
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "name {name:?}");
+        let body: Value = resp.json().await.unwrap();
+        assert!(body["error"].as_str().unwrap().contains("name"), "{body}");
+    }
+    // Everyday events carry no name and are fine.
+    let resp = env
+        .http
+        .post(env.url("/api/import"))
+        .json(&json!({
+            "scan_id": scan["scan_id"],
+            "events": [{ "item_idxs": [0, 1, 2], "kind": "everyday" }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
 async fn scan_endpoint_reports_unreadable_source() {
     let env = Env::new().await;
     let resp = env
