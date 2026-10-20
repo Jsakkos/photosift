@@ -1,4 +1,9 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    panic::{catch_unwind, AssertUnwindSafe},
+    sync::Arc,
+    time::Duration,
+};
 
 use photosift::{
     api, config,
@@ -25,7 +30,9 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A plain thread: each tick may block on a slow card scan.
+/// A plain thread: each tick may block on a slow card scan. Panics are caught
+/// per tick (a lister panic would otherwise end detection for good; scan
+/// panics are already contained inside `Watcher::tick`).
 fn spawn_card_watcher(state: &api::AppState) {
     let (db, settings, scans) = (
         state.db.clone(),
@@ -36,15 +43,23 @@ fn spawn_card_watcher(state: &api::AppState) {
         Box::new(list_removable_drives),
         state.events.clone(),
         move |source| {
-            let card = scan::scan(source, &db, &settings)?;
+            let card = Arc::new(scan::scan(source, &db, &settings)?);
             // Same cache `POST /api/scan` fills, so the UI can import the
             // announced scan by id.
-            scans.insert(Arc::new(card.clone()));
+            scans.insert(card.clone());
             Ok(card)
         },
-    );
-    std::thread::spawn(move || loop {
-        watcher.tick();
-        std::thread::sleep(CARD_POLL);
-    });
+    )
+    .with_registry(state.cards.clone());
+    let spawned = std::thread::Builder::new()
+        .name("card-watcher".into())
+        .spawn(move || loop {
+            if catch_unwind(AssertUnwindSafe(|| watcher.tick())).is_err() {
+                eprintln!("card watcher tick panicked; continuing");
+            }
+            std::thread::sleep(CARD_POLL);
+        });
+    if let Err(e) = spawned {
+        eprintln!("could not start card watcher: {e}");
+    }
 }

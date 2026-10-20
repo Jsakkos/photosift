@@ -25,8 +25,8 @@ use serde_json::json;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::{
-    config::Settings, db::DbPool, enrich::job::EnrichWorker, events::EventHub,
-    ingest::scan::CardScan,
+    config::Settings, db::DbPool, drives::CardRegistry, enrich::job::EnrichWorker,
+    events::EventHub, ingest::scan::CardScan,
 };
 
 /// Scans kept for the import step; older ones are dropped, which just makes
@@ -43,6 +43,8 @@ pub struct AppState {
     pub events: EventHub,
     pub enrich: EnrichWorker,
     pub scans: ScanCache,
+    /// Cards the watcher has announced and that are still inserted.
+    pub cards: CardRegistry,
     /// Set while an import job runs; see `api::import`.
     pub import_busy: Arc<AtomicBool>,
 }
@@ -110,6 +112,7 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/status", get(status))
+        .route("/cards", get(cards))
         .route("/scan", post(scan::scan))
         .route("/import", post(import::start))
         .route("/shoots", get(shoots::list))
@@ -144,6 +147,12 @@ async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
         "embeddings": s.embeddings,
         "queue": s.queue,
     }))
+}
+
+/// Cards announced so far and still inserted: lets a tab opened after the
+/// `card_detected` broadcast still show the import banner.
+async fn cards(State(state): State<AppState>) -> Json<Vec<crate::events::CardScanSummary>> {
+    Json(state.cards.list())
 }
 
 async fn health() -> Json<serde_json::Value> {

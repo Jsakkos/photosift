@@ -32,6 +32,7 @@ pub fn build_state(data_root: &Path, port: u16) -> anyhow::Result<AppState> {
         events,
         enrich,
         scans: Default::default(),
+        cards: Default::default(),
         import_busy: Default::default(),
     })
 }

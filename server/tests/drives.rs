@@ -47,10 +47,10 @@ struct Rig {
 
 impl Rig {
     fn new() -> Self {
-        Self::with_scan(|p| Ok(fake_scan(p)))
+        Self::with_scan(|p| Ok(Arc::new(fake_scan(p))))
     }
 
-    fn with_scan(scan: impl Fn(&Path) -> anyhow::Result<CardScan> + Send + 'static) -> Self {
+    fn with_scan(scan: impl Fn(&Path) -> anyhow::Result<Arc<CardScan>> + Send + 'static) -> Self {
         let drives: Arc<Mutex<Vec<DriveInfo>>> = Default::default();
         let scans = Arc::new(AtomicUsize::new(0));
         let hub = EventHub::new();
@@ -171,7 +171,7 @@ fn failed_scan_is_not_retried_until_the_card_is_reinserted() {
         if *f.lock().unwrap() {
             anyhow::bail!("unreadable card")
         }
-        Ok(fake_scan(p))
+        Ok(Arc::new(fake_scan(p)))
     });
     rig.set(&[card.path()]);
     for _ in 0..3 {
@@ -218,4 +218,81 @@ fn two_cards_are_tracked_independently() {
         kinds,
         vec![format!("+{a}"), format!("+{b}"), format!("-{a}")]
     );
+}
+
+#[test]
+fn panicking_scan_is_contained_and_not_retried() {
+    let (bad, good) = (card_with_dcim(), card_with_dcim());
+    let bad_path = bad.path().to_path_buf();
+    let mut rig = Rig::with_scan(move |p| {
+        if p == bad_path {
+            panic!("corrupt file in decoder");
+        }
+        Ok(Arc::new(fake_scan(p)))
+    });
+    rig.set(&[bad.path()]);
+    for _ in 0..3 {
+        rig.watcher.tick();
+    }
+    assert!(rig.events().is_empty());
+    assert_eq!(rig.scans.load(Ordering::SeqCst), 1);
+
+    rig.set(&[bad.path(), good.path()]);
+    rig.watcher.tick();
+    match rig.events().as_slice() {
+        [ServerEvent::CardDetected { scan }] => {
+            assert_eq!(scan.source, good.path().to_string_lossy())
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(rig.scans.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn cards_endpoint_lists_announced_cards() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let data_root = tempfile::tempdir().unwrap();
+    let state = photosift::build_state(data_root.path(), port).unwrap();
+    let app = photosift::api::router(state.clone(), None);
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let drives: Arc<Mutex<Vec<DriveInfo>>> = Default::default();
+    let d = drives.clone();
+    let mut watcher = Watcher::new(
+        Box::new(move || d.lock().unwrap().clone()),
+        state.events.clone(),
+        |p| Ok(Arc::new(fake_scan(p))),
+    )
+    .with_registry(state.cards.clone());
+
+    let url = format!("http://127.0.0.1:{port}/api/cards");
+    let list = || async {
+        reqwest::get(&url)
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()
+    };
+    assert_eq!(list().await, serde_json::json!([]));
+
+    let card = card_with_dcim();
+    *drives.lock().unwrap() = vec![drive(card.path())];
+    // The tick blocks on the scanner, as it does on its own thread in main.
+    watcher = tokio::task::spawn_blocking(move || {
+        watcher.tick();
+        watcher
+    })
+    .await
+    .unwrap();
+    let got = list().await;
+    assert_eq!(got.as_array().unwrap().len(), 1, "{got}");
+    assert_eq!(got[0]["source"], card.path().to_string_lossy().as_ref());
+
+    drives.lock().unwrap().clear();
+    tokio::task::spawn_blocking(move || watcher.tick())
+        .await
+        .unwrap();
+    assert_eq!(list().await, serde_json::json!([]));
 }

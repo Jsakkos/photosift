@@ -2,7 +2,12 @@
 //! inserted and removed. The drive list and the scan are injected so tests run
 //! without hardware.
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{BTreeMap, HashMap},
+    panic::{catch_unwind, AssertUnwindSafe},
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use serde::Serialize;
 use sysinfo::Disks;
@@ -56,7 +61,33 @@ fn nonempty(s: &str) -> Option<String> {
 }
 
 type Lister = Box<dyn Fn() -> Vec<DriveInfo> + Send>;
-type Scanner = Box<dyn Fn(&Path) -> anyhow::Result<CardScan> + Send>;
+type Scanner = Box<dyn Fn(&Path) -> anyhow::Result<Arc<CardScan>> + Send>;
+
+/// Cards currently announced, by mount point. The broadcast only reaches
+/// connected clients, so a card inserted before the browser tab opens is
+/// recovered from here via `GET /api/cards`.
+#[derive(Clone, Default)]
+pub struct CardRegistry {
+    inner: Arc<Mutex<BTreeMap<String, CardScanSummary>>>,
+}
+
+impl CardRegistry {
+    pub fn list(&self) -> Vec<CardScanSummary> {
+        self.lock().values().cloned().collect()
+    }
+
+    fn insert(&self, mount: &str, summary: CardScanSummary) {
+        self.lock().insert(mount.to_string(), summary);
+    }
+
+    fn remove(&self, mount: &str) {
+        self.lock().remove(mount);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, CardScanSummary>> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 /// What the watcher knows about a mounted drive with a `DCIM` folder.
 enum Tracked {
@@ -71,6 +102,7 @@ pub struct Watcher {
     lister: Lister,
     hub: EventHub,
     scan: Scanner,
+    cards: CardRegistry,
     /// Keyed by mount point. Starts empty, so a card already in the reader
     /// when the server starts is "new" on the first tick and gets announced.
     tracked: HashMap<String, Tracked>,
@@ -80,14 +112,21 @@ impl Watcher {
     pub fn new(
         lister: Lister,
         hub: EventHub,
-        scan: impl Fn(&Path) -> anyhow::Result<CardScan> + Send + 'static,
+        scan: impl Fn(&Path) -> anyhow::Result<Arc<CardScan>> + Send + 'static,
     ) -> Self {
         Self {
             lister,
             hub,
             scan: Box::new(scan),
+            cards: CardRegistry::default(),
             tracked: HashMap::new(),
         }
+    }
+
+    /// Publishes announced cards into `cards` (the registry the API serves).
+    pub fn with_registry(mut self, cards: CardRegistry) -> Self {
+        self.cards = cards;
+        self
     }
 
     /// One poll. Blocking (the scan reads EXIF off the card): call from a
@@ -106,6 +145,7 @@ impl Watcher {
             .collect();
         for mount in gone {
             if let Some(Tracked::Announced(source)) = self.tracked.remove(&mount) {
+                self.cards.remove(&mount);
                 self.hub.send(ServerEvent::CardRemoved { source });
             }
         }
@@ -119,16 +159,25 @@ impl Watcher {
             if !Path::new(&d.mount_point).join("DCIM").is_dir() {
                 continue;
             }
-            match (self.scan)(Path::new(&d.mount_point)) {
-                Ok(scan) => {
+            // A decoder panic on one corrupt file must not end card detection.
+            let result = catch_unwind(AssertUnwindSafe(|| (self.scan)(Path::new(&d.mount_point))));
+            match result {
+                Ok(Ok(scan)) => {
                     let summary = CardScanSummary::from_scan(&scan);
                     let source = summary.source.clone();
+                    // Registry first, so a client reacting to the event and
+                    // calling /api/cards always sees the card.
+                    self.cards.insert(&d.mount_point, summary.clone());
                     self.hub.send(ServerEvent::CardDetected { scan: summary });
                     self.tracked
                         .insert(d.mount_point, Tracked::Announced(source));
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     eprintln!("card scan of {} failed: {e:#}", d.mount_point);
+                    self.tracked.insert(d.mount_point, Tracked::ScanFailed);
+                }
+                Err(_) => {
+                    eprintln!("card scan of {} panicked", d.mount_point);
                     self.tracked.insert(d.mount_point, Tracked::ScanFailed);
                 }
             }
