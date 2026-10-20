@@ -17,7 +17,7 @@ use std::{
 
 use quick_xml::{events::Event, Reader};
 
-use crate::outcome::{XmpFields, DELETE_LABEL};
+use crate::outcome::{XmpFields, BLOOPER_KEYWORD, DELETE_LABEL};
 
 const NS_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const NS_XMP: &str = "http://ns.adobe.com/xap/1.0/";
@@ -243,6 +243,29 @@ struct Open {
     items: Vec<Li>,
 }
 
+/// True for the fields PhotoSift writes (including its own bookkeeping), given
+/// the namespaces in scope. Used to refuse sidecars that keep them in a
+/// second rdf:Description, where a merge into the first would duplicate them.
+fn is_owned_field(scope: &[(String, String)], qname: &str) -> bool {
+    let Some((prefix, local)) = qname.split_once(':') else {
+        return false;
+    };
+    let Some((_, uri)) = scope.iter().find(|(p, _)| p == prefix) else {
+        return false;
+    };
+    matches!(
+        (uri.as_str(), local),
+        (NS_XMP, "Rating" | "Label")
+            | (NS_DC, "subject")
+            | (NS_LR, "hierarchicalSubject")
+            | (NS_PHOTOSIFT, "LabelSet" | "BlooperSet")
+    )
+}
+
+fn owned_elsewhere(qname: &str) -> String {
+    format!("{qname} is in a second rdf:Description; refusing to edit a sidecar split that way")
+}
+
 fn scan(doc: &str) -> Result<Scan, String> {
     let mut reader = Reader::from_str(doc);
     let mut decls: Vec<(String, String)> = Vec::new();
@@ -256,6 +279,8 @@ fn scan(doc: &str) -> Result<Scan, String> {
     let (mut rating, mut label, mut subject, mut hier) = (None, None, None, None);
     let mut cur: Option<Open> = None;
     let mut li_open: Option<(usize, String)> = None;
+    // Inside a later rdf:Description: (its depth, namespaces in scope).
+    let mut other: Option<(usize, Vec<(String, String)>)> = None;
 
     loop {
         let before = reader.buffer_position() as usize;
@@ -360,6 +385,25 @@ fn scan(doc: &str) -> Result<Scan, String> {
                         }
                         _ => {}
                     }
+                } else if let Some((other_depth, scope)) = other.as_ref() {
+                    if depth == other_depth + 1 && is_owned_field(scope, &name) {
+                        return Err(owned_elsewhere(&name));
+                    }
+                } else if name == found.as_ref().map_or("", |f| f.1.as_str()) {
+                    let tag = parse_tag(doc, (before, after))
+                        .ok_or_else(|| format!("unparseable tag <{name}>"))?;
+                    let mut scope = decls.clone();
+                    for a in &tag.attrs {
+                        if let Some(p) = a.name.strip_prefix("xmlns:") {
+                            scope.push((p.to_string(), a.value.clone()));
+                        }
+                    }
+                    if let Some(a) = tag.attrs.iter().find(|a| is_owned_field(&scope, &a.name)) {
+                        return Err(owned_elsewhere(&a.name));
+                    }
+                    if !empty {
+                        other = Some((depth, scope));
+                    }
                 }
                 if !empty {
                     depth += 1;
@@ -372,6 +416,9 @@ fn scan(doc: &str) -> Result<Scan, String> {
             }
             Event::End(_) => {
                 depth = depth.checked_sub(1).ok_or("unbalanced end tag")?;
+                if other.as_ref().is_some_and(|(d, _)| *d == depth) {
+                    other = None;
+                }
                 if let Some((desc_depth, ..)) = found.as_ref() {
                     if in_desc {
                         match depth - desc_depth {
@@ -751,13 +798,34 @@ impl Merge<'_> {
             bag.as_ref()
                 .is_some_and(|b| b.items.iter().any(|l| l.text == k))
         };
+        // The hierarchical keyword is ours to remove. The mirrored dc leaf is
+        // only ours if PhotoSift added it (BlooperSet) and no other hierarchical
+        // keyword still ends in the same leaf (e.g. a user's `Funny|Blooper`).
         let remove_hier: Vec<String> = f
             .remove_keywords
             .iter()
             .filter(|k| present(&sc.hier, k))
             .map(|k| k.to_string())
             .collect();
-        let remove_leaf: Vec<String> = remove_hier.iter().map(|k| leaf(k).to_string()).collect();
+        let ps = find_prefix(&self.decls, NS_PHOTOSIFT);
+        let set_name = ps.map(|p| format!("{p}:BlooperSet"));
+        let owned = set_name
+            .as_deref()
+            .and_then(|n| self.attr(n))
+            .is_some_and(|a| a.value == "1");
+        let mut remove_leaf: Vec<String> = Vec::new();
+        let mut clear_owned = false;
+        if f.remove_keywords.contains(&BLOOPER_KEYWORD) && owned {
+            clear_owned = true;
+            let shared = sc
+                .hier
+                .iter()
+                .flat_map(|b| &b.items)
+                .any(|l| l.text != BLOOPER_KEYWORD && leaf(&l.text) == leaf(BLOOPER_KEYWORD));
+            if !shared {
+                remove_leaf.push(leaf(BLOOPER_KEYWORD).to_string());
+            }
+        }
         let add_hier: Vec<String> = f
             .add_keywords
             .iter()
@@ -770,6 +838,8 @@ impl Merge<'_> {
             .filter(|k| !present(&sc.subject, leaf(k)))
             .map(|k| leaf(k).to_string())
             .collect();
+        let set_owned = add_leaf.iter().any(|l| l == leaf(BLOOPER_KEYWORD))
+            && f.add_keywords.contains(&BLOOPER_KEYWORD);
 
         let mut new_children = Vec::new();
         // dc:subject first, so a new element lands before lr:hierarchicalSubject.
@@ -788,6 +858,14 @@ impl Merge<'_> {
                 };
                 let p = self.prefix(uri, pref)?;
                 new_children.push((format!("{p}:{local}"), items));
+            }
+        }
+        if set_owned {
+            let p = self.prefix(NS_PHOTOSIFT, "photosift")?;
+            self.set_attr(&format!("{p}:BlooperSet"), "1");
+        } else if clear_owned {
+            if let Some(n) = set_name {
+                self.remove_attr(&n);
             }
         }
         Ok(new_children)

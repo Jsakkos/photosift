@@ -9,7 +9,18 @@ use photosift::outcome::{xmp_fields, Outcome};
 use photosift::xmp;
 use serde_json::{json, Value};
 
-const FIXTURE: &str = include_str!("fixtures/lightroom_sidecar.xmp");
+const FIXTURE_RAW: &str = include_str!("fixtures/lightroom_sidecar.xmp");
+
+/// The fixture with LF endings, whatever the checkout's autocrlf did to it.
+#[allow(clippy::no_effect_replace)] // no-op only where the checkout is LF
+fn fixture() -> String {
+    FIXTURE_RAW.replace(
+        "
+", "
+",
+    )
+}
+
 const ALL: [Outcome; 5] = [
     Outcome::Unreviewed,
     Outcome::Album,
@@ -32,7 +43,7 @@ fn sidecar(raw: &Path) -> PathBuf {
 /// Raw + the synthetic Lightroom sidecar.
 fn with_fixture(dir: &Path) -> PathBuf {
     let raw = raw_in(dir);
-    std::fs::write(sidecar(&raw), FIXTURE).unwrap();
+    std::fs::write(sidecar(&raw), fixture()).unwrap();
     raw
 }
 
@@ -81,7 +92,7 @@ fn unreviewed_leaves_existing_sidecar_alone() {
     let dir = tempfile::tempdir().unwrap();
     let raw = with_fixture(dir.path());
     set(&raw, Outcome::Unreviewed, false);
-    assert_eq!(read(&raw), FIXTURE);
+    assert_eq!(read(&raw), fixture());
 }
 
 #[test]
@@ -129,7 +140,7 @@ fn red_the_user_set_themselves_is_never_removed() {
     let raw = raw_in(dir.path());
     std::fs::write(
         sidecar(&raw),
-        FIXTURE.replace("xmp:Label=\"Blue\"", "xmp:Label=\"Red\""),
+        fixture().replace("xmp:Label=\"Blue\"", "xmp:Label=\"Red\""),
     )
     .unwrap();
     set(&raw, Outcome::Delete, false);
@@ -182,7 +193,7 @@ fn lightroom_fields_preserved() {
     let xml = read(&raw);
 
     // A new attribute may follow the last one, so compare without the tag's `>`.
-    for line in FIXTURE.lines().filter(|l| l.contains("crs:")) {
+    for line in fixture().lines().filter(|l| l.contains("crs:")) {
         let line = line.trim_end_matches('>');
         assert!(xml.contains(line), "lost line {line:?} in\n{xml}");
     }
@@ -201,7 +212,7 @@ fn plain_album_on_a_five_star_sidecar_changes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let raw = with_fixture(dir.path());
     set(&raw, Outcome::Album, false);
-    assert_eq!(read(&raw), FIXTURE);
+    assert_eq!(read(&raw), fixture());
 }
 
 #[test]
@@ -231,7 +242,7 @@ fn removing_the_last_keyword_drops_the_empty_bag() {
 fn appends_to_existing_hierarchical_bag_without_duplicates() {
     let dir = tempfile::tempdir().unwrap();
     let raw = raw_in(dir.path());
-    let doc = FIXTURE
+    let doc = fixture()
         .replace(
             "xmlns:dc=",
             "xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"\n    xmlns:dc=",
@@ -312,7 +323,7 @@ fn preserves_bom_and_crlf() {
     let raw = raw_in(dir.path());
     let doc = format!(
         "\u{feff}{}",
-        FIXTURE
+        fixture()
             .replace("xmp:Rating=\"5\"", "xmp:Rating=\"1\"")
             .replace('\n', "\r\n")
     );
@@ -463,4 +474,143 @@ async fn endpoint_rejects_bad_requests() {
     assert!(status == 400 || status == 422, "{status}");
     assert!(!sidecar(&s.files.path().join("IMG_0001.NEF")).exists());
     assert_eq!(stored_outcome(&s), Outcome::Unreviewed);
+}
+
+// ---- integrity ------------------------------------------------------------
+
+const LR_DECL: &str = "xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"";
+const PS_DECL: &str = "xmlns:photosift=\"http://photosift.app/ns/1.0/\"";
+
+/// The fixture after Album + blooper: its bytes, plus exactly these insertions.
+fn fixture_with_blooper() -> String {
+    fixture()
+        .replace(
+            "    crs:HasSettings=\"True\">",
+            &format!(
+                "    crs:HasSettings=\"True\"\n    {LR_DECL}\n    {PS_DECL}\n    photosift:BlooperSet=\"1\">"
+            ),
+        )
+        .replace(
+            "     <rdf:li>Fish &amp; Chips caf\u{e9}</rdf:li>\n",
+            "     <rdf:li>Fish &amp; Chips caf\u{e9}</rdf:li>\n     <rdf:li>Blooper</rdf:li>\n",
+        )
+        .replace(
+            "  </rdf:Description>",
+            "   <lr:hierarchicalSubject>\n    <rdf:Bag>\n     <rdf:li>PhotoSift|Blooper</rdf:li>\n    </rdf:Bag>\n   </lr:hierarchicalSubject>\n  </rdf:Description>",
+        )
+}
+
+#[test]
+fn album_with_blooper_changes_only_the_expected_spans() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = with_fixture(dir.path());
+    set(&raw, Outcome::Album, true);
+    assert_eq!(read(&raw), fixture_with_blooper());
+    // Escaped text, non-ASCII, the padded xpacket wrapper and the tone curve
+    // list all come through byte for byte.
+    let xml = read(&raw);
+    assert!(xml.contains("Fish &amp; Chips caf\u{e9}"));
+    assert!(xml.contains("<rdf:li>255, 255</rdf:li>"));
+    assert!(xml.contains(&format!("{}\n<?xpacket end=\"w\"?>", " ".repeat(99))));
+}
+
+#[test]
+fn blooper_on_then_off_leaves_only_namespace_declarations() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = with_fixture(dir.path());
+    set(&raw, Outcome::Album, true);
+    set(&raw, Outcome::Album, false);
+    let expected = fixture().replace(
+        "    crs:HasSettings=\"True\">",
+        &format!("    crs:HasSettings=\"True\"\n    {LR_DECL}\n    {PS_DECL}>"),
+    );
+    assert_eq!(read(&raw), expected);
+}
+
+const SPLIT_HEAD: &str = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n<rdf:Description rdf:about=\"\" xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\" crs:WhiteBalance=\"As Shot\"/>\n";
+const SPLIT_TAIL: &str = "</rdf:RDF>\n</x:xmpmeta>\n";
+
+#[test]
+fn fields_in_a_second_description_are_refused() {
+    let seconds = [
+        "<rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmp:Rating=\"3\" xmp:Label=\"Blue\"/>\n",
+        "<rdf:Description rdf:about=\"\" xmlns:x2=\"http://ns.adobe.com/xap/1.0/\" x2:Label=\"Blue\"/>\n",
+        "<rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:subject><rdf:Bag><rdf:li>a</rdf:li></rdf:Bag></dc:subject></rdf:Description>\n",
+        "<rdf:Description rdf:about=\"\" xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\"><lr:hierarchicalSubject><rdf:Bag/></lr:hierarchicalSubject></rdf:Description>\n",
+    ];
+    for second in seconds {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = raw_in(dir.path());
+        let doc = format!("{SPLIT_HEAD}{second}{SPLIT_TAIL}");
+        std::fs::write(sidecar(&raw), &doc).unwrap();
+        for (o, blooper) in [(Outcome::Album, false), (Outcome::Delete, true)] {
+            let err = xmp::apply(&raw, &xmp_fields(o, blooper)).unwrap_err();
+            assert!(err.to_string().contains("second rdf:Description"), "{err}");
+            assert_eq!(read(&raw), doc);
+        }
+    }
+}
+
+#[test]
+fn unrelated_second_description_is_fine() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = raw_in(dir.path());
+    let second = "<rdf:Description rdf:about=\"\" xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\" tiff:Make=\"Synthetic\"/>\n";
+    std::fs::write(sidecar(&raw), format!("{SPLIT_HEAD}{second}{SPLIT_TAIL}")).unwrap();
+    set(&raw, Outcome::Album, false);
+    let xml = read(&raw);
+    assert!(xml.contains("xmp:Rating=\"4\""));
+    assert!(xml.contains(second));
+}
+
+// ---- blooper ownership ----------------------------------------------------
+
+fn doc_with(dc_items: &[&str], hier_items: &[&str]) -> String {
+    let bag = |q: &str, items: &[&str]| {
+        if items.is_empty() {
+            return String::new();
+        }
+        let lis: String = items
+            .iter()
+            .map(|i| format!("<rdf:li>{i}</rdf:li>"))
+            .collect();
+        format!("<{q}><rdf:Bag>{lis}</rdf:Bag></{q}>")
+    };
+    format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:lr=\"http://ns.adobe.com/lightroom/1.0/\">{}{}</rdf:Description></rdf:RDF></x:xmpmeta>",
+        bag("dc:subject", dc_items),
+        bag("lr:hierarchicalSubject", hier_items)
+    )
+}
+
+#[test]
+fn users_own_blooper_leaf_survives_blooper_on_then_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = raw_in(dir.path());
+    std::fs::write(sidecar(&raw), doc_with(&["Blooper"], &[])).unwrap();
+    set(&raw, Outcome::Album, true);
+    let xml = read(&raw);
+    assert_eq!(count(&xml, "<rdf:li>Blooper</rdf:li>"), 1, "{xml}");
+    assert!(xml.contains("<rdf:li>PhotoSift|Blooper</rdf:li>"));
+    assert!(!xml.contains("BlooperSet"), "{xml}");
+    set(&raw, Outcome::Album, false);
+    let xml = read(&raw);
+    assert_eq!(count(&xml, "<rdf:li>Blooper</rdf:li>"), 1, "{xml}");
+    assert!(!xml.contains("PhotoSift|Blooper"), "{xml}");
+}
+
+#[test]
+fn users_funny_blooper_hierarchy_keeps_its_leaf() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = raw_in(dir.path());
+    std::fs::write(sidecar(&raw), doc_with(&[], &["Funny|Blooper"])).unwrap();
+    set(&raw, Outcome::Album, true);
+    assert!(read(&raw).contains("BlooperSet=\"1\""));
+    assert_eq!(count(&read(&raw), "<rdf:li>Blooper</rdf:li>"), 1);
+    set(&raw, Outcome::Album, false);
+    let xml = read(&raw);
+    assert!(xml.contains("<rdf:li>Funny|Blooper</rdf:li>"), "{xml}");
+    assert_eq!(count(&xml, "<rdf:li>Blooper</rdf:li>"), 1, "{xml}");
+    assert!(!xml.contains("PhotoSift|Blooper"));
+    assert!(!xml.contains("BlooperSet"), "ownership is released: {xml}");
 }
