@@ -27,7 +27,7 @@ When the design doc and the code disagree, the code wins — flag the divergence
 | Models | YuNet (face detect) + SFace (identity), fetched by `scripts/fetch-models.ps1`, never committed |
 | Web | React 19 + TypeScript strict, React Router 7, Vite 6, no state library |
 | Tests | `cargo test` (server), Vitest (web unit), Playwright against a real server (web e2e) |
-| Platform | Windows 11 only; binds `127.0.0.1` only, default port `7420` |
+| Platform | Windows 11 only; binds `127.0.0.1` only, default port `7420` (release) / `7421` (debug) |
 
 ## Repo Layout
 
@@ -106,9 +106,10 @@ Anything else under `/` serves `web/dist` with an SPA fallback to `index.html`.
 | `PHOTOSIFT_WEB_DIST` | built UI directory; default `<exe dir>\web`. Missing dir ⇒ API-only. |
 | `PHOTOSIFT_GOLDEN_DIR` | fake-card dir for the `#[ignore]` golden tests |
 | `PHOTOSIFT_MODELS_DIR` | models dir for the golden enrichment test; default `<data root>\models` |
-| Library root | `settings.toml` `library_root`, default `E:\photos\DSLR` |
+| Library root | `settings.toml` `library_root`; default release `E:\photos\DSLR`, debug `<dev data root>\library` |
+| Port | `settings.toml` `port`; default release `7420`, debug `7421` |
 
-Debug and release keep separate state, so a running release binary is unaffected by development.
+Debug and release keep separate state (data root, port, library), so a running release binary is unaffected by development. Defaults only: an existing `settings.toml` keeps whatever it says, so an old dev `settings.toml` that still has `7420` / the real library must be edited or deleted.
 
 ## Commands
 
@@ -116,12 +117,12 @@ Debug and release keep separate state, so a running release binary is unaffected
 # One-time: download YuNet + SFace into the debug data root (omit -Dev for release)
 powershell -File scripts\fetch-models.ps1 -Dev
 
-# Run the server (debug build, data root ~\.photosift-dev, http://127.0.0.1:7420)
+# Run the server (debug build, data root ~\.photosift-dev, http://127.0.0.1:7421)
 cargo run --manifest-path server/Cargo.toml
 # Without PHOTOSIFT_WEB_DIST / a web\ dir beside the exe the server is API-only;
 # either point it at web/dist after `npm --prefix web run build`, or use the dev server:
 npm --prefix web ci            # first time
-npm --prefix web run dev       # Vite on http://localhost:5173, proxies /api /media /ws to :7420
+npm --prefix web run dev       # Vite on http://localhost:5173, proxies /api /media /ws to :7421
 
 # Tests and checks
 cargo test --manifest-path server/Cargo.toml
@@ -162,7 +163,7 @@ Only summarize what you actually observed. Don't say "works" on the strength of 
 - **Host/Origin guard.** `api/guard.rs` rejects any `Host` other than `127.0.0.1:<port>` / `localhost:<port>` (DNS rebinding) and any foreign `Origin` on non-GET and WebSocket requests. Debug builds also trust Vite's `http://localhost:5173`. The Vite proxy therefore **must** set `changeOrigin: true` (it does in `web/vite.config.ts`); a new proxied path needs it too.
 - **CUDA.** `ort` is built with `cuda`. ORT ships `onnxruntime_providers_cuda.dll` / `_shared.dll` beside the exe (copied by `build-release.ps1`), but not cuBLAS/cuDNN: those must be on `PATH`, or bundled with `build-release.ps1 -CudaDllDir <dir>` (the pip `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels are a source). If CUDA init fails the server logs it and falls back to CPU; never fatal. Models absent ⇒ enrichment reports unavailable and the app still runs.
 - **Dev profile** sets `opt-level = 3` for `ort`, `ort-sys`, `fast_image_resize` and image/JPEG crates; ONNX inference is >1 s/image without it. Don't lower without measuring.
-- **Port 7420** is the single-instance lock. A second `photosift.exe` finds the first via `/api/health` and exits. Orphaned dev servers hold the port, and Vite pins `5173` (`strictPort`). Kill both before ending a session.
+- **Port 7420 (release) / 7421 (debug)** is the single-instance lock. A second `photosift.exe` on the same port finds the first via `/api/health` and exits. Debug uses its own port and library so it coexists with the logon-started release. Orphaned dev servers hold their port, and Vite pins `5173` (`strictPort`). Kill both before ending a session.
 - **Release exe is a GUI-subsystem build**: no console; output goes to `<data root>\logs\photosift.log`.
 - **Types** are mirrored by hand: change a response in `server/src/api/*`, update `web/src/api/types.ts` in the same commit.
 - Conventional commits (`feat:`, `fix:`, `refactor!:` ...).

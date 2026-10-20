@@ -17,17 +17,31 @@ pub struct Settings {
     pub burst_window_seconds: i64,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
+impl Settings {
+    /// Defaults for a data root. Debug builds get another port and a library
+    /// inside their own data root, so `cargo run` and `npm run dev` never
+    /// collide with (or write into) the logon-started release.
+    pub fn defaults_for(root: &Path) -> Self {
+        let (library_root, port) = if cfg!(debug_assertions) {
+            (root.join("library"), 7421)
+        } else {
+            (PathBuf::from(r"E:\photos\DSLR"), 7420)
+        };
         Self {
-            library_root: PathBuf::from(r"E:\photos\DSLR"),
-            port: 7420,
+            library_root,
+            port,
             event_gap_minutes: 120,
             everyday_max_photos: 25,
             moment_gap_seconds: 90,
             burst_phash_max: 12,
             burst_window_seconds: 10,
         }
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self::defaults_for(&data_root())
     }
 }
 
@@ -65,7 +79,7 @@ pub fn load(root: &Path) -> anyhow::Result<Settings> {
         .with_context(|| format!("creating data root {}", root.display()))?;
     let path = root.join(SETTINGS_FILE);
     if !path.exists() {
-        let text = toml::to_string_pretty(&Settings::default())?;
+        let text = toml::to_string_pretty(&Settings::defaults_for(root))?;
         std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
     }
     let text =

@@ -23,7 +23,7 @@ Prerequisites: Windows 11, Rust (stable), Node 22. An NVIDIA GPU with CUDA 12 / 
 # one-time: download the face models into the dev data root
 powershell -File scripts\fetch-models.ps1 -Dev
 
-# server (debug build), http://127.0.0.1:7420
+# server (debug build), http://127.0.0.1:7421 (the release uses 7420)
 cargo run --manifest-path server/Cargo.toml
 
 # UI with hot reload, http://localhost:5173 (proxies the API to the server)
@@ -46,7 +46,7 @@ The release exe serves the UI itself; open `http://127.0.0.1:7420/` (or run `pho
 |---|---|---|
 | Data root | `%USERPROFILE%\.photosift\` | `%USERPROFILE%\.photosift-dev\` |
 
-Override with `PHOTOSIFT_HOME`. The root holds `photosift.db` (SQLite), `settings.toml`, `cache\preview\` and `cache\thumb\` (regenerable), `models\`, and `logs\`. The photo library itself lives at `library_root` in `settings.toml` (default `E:\photos\DSLR`), laid out as `{root}\{YYYY}\{YYYY-MM-DD}_{Slug}\`.
+Override with `PHOTOSIFT_HOME`. The root holds `photosift.db` (SQLite), `settings.toml`, `cache\preview\` and `cache\thumb\` (regenerable), `models\`, and `logs\`. The photo library itself lives at `library_root` in `settings.toml` (default release `E:\photos\DSLR`; a debug build defaults to `library\` inside its own data root, and uses port 7421), laid out as `{root}\{YYYY}\{YYYY-MM-DD}_{Slug}\`.
 
 ## Tests
 

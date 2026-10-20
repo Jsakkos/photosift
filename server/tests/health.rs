@@ -23,11 +23,21 @@ async fn settings_defaults_written() {
     let path = server.data_root.path().join("settings.toml");
     assert!(path.exists(), "settings.toml should be written on startup");
     let settings: Settings = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(
-        settings.library_root,
-        std::path::PathBuf::from(r"E:\photos\DSLR")
-    );
-    assert_eq!(settings.port, 7420);
+    // Debug builds must not collide with the logon-started release: another
+    // port and a library inside the dev data root.
+    if cfg!(debug_assertions) {
+        assert_eq!(
+            settings.library_root,
+            server.data_root.path().join("library")
+        );
+        assert_eq!(settings.port, 7421);
+    } else {
+        assert_eq!(
+            settings.library_root,
+            std::path::PathBuf::from(r"E:\photos\DSLR")
+        );
+        assert_eq!(settings.port, 7420);
+    }
     assert_eq!(settings.event_gap_minutes, 120);
     assert_eq!(settings.everyday_max_photos, 25);
     assert_eq!(settings.moment_gap_seconds, 90);
@@ -59,4 +69,17 @@ async fn serves_index_when_web_dist_present() {
         .await
         .unwrap();
     assert_eq!(unknown_api.status(), 404);
+}
+
+#[test]
+fn existing_settings_keep_their_values() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("settings.toml"),
+        "library_root = 'D:\\pics'\nport = 7420\n",
+    )
+    .unwrap();
+    let settings = photosift::config::load(root.path()).unwrap();
+    assert_eq!(settings.library_root, std::path::PathBuf::from(r"D:\pics"));
+    assert_eq!(settings.port, 7420);
 }
