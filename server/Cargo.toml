@@ -17,6 +17,9 @@ anyhow = "1"
 axum = "0.8"
 chrono = "0.4"
 dirs = "6"
+fast_image_resize = "5"
+jpeg-encoder = "0.6"
+kamadak-exif = "0.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -24,7 +27,17 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 toml = "0.8"
 tower-http = { version = "0.6", features = ["fs"] }
+zune-jpeg = "0.4"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tempfile = "3"
+
+# Dev-profile codegen for JPEG decode/encode and resizing is 5-10x slower than
+# release; bumping just these crates keeps ingest and tests usable in debug.
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.jpeg-encoder]
+opt-level = 3
+[profile.dev.package.fast_image_resize]
+opt-level = 3

@@ -1,6 +1,7 @@
 pub mod api;
 pub mod config;
 pub mod db;
+pub mod media;
 pub mod outcome;
 
 use std::{path::Path, path::PathBuf, sync::Arc};
