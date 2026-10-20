@@ -14,12 +14,19 @@ use events::EventHub;
 
 /// Builds the full app (API + optional static web) rooted at `data_root`.
 /// Taking paths explicitly keeps tests free of process-global env mutation.
-pub fn build_app(data_root: &Path, web_dist: Option<PathBuf>) -> anyhow::Result<axum::Router> {
+/// `port` is the port the listener is bound to: the Host/Origin guard only
+/// accepts requests addressed to it.
+pub fn build_app(
+    data_root: &Path,
+    web_dist: Option<PathBuf>,
+    port: u16,
+) -> anyhow::Result<axum::Router> {
     let settings = config::load(data_root)?;
     let db = db::open(&data_root.join("photosift.db"))?;
     let state = AppState {
         settings: Arc::new(settings),
         db,
+        port,
         data_root: data_root.to_path_buf(),
         events: EventHub::new(),
         scans: Default::default(),

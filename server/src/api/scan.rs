@@ -20,6 +20,14 @@ pub async fn scan(
 ) -> Result<Json<Arc<CardScan>>, ApiError> {
     let (db, settings) = (state.db.clone(), state.settings.clone());
     let source = body.source;
+    // Reading a UNC path makes Windows authenticate to that host (leaking an
+    // NTLM hash to whoever a hostile page names), so network sources are out.
+    let text = source.to_string_lossy();
+    if text.starts_with(r"\\") || text.starts_with("//") {
+        return Err(ApiError::bad_request(
+            "network (UNC) paths cannot be scanned; use a local or mapped drive",
+        ));
+    }
     // The walk reads EXIF off a slow card; keep it off the async runtime.
     let card = tokio::task::spawn_blocking(move || scan::scan(&source, &db, &settings))
         .await

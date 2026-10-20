@@ -1,3 +1,4 @@
+mod guard;
 mod import;
 mod scan;
 mod ws;
@@ -10,6 +11,7 @@ use std::{
 
 use axum::{
     http::StatusCode,
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -28,6 +30,8 @@ pub struct AppState {
     pub settings: Arc<Settings>,
     pub data_root: PathBuf,
     pub db: DbPool,
+    /// The port actually bound; the Host/Origin guard compares against it.
+    pub port: u16,
     pub events: EventHub,
     pub scans: ScanCache,
     /// Set while an import job runs; see `api::import`.
@@ -100,16 +104,19 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/import", post(import::start))
         .fallback(|| async { StatusCode::NOT_FOUND })
         .with_state(state.clone());
+    let guard = middleware::from_fn_with_state(state.clone(), guard::check);
     let app = Router::new()
         .route("/ws", get(ws::handler).with_state(state))
         .nest("/api", api);
-    match web_dist {
+    let app = match web_dist {
         // Client-side routes (e.g. /review/123) fall back to index.html with 200.
         Some(dist) => app.fallback_service(
             ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html"))),
         ),
         None => app,
-    }
+    };
+    // Last, so it wraps every route including /ws and the static fallback.
+    app.layer(guard)
 }
 
 async fn health() -> Json<serde_json::Value> {
