@@ -501,12 +501,20 @@ async fn golden_burst_groups_near_identicals() {
     };
     let first = report("A", &["DSCF1615", "DSCF1616", "DSCF1617"]);
     let second = report("B", &["DSCF1765", "DSCF1766"]);
-    for (label, rows) in [("1615-1617", &first), ("1765-1766", &second)] {
-        let b = rows[0].1.burst_idx;
-        assert!(b.is_some(), "{label}: no burst assigned");
-        assert!(
-            rows.iter().all(|(_, r)| r.burst_idx == b),
-            "{label} must share one burst"
-        );
-    }
+    let b = first[0].1.burst_idx;
+    assert!(b.is_some(), "1615-1617: no burst assigned");
+    assert!(
+        first.iter().all(|(_, r)| r.burst_idx == b),
+        "DSCF1615/1616/1617 must share one burst"
+    );
+
+    // A pose change a second apart is a new burst, but still the same moment.
+    let (a, c) = (&second[0].1, &second[1].1);
+    assert!(a.moment_idx.is_some(), "1765: no moment assigned");
+    assert_eq!(a.moment_idx, c.moment_idx, "DSCF1765/1766 share a moment");
+    assert_eq!(
+        c.burst_idx.zip(a.burst_idx).map(|(y, x)| y - x),
+        Some(1),
+        "DSCF1765/1766 are in adjacent bursts"
+    );
 }
