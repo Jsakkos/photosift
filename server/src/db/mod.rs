@@ -1,4 +1,5 @@
 pub mod photos;
+pub mod review;
 
 use std::{
     path::Path,

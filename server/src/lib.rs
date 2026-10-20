@@ -6,6 +6,7 @@ pub mod events;
 pub mod ingest;
 pub mod media;
 pub mod outcome;
+pub mod trash;
 pub mod xmp;
 
 use std::{path::Path, path::PathBuf, sync::Arc};

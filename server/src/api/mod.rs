@@ -1,7 +1,10 @@
 mod guard;
 mod import;
+mod media;
 mod photos;
 mod scan;
+mod shoots;
+mod trash;
 mod ws;
 
 use std::{
@@ -109,12 +112,19 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/status", get(status))
         .route("/scan", post(scan::scan))
         .route("/import", post(import::start))
+        .route("/shoots", get(shoots::list))
+        .route("/shoots/{id}/review", get(shoots::review))
+        .route("/shoots/{id}/trash", post(trash::trash_shoot))
         .route("/photos/{id}/outcome", post(photos::set_outcome))
         .fallback(|| async { StatusCode::NOT_FOUND })
         .with_state(state.clone());
     let guard = middleware::from_fn_with_state(state.clone(), guard::check);
     let app = Router::new()
-        .route("/ws", get(ws::handler).with_state(state))
+        .route("/ws", get(ws::handler).with_state(state.clone()))
+        // Top level, before the SPA fallback, so a missing id is a 404.
+        .route("/media/preview/{id}", get(media::preview))
+        .route("/media/thumb/{id}", get(media::thumb))
+        .with_state(state)
         .nest("/api", api);
     let app = match web_dist {
         // Client-side routes (e.g. /review/123) fall back to index.html with 200.

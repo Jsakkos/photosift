@@ -466,6 +466,34 @@ pub fn set_outcome(
     })
 }
 
+/// Photos of the shoot marked `delete` that are not in the Recycle Bin yet.
+pub fn pending_deletes(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<PhotoRow>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(&format!(
+            "SELECT {PHOTO_COLUMNS} FROM photos              WHERE shoot_id = ?1 AND outcome = 'delete' AND trashed_at IS NULL ORDER BY id"
+        ))?;
+        let rows = stmt
+            .query_map([shoot_id], row_to_photo)?
+            .collect::<Result<Vec<_>, _>>();
+        rows
+    })
+}
+
+/// Records that the photo's files went to the Recycle Bin. The `photos` and
+/// `files` rows stay (see `trash`).
+pub fn mark_trashed(pool: &DbPool, photo_id: i64) -> anyhow::Result<()> {
+    pool.with(|c| {
+        c.execute(
+            "UPDATE photos SET trashed_at = ?1 WHERE id = ?2",
+            params![
+                fmt_datetime(Some(chrono::Local::now().naive_local())),
+                photo_id
+            ],
+        )
+        .map(|_| ())
+    })
+}
+
 /// Distinct shoots owning the given photos.
 pub fn shoot_ids_of_photos(pool: &DbPool, photo_ids: &[i64]) -> anyhow::Result<Vec<i64>> {
     pool.with(|c| {
