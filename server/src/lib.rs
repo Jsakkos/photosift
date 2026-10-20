@@ -24,7 +24,8 @@ pub fn build_app(
     let settings = config::load(data_root)?;
     let db = db::open(&data_root.join("photosift.db"))?;
     let events = EventHub::new();
-    let enrich = enrich::job::EnrichWorker::start(db.clone(), events.clone(), data_root);
+    let enrich =
+        enrich::job::EnrichWorker::start(db.clone(), events.clone(), data_root, settings.clone());
     let state = AppState {
         settings: Arc::new(settings),
         db,

@@ -3,6 +3,7 @@
 pub mod faces;
 pub mod identity;
 pub mod job;
+pub mod moments;
 pub mod quality;
 
 use std::path::Path;

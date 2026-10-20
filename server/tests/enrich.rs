@@ -287,6 +287,9 @@ async fn missing_models_is_not_fatal() {
         assert!(p.mean_luma.is_some() && p.clip_hi.is_some() && p.clip_lo.is_some());
         assert!(p.face_sharpness.is_none(), "no faces, no face sharpness");
         assert!(photos::list_faces(&pool, id).unwrap().is_empty());
+        // The worker groups the shoot once every photo has its signals.
+        assert_eq!(p.moment_idx, Some(0), "photo {id}: one moment (60 s gaps)");
+        assert!(p.burst_idx.is_some() && p.signal_score.is_some());
     }
     // The queue drains once the worker is done.
     for _ in 0..40 {

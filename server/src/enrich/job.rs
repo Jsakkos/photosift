@@ -14,8 +14,10 @@ use rayon::prelude::*;
 
 use super::faces::Detector;
 use super::identity::Embedder;
+use super::moments;
 use super::quality::{self, gray_of};
 use super::Backend;
+use crate::config::Settings;
 use crate::db::photos::{self, NewFace, PhotoRow, QualityColumns};
 use crate::db::DbPool;
 use crate::events::{EventHub, ServerEvent};
@@ -90,13 +92,14 @@ struct Ctx {
     events: EventHub,
     cache_root: PathBuf,
     models: Option<Models>,
+    settings: Settings,
 }
 
 impl EnrichWorker {
     /// Loads the models from `<data_root>/models` (their absence is not an
     /// error: photos still get quality signals), starts the thread, and queues
     /// any shoot left unenriched by an earlier run.
-    pub fn start(db: DbPool, events: EventHub, data_root: &Path) -> Self {
+    pub fn start(db: DbPool, events: EventHub, data_root: &Path, settings: Settings) -> Self {
         let models = load_models(&data_root.join("models"));
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
@@ -109,6 +112,7 @@ impl EnrichWorker {
             events,
             cache_root: data_root.join("cache"),
             models,
+            settings,
         };
         let thread_shared = Arc::clone(&shared);
         let spawned = std::thread::Builder::new()
@@ -231,13 +235,18 @@ fn run_shoot(ctx: &Ctx, shoot_id: i64) {
         }
         progress(done.fetch_add(1, Ordering::SeqCst) + 1);
     });
-    after_shoot_enriched(&ctx.db, shoot_id);
+    after_shoot_enriched(ctx, shoot_id);
     ctx.events.send(ServerEvent::EnrichDone { shoot_id });
 }
 
-/// Hook for grouping photos into moments and bursts (`moments::assign`, Task 8)
-/// once every photo of the shoot has its signals.
-fn after_shoot_enriched(_db: &DbPool, _shoot_id: i64) {}
+/// Groups the shoot's photos into moments and bursts once every photo has its
+/// signals. A failure is logged, never fatal: the photos stay reviewable, just
+/// without sections.
+fn after_shoot_enriched(ctx: &Ctx, shoot_id: i64) {
+    if let Err(e) = moments::assign(&ctx.db, shoot_id, &ctx.settings) {
+        eprintln!("photosift: grouping shoot {shoot_id} into moments: {e:#}");
+    }
+}
 
 fn save(ctx: &Ctx, photo_id: i64, quality: &QualityColumns, faces: &[NewFace]) {
     if let Err(e) = photos::save_enrichment(&ctx.db, photo_id, quality, faces) {
