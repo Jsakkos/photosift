@@ -270,6 +270,55 @@ fn pairs_raf_with_jpg() {
 }
 
 #[test]
+fn extra_same_stem_jpeg_becomes_its_own_item() {
+    // A.RAF + A.JPG + A.JPEG: every media file on the card must be copied, so
+    // the JPEG that is not the RAF's sibling cannot be silently dropped.
+    let dir = tempfile::tempdir().unwrap();
+    let jpeg = jpeg_taken("2026:10:18 10:00:00");
+    write(&dir.path().join("A.RAF"), &fake_raf(&jpeg));
+    write(&dir.path().join("A.JPG"), &jpeg);
+    write(&dir.path().join("A.JPEG"), &jpeg);
+    let (_d, pool) = pool();
+
+    let card = scan(dir.path(), &pool, &Settings::default()).unwrap();
+    assert_eq!(card.items.len(), 2);
+    let mut covered: Vec<String> = card
+        .items
+        .iter()
+        .flat_map(|i| std::iter::once(&i.primary).chain(i.sibling_jpeg.iter()))
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    covered.sort();
+    assert_eq!(covered, ["A.JPEG", "A.JPG", "A.RAF"]);
+
+    let raw = card
+        .items
+        .iter()
+        .find(|i| i.primary.file_name().unwrap() == "A.RAF")
+        .unwrap();
+    assert!(raw.sibling_jpeg.is_some());
+    let lone = card
+        .items
+        .iter()
+        .find(|i| i.primary.file_name().unwrap() != "A.RAF")
+        .unwrap();
+    assert!(lone.sibling_jpeg.is_none());
+    assert_eq!(lone.kind, ItemKind::Photo);
+}
+
+#[test]
+fn clean_scan_has_no_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        &dir.path().join("DSCF0001.JPG"),
+        &jpeg_taken("2026:10:18 10:00:00"),
+    );
+    let (_d, pool) = pool();
+    let card = scan(dir.path(), &pool, &Settings::default()).unwrap();
+    assert!(card.warnings.is_empty());
+}
+
+#[test]
 fn walks_nested_dcim_and_ignores_other_files() {
     let dir = tempfile::tempdir().unwrap();
     let jpeg = jpeg_taken("2026:10:18 10:00:00");

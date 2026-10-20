@@ -67,11 +67,14 @@ pub struct CardScan {
     pub already_imported: usize,
     /// Proposed with zero camera offsets; the user adjusts offsets afterwards.
     pub events: Vec<ProposedEvent>,
+    /// Directories or entries the walk could not read. Surfaced so a card that
+    /// is only partly readable never looks fully scanned.
+    pub warnings: Vec<String>,
 }
 
 /// Blocking: call from `spawn_blocking` inside async handlers.
 pub fn scan(source: &Path, db: &DbPool, settings: &Settings) -> anyhow::Result<CardScan> {
-    let files = walk(source)?;
+    let (files, warnings) = walk(source)?;
 
     let mut items = Vec::new();
     for paired in pair(files) {
@@ -99,6 +102,7 @@ pub fn scan(source: &Path, db: &DbPool, settings: &Settings) -> anyhow::Result<C
         already_imported: count_already_imported(db, &items)?,
         items,
         events,
+        warnings,
     })
 }
 
@@ -186,21 +190,47 @@ fn is_hidden(name: &std::ffi::OsStr, meta: &Metadata) -> bool {
 }
 
 /// Every supported file under `root`, sorted so pairing and ordering are
-/// deterministic. Unreadable subdirectories are skipped; an unreadable root is
-/// an error.
-fn walk(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+/// deterministic, plus a warning for each directory or entry that could not be
+/// read. An unreadable root is an error.
+fn walk(root: &Path) -> anyhow::Result<(Vec<PathBuf>, Vec<String>)> {
+    walk_with(root, &|p| fs::read_dir(p))
+}
+
+/// `list` is injectable because a permission-denied directory is awkward to
+/// stage portably in tests.
+fn walk_with(
+    root: &Path,
+    list: &dyn Fn(&Path) -> std::io::Result<fs::ReadDir>,
+) -> anyhow::Result<(Vec<PathBuf>, Vec<String>)> {
     let mut found = Vec::new();
+    let mut warnings = Vec::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
-        let entries = match fs::read_dir(&dir) {
+        let entries = match list(&dir) {
             Ok(e) => e,
             Err(e) if dir == root => {
                 return Err(e).with_context(|| format!("reading {}", root.display()))
             }
-            Err(_) => continue,
+            Err(e) => {
+                warnings.push(format!("cannot read directory {}: {e}", dir.display()));
+                continue;
+            }
         };
-        for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else { continue };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) => {
+                    warnings.push(format!("cannot read an entry in {}: {e}", dir.display()));
+                    continue;
+                }
+            };
+            let meta = match entry.metadata() {
+                Ok(meta) => meta,
+                Err(e) => {
+                    warnings.push(format!("cannot stat {}: {e}", entry.path().display()));
+                    continue;
+                }
+            };
             // Never follow links: a junction on a card could loop or leave it.
             if meta.file_type().is_symlink() || is_hidden(&entry.file_name(), &meta) {
                 continue;
@@ -218,7 +248,7 @@ fn walk(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
         }
     }
     found.sort();
-    Ok(found)
+    Ok((found, warnings))
 }
 
 // --- pairing --------------------------------------------------------------
@@ -240,10 +270,12 @@ fn pair_key(path: &Path) -> Option<(PathBuf, String)> {
 
 /// Ported from the Tauri app's `ingest::pairing`. Pairing rule: same parent
 /// directory and same file stem (case-insensitive). A JPEG with several RAW
-/// partners attaches to the first only. Videos never pair.
+/// partners attaches to the first only. Videos never pair. When one RAW has
+/// several same-stem JPEGs (A.JPG and A.JPEG) the first attaches and the rest
+/// become lone JPEG items, so every media file on the card is still copied.
 fn pair(files: Vec<PathBuf>) -> Vec<Paired> {
-    // Index JPEGs and RAW keys up front so a JPEG that sorts before its RAW is
-    // still recognised as a sibling rather than emitted as a lone photo.
+    // Index up front so a JPEG that sorts before its RAW is still recognised
+    // as a sibling rather than emitted as a lone photo.
     let mut jpeg_index: HashMap<(PathBuf, String), usize> = HashMap::new();
     let mut raw_keys: HashSet<(PathBuf, String)> = HashSet::new();
     for (i, path) in files.iter().enumerate() {
@@ -255,9 +287,15 @@ fn pair(files: Vec<PathBuf>) -> Vec<Paired> {
             }
         }
     }
+    // Only JPEGs with a RAW partner can be siblings; remember which one wins.
+    let attachable: HashSet<usize> = jpeg_index
+        .iter()
+        .filter(|(key, _)| raw_keys.contains(*key))
+        .map(|(_, &i)| i)
+        .collect();
 
     let mut items = Vec::with_capacity(files.len());
-    for path in &files {
+    for (i, path) in files.iter().enumerate() {
         if has_ext(path, RAW_EXTS) {
             let sibling = pair_key(path)
                 .and_then(|key| jpeg_index.remove(&key))
@@ -268,9 +306,8 @@ fn pair(files: Vec<PathBuf>) -> Vec<Paired> {
                 kind: ItemKind::Photo,
             });
         } else if has_ext(path, JPEG_EXTS) {
-            let has_raw_partner = pair_key(path).is_some_and(|key| raw_keys.contains(&key));
-            // A partnered JPEG is emitted with its RAW, never on its own.
-            if !has_raw_partner {
+            // The chosen sibling is emitted with its RAW; any other JPEG is a photo.
+            if !attachable.contains(&i) {
                 items.push(Paired {
                     primary: path.clone(),
                     sibling_jpeg: None,
@@ -355,4 +392,44 @@ fn mtime_local(meta: &Metadata, path: &Path) -> anyhow::Result<NaiveDateTime> {
         .naive_local()
         .with_nanosecond(0)
         .expect("0 ns is always valid"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unreadable_subdirectory_is_reported_not_skipped_silently() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("DCIM").join("bad");
+        fs::create_dir_all(&bad).unwrap();
+        fs::write(dir.path().join("DCIM").join("ok.jpg"), b"x").unwrap();
+        fs::write(bad.join("lost.jpg"), b"x").unwrap();
+
+        // Permission denial is awkward to stage portably, so the directory
+        // lister is injected and fails for one directory.
+        let list = |p: &Path| {
+            if p == bad {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "denied",
+                ))
+            } else {
+                fs::read_dir(p)
+            }
+        };
+        let (files, warnings) = walk_with(dir.path(), &list).unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("bad"), "{warnings:?}");
+        assert!(warnings[0].contains("denied"), "{warnings:?}");
+    }
+
+    #[test]
+    fn unreadable_root_is_still_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let list = |_: &Path| Err(std::io::Error::other("gone"));
+        assert!(walk_with(dir.path(), &list).is_err());
+    }
 }
