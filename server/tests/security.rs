@@ -150,13 +150,20 @@ async fn websocket_from_our_origin_or_no_origin_connects() {
 }
 
 #[tokio::test]
-async fn unc_scan_sources_are_rejected() {
+async fn non_local_scan_sources_are_rejected() {
     let server = spawn_server().await;
     let client = reqwest::Client::new();
     for source in [
         r"\\attacker\share",
         "//attacker/share",
         r"\\?\UNC\attacker\share",
+        r"\/x\y",
+        r"/\x\y",
+        r"\??\UNC\x\y",
+        r"\\.\pipe\x",
+        r"relative\dir",
+        r"\rooted",
+        r"C:drive-relative",
     ] {
         let resp = client
             .post(format!("{}/api/scan", server.base_url))
@@ -166,6 +173,31 @@ async fn unc_scan_sources_are_rejected() {
             .unwrap();
         assert_eq!(resp.status(), 400, "{source}");
         let body: serde_json::Value = resp.json().await.unwrap();
-        assert!(body["error"].as_str().unwrap().contains("UNC"), "{body}");
+        assert!(
+            body["error"].as_str().unwrap().contains("local drive"),
+            "{source}: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn local_drive_scan_sources_are_accepted() {
+    let server = spawn_server().await;
+    let client = reqwest::Client::new();
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().to_string_lossy().into_owned();
+    assert!(
+        plain.as_bytes()[1] == b':',
+        "temp dir should be on a drive letter"
+    );
+    let verbatim = format!(r"\\?\{plain}");
+    for source in [plain, verbatim] {
+        let resp = client
+            .post(format!("{}/api/scan", server.base_url))
+            .json(&json!({ "source": source }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "{source}");
     }
 }

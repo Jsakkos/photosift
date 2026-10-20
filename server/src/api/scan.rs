@@ -1,6 +1,6 @@
 //! `POST /api/scan`: walk a card or folder and propose events.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
 use axum::{extract::State, Json};
@@ -20,12 +20,9 @@ pub async fn scan(
 ) -> Result<Json<Arc<CardScan>>, ApiError> {
     let (db, settings) = (state.db.clone(), state.settings.clone());
     let source = body.source;
-    // Reading a UNC path makes Windows authenticate to that host (leaking an
-    // NTLM hash to whoever a hostile page names), so network sources are out.
-    let text = source.to_string_lossy();
-    if text.starts_with(r"\\") || text.starts_with("//") {
+    if !is_local_drive_path(&source) {
         return Err(ApiError::bad_request(
-            "network (UNC) paths cannot be scanned; use a local or mapped drive",
+            "only absolute paths on a local drive letter can be scanned (no network, device or relative paths)",
         ));
     }
     // The walk reads EXIF off a slow card; keep it off the async runtime.
@@ -36,4 +33,16 @@ pub async fn scan(
     let card = Arc::new(card);
     state.scans.insert(card.clone());
     Ok(Json(card))
+}
+
+/// Allowlist rather than a blocklist of UNC spellings: Windows accepts many
+/// (`\/h\s`, `\??\UNC\h\s`, `\\.\pipe\x`), and reading any network path makes
+/// the machine authenticate to that host, leaking an NTLM hash to whoever a
+/// hostile page named. Only `C:\...` and `\\?\C:\...` pass.
+fn is_local_drive_path(path: &Path) -> bool {
+    let mut parts = path.components();
+    matches!(
+        parts.next(),
+        Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+    ) && matches!(parts.next(), Some(Component::RootDir))
 }
