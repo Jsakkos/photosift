@@ -1,10 +1,12 @@
 import type {
   CardScan,
   CardScanSummary,
+  ClientSettings,
   ImportRequest,
   ImportStarted,
   Outcome,
   OutcomeResponse,
+  ProposedEvent,
   ServerStatus,
   ShootReview,
   ShootSummary,
@@ -69,6 +71,27 @@ export const listCards = () => request<CardScanSummary[]>("GET", "/api/cards");
 export const scan = (source: string) =>
   request<CardScan>("POST", "/api/scan", { source });
 
+/** The cached scan; a 404 means it was evicted and the card must be scanned again. */
+export const getScan = (scanId: string) =>
+  request<CardScan>("GET", `/api/scan/${encodeURIComponent(scanId)}`);
+
+/** Events re-proposed by the server's split rule; offsets are seconds per camera. */
+export const regroupEvents = (
+  scanId: string,
+  cameraOffsets: Record<string, number>,
+) =>
+  request<ProposedEvent[]>(
+    "POST",
+    `/api/scan/${encodeURIComponent(scanId)}/events`,
+    { camera_offsets: cameraOffsets },
+  );
+
+/** The folder-name slug the server will use for an event name. */
+export const slugFor = async (name: string): Promise<string> =>
+  (await request<{ slug: string }>("POST", "/api/slug", { name })).slug;
+
+export const getSettings = () => request<ClientSettings>("GET", "/api/settings");
+
 export const startImport = (req: ImportRequest) =>
   request<ImportStarted>("POST", "/api/import", req);
 
@@ -89,4 +112,7 @@ export const trashDeletes = (shootId: number) =>
   request<TrashReport>("POST", `/api/shoots/${shootId}/trash`);
 
 export const previewUrl = (photoId: number) => `/media/preview/${photoId}`;
+/** A thumbnail of a picture still on the card, by scan and item index. */
+export const scanThumbUrl = (scanId: string, idx: number) =>
+  `/media/scan/${encodeURIComponent(scanId)}/${idx}`;
 export const thumbUrl = (photoId: number) => `/media/thumb/${photoId}`;

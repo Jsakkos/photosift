@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, listShoots, setOutcome, trashDeletes } from "./client";
+import {
+  ApiError,
+  getScan,
+  listShoots,
+  regroupEvents,
+  scanThumbUrl,
+  setOutcome,
+  slugFor,
+  trashDeletes,
+} from "./client";
 import type { OutcomeResponse } from "./types";
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -111,5 +120,30 @@ describe("trashDeletes", () => {
     expect(init?.method).toBe("POST");
     expect(init?.body).toBeUndefined();
     expect(report).toEqual({ trashed: 2, failed: [] });
+  });
+});
+
+describe("import screen calls", () => {
+  it("posts camera offsets in seconds to the scan's events endpoint", async () => {
+    const fetchMock = mockFetch(jsonResponse([]));
+
+    await regroupEvents("scan 1", { "Cam A": 10800 });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("/api/scan/scan%201/events");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ camera_offsets: { "Cam A": 10800 } });
+  });
+
+  it("unwraps the slug and reports an evicted scan as a 404", async () => {
+    mockFetch(jsonResponse({ slug: "Babys-First-Meal" }));
+    expect(await slugFor("Baby's First Meal")).toBe("Babys-First-Meal");
+
+    mockFetch(jsonResponse({ error: "unknown scan; scan the card again" }, { status: 404 }));
+    await expect(getScan("old")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("addresses scan thumbnails by scan and item", () => {
+    expect(scanThumbUrl("abc", 7)).toBe("/media/scan/abc/7");
   });
 });

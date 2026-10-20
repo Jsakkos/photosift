@@ -822,3 +822,225 @@ async fn resumed_pair_stays_together_even_with_a_sidecar_present() {
         dir.join("DSCF0001.JPG")
     );
 }
+
+// --- import screen support ----------------------------------------------------
+
+fn jpeg_from(make: &'static str, taken: &'static str) -> Vec<u8> {
+    synthetic_jpeg_with_exif(
+        64,
+        48,
+        Pattern::Blocks,
+        &ExifSpec {
+            make: Some(make),
+            taken: Some(taken),
+            ..Default::default()
+        },
+    )
+}
+
+#[tokio::test]
+async fn a_scan_can_be_fetched_again_by_id() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let scan = env.scan(card.path()).await;
+    let id = scan["scan_id"].as_str().unwrap();
+
+    let resp = env
+        .http
+        .get(env.url(&format!("/api/scan/{id}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let again: Value = resp.json().await.unwrap();
+    assert_eq!(again, scan);
+
+    let missing = env
+        .http
+        .get(env.url("/api/scan/does-not-exist"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    let body: Value = missing.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("scan"), "{body}");
+}
+
+#[tokio::test]
+async fn camera_offsets_regroup_events_with_the_server_rule() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    // Camera B's clock runs 3 h behind: 07:00 is really 10:00.
+    write(
+        &card.path().join("A1.JPG"),
+        &jpeg_from("CamA", "2026:10:18 10:00:00"),
+    );
+    write(
+        &card.path().join("B1.JPG"),
+        &jpeg_from("CamB", "2026:10:18 07:00:00"),
+    );
+    let scan = env.scan(card.path()).await;
+    assert_eq!(scan["events"].as_array().unwrap().len(), 2);
+    let id = scan["scan_id"].as_str().unwrap();
+
+    let post = |offsets: Value| {
+        env.http
+            .post(env.url(&format!("/api/scan/{id}/events")))
+            .json(&json!({ "camera_offsets": offsets }))
+            .send()
+    };
+    let resp = post(json!({ "CamB": 3 * 3600 })).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let events: Vec<Value> = resp.json().await.unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["item_idxs"].as_array().unwrap().len(), 2);
+    assert_eq!(events[0]["start"], "2026-10-18T10:00:00");
+
+    // No offsets is the scan's own proposal.
+    let resp = post(json!({})).await.unwrap();
+    let events: Vec<Value> = resp.json().await.unwrap();
+    assert_eq!(events.len(), 2);
+
+    let resp = env
+        .http
+        .post(env.url("/api/scan/nope/events"))
+        .json(&json!({ "camera_offsets": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn slug_endpoint_uses_the_folder_naming_rule() {
+    let env = Env::new().await;
+    let slug = |name: &'static str| {
+        let (http, url) = (env.http.clone(), env.url("/api/slug"));
+        async move {
+            let resp = http
+                .post(url)
+                .json(&json!({ "name": name }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            resp.json::<Value>().await.unwrap()["slug"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    };
+    assert_eq!(slug("Baby's First Meal").await, "Babys-First-Meal");
+    assert_eq!(slug("  Café  au lait!! ").await, "Cafe-au-lait");
+    assert_eq!(slug("").await, "Untitled");
+}
+
+#[tokio::test]
+async fn settings_endpoint_exposes_the_library_root() {
+    let env = Env::new().await;
+    let resp = env.http.get(env.url("/api/settings")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        Path::new(body["library_root"].as_str().unwrap()),
+        env.library.path()
+    );
+}
+
+#[tokio::test]
+async fn scan_thumbnail_is_oriented_downscaled_and_cached_as_jpeg() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    // Stored landscape 1000x500, rotated by EXIF 6 into a 500x1000 portrait.
+    write(
+        &card.path().join("P1.JPG"),
+        &synthetic_jpeg_with_exif(
+            1000,
+            500,
+            Pattern::Blocks,
+            &ExifSpec {
+                orientation: Some(6),
+                taken: Some("2026:10:18 10:00:00"),
+                ..Default::default()
+            },
+        ),
+    );
+    write(&card.path().join("V1.MOV"), b"not really a movie");
+    let scan = env.scan(card.path()).await;
+    let items = scan["items"].as_array().unwrap();
+    let photo = items.iter().position(|i| i["kind"] == "photo").unwrap();
+    let video = items.iter().position(|i| i["kind"] == "video").unwrap();
+    let id = scan["scan_id"].as_str().unwrap();
+
+    for _ in 0..2 {
+        let resp = env
+            .http
+            .get(env.url(&format!("/media/scan/{id}/{photo}")))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.headers()["content-type"], "image/jpeg");
+        let bytes = resp.bytes().await.unwrap();
+        let img = photosift::media::render::decode_jpeg(&bytes).unwrap();
+        assert_eq!((img.w, img.h), (200, 400));
+    }
+
+    // Cached on disk under the scan, not re-rendered per request.
+    assert!(env
+        .server
+        .data_root
+        .path()
+        .join("cache/scan")
+        .join(id)
+        .join(format!("{photo}.jpg"))
+        .is_file());
+
+    for path in [
+        format!("/media/scan/{id}/{video}"),
+        format!("/media/scan/{id}/999"),
+        format!("/media/scan/nope/{photo}"),
+    ] {
+        let resp = env.http.get(env.url(&path)).send().await.unwrap();
+        assert_eq!(resp.status(), 404, "{path}");
+    }
+
+    // Behind the same Host guard as everything else.
+    let resp = env
+        .http
+        .get(env.url(&format!("/media/scan/{id}/{photo}")))
+        .header(reqwest::header::HOST, "evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn scan_thumbnail_of_a_raw_comes_from_its_embedded_jpeg() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    let inner = synthetic_jpeg_with_exif(
+        800,
+        600,
+        Pattern::Blocks,
+        &ExifSpec {
+            orientation: Some(1),
+            taken: Some("2026:10:18 10:00:00"),
+            ..Default::default()
+        },
+    );
+    write(&card.path().join("DSCF0001.RAF"), &fake_raf(&inner));
+    let scan = env.scan(card.path()).await;
+    let id = scan["scan_id"].as_str().unwrap();
+
+    let resp = env
+        .http
+        .get(env.url(&format!("/media/scan/{id}/0")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let img = photosift::media::render::decode_jpeg(&resp.bytes().await.unwrap()).unwrap();
+    assert_eq!((img.w, img.h), (400, 300));
+}

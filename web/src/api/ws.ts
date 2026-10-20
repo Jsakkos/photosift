@@ -33,12 +33,20 @@ function socketUrl(): string {
 /**
  * Delivers every server event to `handler` for as long as the component is
  * mounted, reconnecting with exponential backoff when the socket drops. The
- * latest `handler` is always used, so callers need not memoise it.
+ * latest `handler` and `onOpen` are always used, so callers need not memoise
+ * them. `onOpen` runs each time the socket opens, the first connect and every
+ * reconnect: events sent while it was down are gone, so it is the place to
+ * fetch state again.
  */
-export function useServerEvents(handler: (event: ServerEvent) => void): void {
+export function useServerEvents(
+  handler: (event: ServerEvent) => void,
+  onOpen?: () => void,
+): void {
   const handlerRef = useRef(handler);
+  const onOpenRef = useRef(onOpen);
   useEffect(() => {
     handlerRef.current = handler;
+    onOpenRef.current = onOpen;
   });
 
   useEffect(() => {
@@ -52,6 +60,7 @@ export function useServerEvents(handler: (event: ServerEvent) => void): void {
       socket = ws;
       ws.onopen = () => {
         attempt = 0;
+        onOpenRef.current?.();
       };
       ws.onmessage = (msg: MessageEvent<unknown>) => {
         if (typeof msg.data !== "string") return;

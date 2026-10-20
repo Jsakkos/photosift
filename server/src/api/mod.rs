@@ -114,6 +114,10 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/status", get(status))
         .route("/cards", get(cards))
         .route("/scan", post(scan::scan))
+        .route("/scan/{scan_id}", get(scan::get_scan))
+        .route("/scan/{scan_id}/events", post(scan::regroup))
+        .route("/slug", post(scan::slug))
+        .route("/settings", get(settings))
         .route("/import", post(import::start))
         .route("/shoots", get(shoots::list))
         .route("/shoots/{id}/review", get(shoots::review))
@@ -127,6 +131,7 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         // Top level, before the SPA fallback, so a missing id is a 404.
         .route("/media/preview/{id}", get(media::preview))
         .route("/media/thumb/{id}", get(media::thumb))
+        .route("/media/scan/{scan_id}/{idx}", get(media::scan_thumb))
         .with_state(state)
         .nest("/api", api);
     let app = match web_dist {
@@ -147,6 +152,11 @@ async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
         "embeddings": s.embeddings,
         "queue": s.queue,
     }))
+}
+
+/// The read-only settings the import page needs to preview folder paths.
+async fn settings(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(json!({ "library_root": state.settings.library_root }))
 }
 
 /// Cards announced so far and still inserted: lets a tab opened after the

@@ -69,6 +69,13 @@ pub fn make_previews(
     })
 }
 
+/// An oriented thumbnail as JPEG bytes, for pictures that have no row yet
+/// (the import screen shows card contents before anything is copied).
+pub fn thumbnail_jpeg(jpeg: &[u8], orientation: u16) -> Result<Vec<u8>, MediaError> {
+    let thumb = orient(fit(decode(jpeg)?, THUMB_EDGE)?, orientation);
+    encode_jpeg(&thumb, THUMB_QUALITY)
+}
+
 pub fn decode_jpeg(bytes: &[u8]) -> Result<Rgb, MediaError> {
     decode(bytes)
 }
@@ -189,9 +196,7 @@ fn orient(src: Rgb, orientation: u16) -> Rgb {
     }
 }
 
-/// Encodes then renames into place so a crash never leaves a half-written
-/// file that a later "already rendered?" check would trust.
-fn write_jpeg(img: &Rgb, quality: u8, path: &Path) -> Result<(), MediaError> {
+fn encode_jpeg(img: &Rgb, quality: u8) -> Result<Vec<u8>, MediaError> {
     let too_big = || MediaError::Encode(format!("{}x{} exceeds JPEG limits", img.w, img.h));
     let (w, h) = (
         u16::try_from(img.w).map_err(|_| too_big())?,
@@ -201,6 +206,13 @@ fn write_jpeg(img: &Rgb, quality: u8, path: &Path) -> Result<(), MediaError> {
     jpeg_encoder::Encoder::new(&mut buf, quality)
         .encode(&img.px, w, h, jpeg_encoder::ColorType::Rgb)
         .map_err(|e| MediaError::Encode(e.to_string()))?;
+    Ok(buf)
+}
+
+/// Encodes then renames into place so a crash never leaves a half-written
+/// file that a later "already rendered?" check would trust.
+fn write_jpeg(img: &Rgb, quality: u8, path: &Path) -> Result<(), MediaError> {
+    let buf = encode_jpeg(img, quality)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }

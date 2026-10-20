@@ -23,6 +23,8 @@ use events::EventHub;
 pub fn build_state(data_root: &Path, port: u16) -> anyhow::Result<AppState> {
     let settings = config::load(data_root)?;
     let db = db::open(&data_root.join("photosift.db"))?;
+    // Card thumbnails belong to scans, which live only in memory.
+    let _ = std::fs::remove_dir_all(data_root.join("cache").join("scan"));
     let events = EventHub::new();
     let enrich =
         enrich::job::EnrichWorker::start(db.clone(), events.clone(), data_root, settings.clone());

@@ -173,6 +173,11 @@ export interface TrashReport {
   failed: { photo_id: number; error: string }[];
 }
 
+/** The read-only settings the page needs. */
+export interface ClientSettings {
+  library_root: string;
+}
+
 // --- status / cards -------------------------------------------------------
 
 export type AiBackend = "cuda" | "cpu" | "unavailable";

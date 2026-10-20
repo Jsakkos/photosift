@@ -37,6 +37,8 @@ export interface TestServer {
   libraryRoot: string;
   /** Writes synthetic JPEGs into a fresh directory and returns its path. */
   makeCard(files: CardFile[]): Promise<string>;
+  /** Scans `cardDir` through the API, so the server caches it for the import page. */
+  scanCard(cardDir: string): Promise<CardScan>;
   /** Scans `cardDir` and imports every proposed event, through the API. */
   importCard(cardDir: string): Promise<{ scan: CardScan; jobId: string }>;
 }
@@ -129,6 +131,9 @@ async function startServer(): Promise<{ server: TestServer; stop: () => Promise<
       const dir = path.join(home, `card-${cards}`);
       await run(CARD_BIN, [dir, JSON.stringify(files)]);
       return dir;
+    },
+    async scanCard(cardDir) {
+      return postJson<CardScan>(`${baseUrl}/api/scan`, { source: cardDir });
     },
     async importCard(cardDir) {
       const scan = await postJson<CardScan>(`${baseUrl}/api/scan`, { source: cardDir });

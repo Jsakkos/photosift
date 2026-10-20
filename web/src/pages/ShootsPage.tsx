@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
-import { listCards, listShoots } from "../api/client";
-import type { CardScanSummary, ServerEvent, ShootSummary } from "../api/types";
+import { listShoots } from "../api/client";
+import type { ServerEvent, ShootSummary } from "../api/types";
 import { useServerEvents } from "../api/ws";
 
 function plural(n: number, one: string, many: string): string {
@@ -22,7 +22,6 @@ function shootDates(shoot: ShootSummary): string {
 
 export function ShootsPage() {
   const [shoots, setShoots] = useState<ShootSummary[] | null>(null);
-  const [cards, setCards] = useState<CardScanSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Only the newest response may land: a slow earlier fetch must not overwrite it.
   const latest = useRef(0);
@@ -44,42 +43,17 @@ export function ShootsPage() {
 
   useEffect(() => {
     refresh();
-    // A tab opened after the card was announced still shows its banner.
-    listCards().then(setCards, () => undefined);
   }, [refresh]);
 
+  // Reopening the socket refreshes too: an import that finished while it was
+  // down sent its event to nobody.
   useServerEvents((event: ServerEvent) => {
-    switch (event.type) {
-      case "import_done":
-      case "enrich_done":
-        refresh();
-        break;
-      case "card_detected":
-        setCards((prev) => [
-          ...prev.filter((c) => c.scan_id !== event.scan.scan_id),
-          event.scan,
-        ]);
-        break;
-      case "card_removed":
-        setCards((prev) => prev.filter((c) => c.source !== event.source));
-        break;
-      default:
-        break;
-    }
-  });
+    if (event.type === "import_done" || event.type === "enrich_done") refresh();
+  }, refresh);
 
   return (
     <section>
       <h1>Shoots</h1>
-      {cards.map((card) => (
-        <div className="card-banner" key={card.scan_id}>
-          <span>
-            Card {card.source}: {plural(card.photo_count, "photo", "photos")}
-            {card.already_imported > 0 && `, ${card.already_imported} already imported`}
-          </span>
-          <Link to={`/import/${card.scan_id}`}>Import</Link>
-        </div>
-      ))}
       {error && (
         <p className="error" role="alert">
           Could not load shoots: {error}
