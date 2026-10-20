@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import {
   ApiError,
+  currentJob,
+  getJob,
   getScan,
   getSettings,
   listCards,
@@ -16,6 +18,7 @@ import {
 import type {
   CardScan,
   EventKind,
+  JobStateReply,
   ScanItem,
   ServerEvent,
   ShootSummary,
@@ -186,48 +189,129 @@ type JobState =
   | { status: "done"; shootIds: number[]; copied: number; skipped: number }
   | { status: "failed"; error: string };
 
-/** Latest state of every import job the socket has mentioned, by job id. */
-function useJobs(): Record<string, JobState> {
+/** A server reply folded into what the page knows: a finished job never goes back to running. */
+function applyReply(
+  prev: Record<string, JobState>,
+  jobId: string,
+  reply: JobStateReply,
+  current?: string,
+): Record<string, JobState> {
+  const known = prev[jobId];
+  if (reply.state === "running") {
+    if (known && known.status !== "running") return prev;
+    return {
+      ...prev,
+      [jobId]: {
+        status: "running",
+        done: reply.done,
+        total: reply.total,
+        current: current ?? (known?.status === "running" ? known.current : ""),
+      },
+    };
+  }
+  if (reply.state === "done") {
+    return {
+      ...prev,
+      [jobId]: {
+        status: "done",
+        shootIds: reply.shoot_ids,
+        copied: reply.copied,
+        skipped: reply.skipped_duplicates,
+      },
+    };
+  }
+  return { ...prev, [jobId]: { status: "failed", error: reply.error } };
+}
+
+/**
+ * Latest state of every import job the socket has mentioned, by job id.
+ * `watching` is a job this page started and must follow even before the first
+ * event. Events sent while the socket was down are gone, so each time it opens
+ * the server is asked about every unfinished job, and which job (if any) is
+ * running, which also covers an import started from another tab.
+ */
+function useJobs(watching: string | null): {
+  jobs: Record<string, JobState>;
+  resync: () => void;
+} {
   const [jobs, setJobs] = useState<Record<string, JobState>>({});
+  const latest = useRef({ jobs, watching });
+  useEffect(() => {
+    latest.current = { jobs, watching };
+  });
+
+  const resync = useCallback(() => {
+    const { jobs: known, watching: mine } = latest.current;
+    const unfinished = new Set(
+      Object.entries(known)
+        .filter(([, j]) => j.status === "running")
+        .map(([id]) => id),
+    );
+    if (mine && known[mine]?.status !== "done" && known[mine]?.status !== "failed") {
+      unfinished.add(mine);
+    }
+    for (const id of unfinished) {
+      getJob(id).then(
+        (reply) => setJobs((prev) => applyReply(prev, id, reply)),
+        (e: unknown) => {
+          // Forgotten by the server (a restart): its outcome is unknowable, so
+          // stop waiting instead of leaving the page locked.
+          if (e instanceof ApiError && e.status === 404) {
+            setJobs((prev) => ({
+              ...prev,
+              [id]: {
+                status: "failed",
+                error: "The server no longer has a record of this import. Check the shoot list.",
+              },
+            }));
+          }
+        },
+      );
+    }
+    currentJob().then(
+      ({ job_id }) => {
+        if (job_id) {
+          setJobs((prev) =>
+            prev[job_id] ? prev : applyReply(prev, job_id, { state: "running", done: 0, total: 0 }),
+          );
+        }
+      },
+      () => undefined,
+    );
+  }, []);
+
   useServerEvents((event: ServerEvent) => {
     switch (event.type) {
       case "import_progress":
         setJobs((prev) =>
-          prev[event.job_id]?.status === "running" || !prev[event.job_id]
-            ? {
-                ...prev,
-                [event.job_id]: {
-                  status: "running",
-                  done: event.done,
-                  total: event.total,
-                  current: event.current,
-                },
-              }
-            : prev,
+          applyReply(
+            prev,
+            event.job_id,
+            { state: "running", done: event.done, total: event.total },
+            event.current,
+          ),
         );
         break;
       case "import_done":
-        setJobs((prev) => ({
-          ...prev,
-          [event.job_id]: {
-            status: "done",
-            shootIds: event.shoot_ids,
+        setJobs((prev) =>
+          applyReply(prev, event.job_id, {
+            state: "done",
+            shoot_ids: event.shoot_ids,
             copied: event.copied,
-            skipped: event.skipped_duplicates,
-          },
-        }));
+            skipped_duplicates: event.skipped_duplicates,
+          }),
+        );
         break;
       case "import_failed":
-        setJobs((prev) => ({
-          ...prev,
-          [event.job_id]: { status: "failed", error: event.error },
-        }));
+        setJobs((prev) =>
+          applyReply(prev, event.job_id, { state: "failed", error: event.error }),
+        );
         break;
       default:
         break;
     }
-  });
-  return jobs;
+  }, resync);
+  return { jobs, resync };
 }
 
 // --- editor ----------------------------------------------------------------------
@@ -246,23 +330,29 @@ function ImportEditor({
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
-  const jobs = useJobs();
+  const { jobs, resync: resyncJobs } = useJobs(jobId);
 
   const offsetsSec = useMemo(() => offsetsToSeconds(minutes), [minutes]);
   const offsetsKey = JSON.stringify(offsetsSec);
 
   // Regroup with the server's rule whenever the clock offsets change. The key
   // of the offsets the current drafts were built from starts as "no offsets".
-  const appliedKey = useRef("{}");
+  const [appliedKey, setAppliedKey] = useState("{}");
   const [regroupError, setRegroupError] = useState<string | null>(null);
+  // Until the regroup lands the events on screen belong to other offsets, so
+  // importing now would pair the old grouping with the new clock.
+  const regroupPending = offsetsKey !== appliedKey;
   useEffect(() => {
-    if (offsetsKey === appliedKey.current) return;
+    if (offsetsKey === appliedKey) {
+      setRegroupError(null);
+      return;
+    }
     let live = true;
     const timer = setTimeout(() => {
       regroupEvents(scan.scan_id, offsetsSec).then(
         (proposed) => {
           if (!live) return;
-          appliedKey.current = offsetsKey;
+          setAppliedKey(offsetsKey);
           setRegroupError(null);
           setDrafts((prev) => draftsFromProposed(proposed, prev));
         },
@@ -273,12 +363,13 @@ function ImportEditor({
       live = false;
       clearTimeout(timer);
     };
-  }, [offsetsKey, offsetsSec, scan.scan_id]);
+  }, [offsetsKey, offsetsSec, appliedKey, scan.scan_id]);
 
   const job = jobId ? jobs[jobId] : undefined;
   const anyRunning = Object.values(jobs).some((j) => j.status === "running");
   const started = jobId !== null && job?.status !== "failed";
   const busy = starting || anyRunning || started;
+  const cannotImport = busy || drafts.length === 0 || regroupPending || regroupError !== null;
   // Offsets and events are fixed once a job has been accepted.
   const locked = starting || started;
 
@@ -300,6 +391,8 @@ function ImportEditor({
       (e: unknown) => {
         setStartError(messageOf(e));
         setStarting(false);
+        // Another import holds the server: learn which, so the page shows it as busy.
+        if (e instanceof ApiError && e.status === 409) resyncJobs();
       },
     );
   };
@@ -380,12 +473,15 @@ function ImportEditor({
           type="button"
           className="primary"
           onClick={submit}
-          disabled={busy || drafts.length === 0}
+          disabled={cannotImport}
         >
           Import {describeCount(counts.photos, counts.videos).replace(", ", " and ")}
         </button>
         {anyRunning && !started && (
           <span className="muted"> Another import is running.</span>
+        )}
+        {regroupPending && !anyRunning && (
+          <span className="muted"> Regrouping events...</span>
         )}
       </p>
       {jobId && <JobStatus job={job} />}

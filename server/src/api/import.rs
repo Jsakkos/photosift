@@ -4,12 +4,15 @@ use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::Ordering;
 
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{ApiError, AppState};
-use crate::events::ServerEvent;
+use crate::events::{JobState, ServerEvent};
 use crate::ingest::job::{self, EventSpec, ImportRequest, JobCtx};
 use crate::ingest::scan::new_id;
 
@@ -28,6 +31,27 @@ impl Drop for BusyGuard {
     fn drop(&mut self) {
         self.0.import_busy.store(false, Ordering::SeqCst);
     }
+}
+
+/// State of one job, from the in-memory log of the last few: lets a page that
+/// missed its WebSocket events catch up. 404 once the job has been forgotten
+/// (or after a restart).
+pub async fn job_state(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> Result<Json<JobState>, ApiError> {
+    state
+        .events
+        .jobs()
+        .get(&job_id)
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("unknown job"))
+}
+
+/// The running job, if any, so a page can explain a 409 and resync its
+/// "busy" state.
+pub async fn current(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({ "job_id": state.events.jobs().running() }))
 }
 
 pub async fn start(
@@ -55,6 +79,7 @@ pub async fn start(
     }
     let guard = BusyGuard(state.clone());
     let job_id = new_id();
+    state.events.jobs().begin(&job_id);
     let ctx = JobCtx {
         db: state.db.clone(),
         events: state.events.clone(),

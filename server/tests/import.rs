@@ -1044,3 +1044,128 @@ async fn scan_thumbnail_of_a_raw_comes_from_its_embedded_jpeg() {
     let img = photosift::media::render::decode_jpeg(&resp.bytes().await.unwrap()).unwrap();
     assert_eq!((img.w, img.h), (400, 300));
 }
+
+#[tokio::test]
+async fn job_state_endpoint_reports_the_finished_job_and_no_current_one() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+    let job_id = terminal(&frames)["job_id"].as_str().unwrap().to_string();
+    assert_eq!(terminal(&frames)["type"], "import_done");
+
+    let resp = env
+        .http
+        .get(env.url(&format!("/api/import/{job_id}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let state: Value = resp.json().await.unwrap();
+    assert_eq!(state["state"], "done", "{state}");
+    assert_eq!(state["copied"], 3);
+    assert_eq!(state["skipped_duplicates"], 0);
+    assert_eq!(state["shoot_ids"], terminal(&frames)["shoot_ids"]);
+
+    let current: Value = env
+        .http
+        .get(env.url("/api/import/current"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(current["job_id"].is_null(), "{current}");
+
+    let missing = env
+        .http
+        .get(env.url("/api/import/nope"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn a_job_is_visible_as_running_or_done_right_after_it_starts() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let scan = env.scan(card.path()).await;
+    let resp = env
+        .http
+        .post(env.url("/api/import"))
+        .json(&json!({
+            "scan_id": scan["scan_id"],
+            "events": [{ "item_idxs": [0, 1, 2], "kind": "named", "name": "Test Day" }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    let job_id = resp.json::<Value>().await.unwrap()["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Registered before the response returns, so never a 404; which of the two
+    // states depends on how fast the 3-frame job is.
+    let state: Value = env
+        .http
+        .get(env.url(&format!("/api/import/{job_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        matches!(state["state"].as_str(), Some("running" | "done")),
+        "{state}"
+    );
+    if state["state"] == "running" {
+        let current: Value = env
+            .http
+            .get(env.url("/api/import/current"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        // Unless it finished between the two requests.
+        assert!(current["job_id"].is_null() || current["job_id"] == job_id.as_str());
+    }
+}
+
+#[tokio::test]
+async fn concurrent_first_requests_for_a_scan_thumbnail_all_get_whole_jpegs() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    write(
+        &card.path().join("P1.JPG"),
+        &synthetic_jpeg_with_exif(
+            3000,
+            2000,
+            Pattern::Blocks,
+            &ExifSpec {
+                taken: Some("2026:10:18 10:00:00"),
+                ..Default::default()
+            },
+        ),
+    );
+    let scan = env.scan(card.path()).await;
+    let id = scan["scan_id"].as_str().unwrap().to_string();
+
+    let fetches = (0..8).map(|_| {
+        let (http, url) = (env.http.clone(), env.url(&format!("/media/scan/{id}/0")));
+        tokio::spawn(async move { http.get(url).send().await.unwrap().bytes().await.unwrap() })
+    });
+    for fetch in fetches {
+        let bytes = fetch.await.unwrap();
+        let img = photosift::media::render::decode_jpeg(&bytes).expect("a whole JPEG");
+        assert_eq!((img.w, img.h), (400, 267));
+    }
+
+    // Nothing half-written is left behind next to the cached file.
+    let dir = env.server.data_root.path().join("cache/scan").join(&id);
+    assert_eq!(names_in(&dir), ["0.jpg"]);
+}

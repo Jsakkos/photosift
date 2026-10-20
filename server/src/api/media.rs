@@ -1,6 +1,7 @@
 //! `/media/preview/{id}` and `/media/thumb/{id}`: the cached JPEGs.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::{
     extract::{Path, State},
@@ -107,10 +108,22 @@ fn scan_thumb_bytes(cached: &std::path::Path, source: PathBuf) -> anyhow::Result
     let jpeg = embedded::largest_jpeg(&raw, ext)?;
     let orientation = exif::read(&raw, &source).orientation;
     let thumb = render::thumbnail_jpeg(jpeg, orientation)?;
-    // Best effort: a failed cache write only costs a re-render next time.
+    // Best effort: a failed cache write only costs a re-render next time. The
+    // bytes are served with `immutable`, so a half-written cache file must
+    // never be readable: write under a name no reader opens, then rename.
     if let Some(dir) = cached.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(cached, &thumb);
+    static WRITER: AtomicU64 = AtomicU64::new(0);
+    let tmp = cached.with_extension(format!(
+        "jpg.{}.tmp",
+        WRITER.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::write(&tmp, &thumb)
+        .and_then(|()| std::fs::rename(&tmp, cached))
+        .is_err()
+    {
+        let _ = std::fs::remove_file(&tmp);
+    }
     Ok(thumb)
 }

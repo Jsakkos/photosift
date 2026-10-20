@@ -74,6 +74,17 @@ export interface ImportStarted {
   job_id: string;
 }
 
+/** `GET /api/import/{job_id}`: where a job stands, for a page that missed events. */
+export type JobStateReply =
+  | { state: "running"; done: number; total: number }
+  | {
+      state: "done";
+      shoot_ids: number[];
+      copied: number;
+      skipped_duplicates: number;
+    }
+  | { state: "failed"; error: string };
+
 // --- shoots / review ------------------------------------------------------
 
 export interface Counts {

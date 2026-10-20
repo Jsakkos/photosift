@@ -4,6 +4,7 @@ import type {
   ClientSettings,
   ImportRequest,
   ImportStarted,
+  JobStateReply,
   Outcome,
   OutcomeResponse,
   ProposedEvent,
@@ -94,6 +95,14 @@ export const getSettings = () => request<ClientSettings>("GET", "/api/settings")
 
 export const startImport = (req: ImportRequest) =>
   request<ImportStarted>("POST", "/api/import", req);
+
+/** The server's record of an import job; a 404 means it was forgotten. */
+export const getJob = (jobId: string) =>
+  request<JobStateReply>("GET", `/api/import/${encodeURIComponent(jobId)}`);
+
+/** The import job running now, if any (`job_id` is null when idle). */
+export const currentJob = () =>
+  request<{ job_id: string | null }>("GET", "/api/import/current");
 
 export const listShoots = () => request<ShootSummary[]>("GET", "/api/shoots");
 

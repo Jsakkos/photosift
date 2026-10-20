@@ -297,3 +297,94 @@ test("the banner catches up with a card announced while the socket was down", as
   // The client reconnects with backoff and fetches the cards again on open.
   await expect(page.getByTestId("card-banner")).toContainText("SD card: 3 photos, 1 day. Import?");
 });
+
+test("Import waits for a pending clock-offset regroup", async ({ page, server }) => {
+  const card = await server.makeCard([
+    ...burst("A", "2026-10-18", 10, 10, "CamA"),
+    ...burst("B", "2026-10-18", 7, 10, "CamB"),
+  ]);
+  const scan = await server.scanCard(card);
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/scan/*/events", async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await page.goto(`/import/${scan.scan_id}`);
+  const importButton = page.getByRole("button", { name: /^Import 20 photos/ });
+  await expect(page.getByTestId("event")).toHaveCount(2);
+  await expect(importButton).toBeEnabled();
+
+  await page.getByLabel("Clock offset for CamB (minutes)").fill("180");
+
+  // The old grouping is still on screen, so the offsets must not be imported with it.
+  await expect(importButton).toBeDisabled();
+  await expect(page.getByTestId("event")).toHaveCount(2);
+  release();
+  await expect(page.getByTestId("event")).toHaveCount(1);
+  await expect(importButton).toBeEnabled();
+});
+
+test("Import stays disabled while the regroup has failed", async ({ page, server }) => {
+  const card = await server.makeCard([
+    ...burst("A", "2026-10-18", 10, 10, "CamA"),
+    ...burst("B", "2026-10-18", 7, 10, "CamB"),
+  ]);
+  const scan = await server.scanCard(card);
+  let failing = true;
+  await page.route("**/api/scan/*/events", (route) =>
+    failing
+      ? route.fulfill({ status: 500, json: { error: "boom" } })
+      : route.continue(),
+  );
+  await page.goto(`/import/${scan.scan_id}`);
+  const importButton = page.getByRole("button", { name: /^Import 20 photos/ });
+  await expect(page.getByTestId("event")).toHaveCount(2);
+
+  const offset = page.getByLabel("Clock offset for CamB (minutes)");
+  await offset.fill("180");
+  await expect(page.getByRole("alert")).toContainText("boom");
+  await expect(importButton).toBeDisabled();
+
+  // Editing again retries, and a success clears the error.
+  failing = false;
+  await offset.fill("181");
+  await expect(page.getByTestId("event")).toHaveCount(1);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(importButton).toBeEnabled();
+});
+
+test("a missed import_done is recovered when the socket reconnects", async ({ page, server }) => {
+  const card = await server.makeCard(twoDayCard());
+  const scan = await server.scanCard(card);
+  let dropDone = true;
+  const sockets: { close(): Promise<void> }[] = [];
+  await page.routeWebSocket("**/ws", (ws) => {
+    const upstream = ws.connectToServer();
+    upstream.onMessage((message) => {
+      if (dropDone && typeof message === "string" && message.includes('"import_done"')) return;
+      ws.send(message);
+    });
+    ws.onMessage((message) => upstream.send(message));
+    sockets.push(ws);
+  });
+  await page.goto(`/import/${scan.scan_id}`);
+  await expect(page.getByTestId("event")).toHaveCount(2);
+
+  await page.getByRole("button", { name: /^Import 35 photos/ }).click();
+  // The server finishes, but the page never hears about it.
+  await expect
+    .poll(async () => (await (await page.request.get("/api/import/current")).json()).job_id)
+    .toBeNull();
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId("import-result")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Import 35 photos/ })).toBeDisabled();
+
+  dropDone = false;
+  // Every hook on the page has its own socket; all of them drop and reconnect.
+  await Promise.all(sockets.map((socket) => socket.close()));
+
+  await expect(page.getByTestId("import-result")).toContainText("Copied 35");
+  await expect(page.getByRole("link", { name: /^Review/ })).toHaveCount(2);
+  await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+});
