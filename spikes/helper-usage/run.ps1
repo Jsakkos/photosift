@@ -8,7 +8,7 @@ param(
   [switch]$Probe,       # 10 photos, stream-json, saves the system/init event
   [int]$Limit = 0,
   [double]$MaxBudget = 3,
-  [int]$MaxTurns = 40
+  [int]$MaxTurns = 120
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing

@@ -19,8 +19,6 @@ Answers:
 
 `claude --version` = 2.1.240 (brief wants >= 2.1.259; not updated by instruction). `claude auth status`: loggedIn true, `authMethod: claude.ai`, subscription type Pro. The CLI login had expired earlier and the user re-ran `claude auth login`.
 
-Finding: a measurement run failed with 0 tokens because the account's 5-hour session limit had been reached. On Pro, interactive dev sessions and helper runs share the same 5-hour allowance, so a helper run can be starved by (or starve) normal Claude use.
-
 ## Step 4: flags and isolation (10-photo probe, stream-json)
 
 - Accepted on 2.1.240: `--strict-mcp-config`, `--tools`, `--setting-sources`, `--disable-slash-commands`, `--permission-mode dontAsk`, `--system-prompt-file`, `--max-turns`, `--max-budget-usd`, `--session-id`, `--resume`, `--add-dir`, `--json-schema`, `--allowedTools`.
@@ -30,11 +28,11 @@ Finding: a measurement run failed with 0 tokens because the account's 5-hour ses
 - **Leak found:** the user's auto-memory index still reached the child (it answered YES and quoted the first entry title). Setting `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in the child's environment fixed it (answered NO). run.ps1 now sets it. The runner should too.
 - `--max-turns` semantics untested on 2.1.240. The 372-photo run reported `num_turns: 137` with `--max-turns 40` and completed, but only 440k cache-read tokens, which fits roughly 15 API calls at about 30k tokens of context each. So `num_turns` likely counts messages/tool round-trips, not API calls, and is probably not what `--max-turns` limits. `--max-budget-usd` is the cap to rely on.
 
-Read scoping: the probe and measured runs used `--allowedTools Read`, which is unscoped, so under dontAsk the spike child could in principle read any file (unverified). run.ps1 now drops it and relies on dontAsk allowing reads only inside the working dirs (cwd + `--add-dir out`); this is also unverified. The product runner uses `--tools ""` plus PhotoSift MCP tools only and is not exposed.
+Read scoping: the original probe and measured runs used `--allowedTools Read`, which is unscoped, so under dontAsk the child could in principle read any file (unverified). run.ps1 now drops it and relies on dontAsk allowing reads inside the working dirs (cwd + `--add-dir out`). Verified by one re-probe (10 photos, `-MaxBudget 1`, 12 turns, $0.04): the thumbnail Reads were NOT denied (`permission_denials: []`, `terminal_reason: completed`, 2 picks returned). Whether a Read outside the working dirs is denied was not tested. The product runner uses `--tools ""` plus PhotoSift MCP tools only and is not exposed.
 
 The spike used an empty cwd inside the repo, and the auto-memory index (keyed on the git root) still leaked. The runner must run the child from an empty temp dir outside any repo (run.ps1 now does) and set `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
 
-Final flag list (verified on 2.1.240, run from an empty cwd): `claude -p --model <alias> --strict-mcp-config --tools Read --add-dir <out> --setting-sources local --disable-slash-commands --permission-mode dontAsk --allowedTools Read --system-prompt-file <file> --max-turns N --max-budget-usd N --session-id <uuid> --json-schema <schema> --output-format json`, env `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, plus `--permission-prompts none` on CLI >= 2.1.259. Use `--resume <id>` (without `--session-id`) for a second pass. Never `--bare` (needs an API key). Windows PowerShell 5.1 needs embedded quotes in `--json-schema` escaped as `\"`.
+Final flag list (verified on 2.1.240, run from an empty cwd): `claude -p --model <alias> --strict-mcp-config --tools Read --add-dir <out> --setting-sources local --disable-slash-commands --permission-mode dontAsk --system-prompt-file <file> --max-turns N --max-budget-usd N --session-id <uuid> --json-schema <schema> --output-format json`, env `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, plus `--permission-prompts none` on CLI >= 2.1.259. Use `--resume <id>` (without `--session-id`) for a second pass. Never `--bare` (needs an API key). Windows PowerShell 5.1 needs embedded quotes in `--json-schema` escaped as `\"`.
 
 ### Baseline context cost (trivial prompt "say ok", sonnet)
 
@@ -54,18 +52,18 @@ Per the controller's ruling to protect the Pro allowance, only one measurement w
 |---|---|---|---|---|---|
 | probe, 10 photos | 6 / 2,058 / 8,197 / 11,942 | 0.057 | 21 s | 12 | n/a |
 | sonnet, no crops, 372 photos in 7 moments | 22 / 19,730 / 65,577 / 439,887 | 0.566 | 168 s | 137 | pending: user to read before/after |
-| sonnet, crops | skipped, estimated below | about 1.4 (est.) | about 4-5 min (est.) | not estimated | pending |
+| sonnet, crops | skipped, estimated below | about 1.3 (est., range 1.1 to 2.1) | about 4-5 min (est.) | not estimated | pending |
 | opus, no crops | skipped (protect Pro allowance) | | | | |
 | opus, crops | skipped (protect Pro allowance) | | | | |
 
 Output of the measured run: 12 album picks, 7 your-call pairs, 30 shortlisted ids, `terminal_reason: completed`.
 
-Crops estimate: source JPGs are 7728 x 5152. A 1024 px crop is 1024 x 683, about 932 image tokens (w*h/750), so 30 crops add about 28k tokens, versus about 53k for the 372 thumbnails (400 x 267, about 142 tokens each; matches the 65k cache-write seen). Rough upper bound, not a measurement: the first pass cost $0.566 for about 65k cache-write, 440k cache-read and 20k output tokens. A second pass adds about 28k cache-write tokens, re-reads about 95k tokens of context per API call (assume up to 15 calls, so about 1.4M cache-read, 3x the first pass), and about 5k output. Scaling each token class at the first pass's blended rate gives roughly +$0.8 (range +$0.6 to +$1.2), so about $1.4 total. The real number needs a measured run.
+Crops estimate: source JPGs are 7728 x 5152. A 1024 px crop is 1024 x 683, about 932 image tokens (w*h/750), so 30 crops add about 28k tokens, versus about 53k for the 372 thumbnails (400 x 267, about 142 tokens each; matches the 65k cache-write seen). Rough estimate, not a measurement. The second pass adds about 28k cache-write tokens, re-reads about 95k tokens of context per API call (assume 15 calls: about 1.4M cache-read) and writes about 5k output. Method 1 (assumed list prices $6/M cache-write, $0.30/M cache-read, $15/M output): 28k x 6 + 1.4M x 0.30 + 5k x 15 = $0.17 + $0.42 + $0.08 = +$0.67. Method 2 (the same token classes priced at list for the first pass gives $0.82 against the billed $0.566, a 0.69 factor): +$0.67 x 0.69 = +$0.46. The call count is the big uncertainty, so the range is **+$0.5 to +$1.5**, about $1.1 to $2.1 total, point estimate about $1.3. The real number needs a measured run.
 
 ## Step 6: gate (PROVISIONAL, pending user meter reading)
 
-- `transport = cli-subscription`, provisionally. The cost is small ($0.57 measured; about $1.4 estimated with crops, client-side estimates), but the pass criterion (<= 10% of the allowance) cannot be confirmed until the user supplies the usage-meter delta for the measured run. Pro limits are small and shared with dev sessions (see the 5-hour limit finding), so the user may prefer `cli-api-key` if the delta is large.
+- `transport = cli-subscription`, provisionally. The cost is small ($0.57 measured; about $1.3 estimated with crops (range $1.1 to $2.1), client-side estimates), but the pass criterion (<= 10% of the allowance) cannot be confirmed until the user supplies the usage-meter delta for the measured run. Pro limits are small and shared with dev sessions (see the 5-hour limit finding), so the user may prefer `cli-api-key` if the delta is large.
 - `helper_model = sonnet` (cheaper). Not compared against opus (skipped), so no evidence yet on pick quality.
-- `helper_max_budget_usd = 3.00`: 2x the estimated with-crops cost ($1.4 = $2.80, rounded up to $0.50), pending a measured run.
+- `helper_max_budget_usd = 3.00`: 2x the estimated with-crops cost ($1.3 = $2.60, rounded up to $0.50; the $2.1 upper bound would give $4.50, so the $3.00 cap may be tight), pending a measured run.
 - `helper_max_turns = 120` (controller ruling: the real helper batches a moment's thumbnails per MCP call; `--max-turns` semantics untested, the budget cap is the effective guard).
 - Terms: (b) is unresolved (see Step 1); the user chose to proceed. Not an explicit green light.
