@@ -52,18 +52,18 @@ Per the controller's ruling to protect the Pro allowance, only one measurement w
 |---|---|---|---|---|---|
 | probe, 10 photos | 6 / 2,058 / 8,197 / 11,942 | 0.057 | 21 s | 12 | n/a |
 | sonnet, no crops, 372 photos in 7 moments | 22 / 19,730 / 65,577 / 439,887 | 0.566 | 168 s | 137 | pending: user to read before/after |
-| sonnet, crops | skipped, estimated below | about 1.3 (est., range 1.1 to 2.1) | about 4-5 min (est.) | not estimated | pending |
+| sonnet, crops | skipped, estimated below | about 1.2 (est., range 1.0 to 1.2) | about 4-5 min (est.) | not estimated | pending |
 | opus, no crops | skipped (protect Pro allowance) | | | | |
 | opus, crops | skipped (protect Pro allowance) | | | | |
 
 Output of the measured run: 12 album picks, 7 your-call pairs, 30 shortlisted ids, `terminal_reason: completed`.
 
-Crops estimate: source JPGs are 7728 x 5152. A 1024 px crop is 1024 x 683, about 932 image tokens (w*h/750), so 30 crops add about 28k tokens, versus about 53k for the 372 thumbnails (400 x 267, about 142 tokens each; matches the 65k cache-write seen). Rough estimate, not a measurement. The second pass adds about 28k cache-write tokens, re-reads about 95k tokens of context per API call (assume 15 calls: about 1.4M cache-read) and writes about 5k output. Method 1 (assumed list prices $6/M cache-write, $0.30/M cache-read, $15/M output): 28k x 6 + 1.4M x 0.30 + 5k x 15 = $0.17 + $0.42 + $0.08 = +$0.67. Method 2 (the same token classes priced at list for the first pass gives $0.82 against the billed $0.566, a 0.69 factor): +$0.67 x 0.69 = +$0.46. The call count is the big uncertainty, so the range is **+$0.5 to +$1.5**, about $1.1 to $2.1 total, point estimate about $1.3. The real number needs a measured run.
+Crops estimate: source JPGs are 7728 x 5152. A 1024 px crop is 1024 x 683, about 932 image tokens (w*h/750), so 30 crops add about 28k tokens, versus about 53k for the 372 thumbnails (400 x 267, about 142 tokens each; matches the 65k cache-write seen). Rough estimate, not a measurement. The second pass adds about 28k cache-write tokens, re-reads about 95k tokens of context per API call (assume 15 calls: about 1.4M cache-read) and writes about 5k output. Method 1 (assumed list prices $6/M cache-write, $0.30/M cache-read, $15/M output): 28k x 6 + 1.4M x 0.30 + 5k x 15 = $0.17 + $0.42 + $0.08 = +$0.67. Method 2 (the same token classes priced at list for the first pass gives $0.82 against the billed $0.566, a 0.69 factor): +$0.67 x 0.69 = +$0.46. Added to the measured $0.57, the two methods give a total of about $1.0 to $1.2; point estimate about $1.2. Call-count sensitivity: each extra API call re-reads about 95k tokens, about $0.03 at list price (95k x $0.30/M) and about $0.02 after the 0.69 factor, so even 15 extra calls add under $0.5. The real number needs a measured run.
 
 ## Step 6: gate (PROVISIONAL, pending user meter reading)
 
-- `transport = cli-subscription`, provisionally. The cost is small ($0.57 measured; about $1.3 estimated with crops (range $1.1 to $2.1), client-side estimates), but the pass criterion (<= 10% of the allowance) cannot be confirmed until the user supplies the usage-meter delta for the measured run. Pro limits are small and shared with dev sessions (see the 5-hour limit finding), so the user may prefer `cli-api-key` if the delta is large.
+- `transport = cli-subscription`, provisionally. The cost is small ($0.57 measured; about $1.2 estimated with crops (range $1.0 to $1.2), client-side estimates), but the pass criterion (<= 10% of the allowance) cannot be confirmed until the user supplies the usage-meter delta for the measured run. Pro limits are small and shared with dev sessions (see the 5-hour limit finding), so the user may prefer `cli-api-key` if the delta is large.
 - `helper_model = sonnet` (cheaper). Not compared against opus (skipped), so no evidence yet on pick quality.
-- `helper_max_budget_usd = 3.00`: 2x the estimated with-crops cost ($1.3 = $2.60, rounded up to $0.50; the $2.1 upper bound would give $4.50, so the $3.00 cap may be tight), pending a measured run.
+- `helper_max_budget_usd = 3.00`: 2x the estimated with-crops cost (about $1.2, so about $2.40, rounded up to $0.50 gives $2.50); the $3.00 cap holds with headroom, pending a measured run.
 - `helper_max_turns = 120` (controller ruling: the real helper batches a moment's thumbnails per MCP call; `--max-turns` semantics untested, the budget cap is the effective guard).
 - Terms: (b) is unresolved (see Step 1); the user chose to proceed. Not an explicit green light.
