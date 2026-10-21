@@ -17,7 +17,7 @@ zune-jpeg = "0.4"
 jpeg-encoder = "0.6"
 fast_image_resize = "5"
 kamadak-exif = "0.5"
-ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
+ort = { version = "=2.0.0-rc.15", features = ["cuda"] }
 anyhow = "1"
 
 [profile.release]
