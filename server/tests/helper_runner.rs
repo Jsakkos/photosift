@@ -156,6 +156,14 @@ impl Env {
                     "FAKE_CLAUDE_ARGS_LOG".into(),
                     args_log.to_string_lossy().into_owned(),
                 ),
+                (
+                    "FAKE_CLAUDE_PID_FILE".into(),
+                    scratch
+                        .path()
+                        .join("pid.txt")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
             ],
             fake_faces,
         };
@@ -1109,6 +1117,150 @@ async fn startup_does_not_sweep_old_shoots() {
         env.run_invocations()
     );
     assert!(env.run_rows().is_empty());
+}
+
+// ---------------------------------------------------------------- stopping runs
+
+/// The `fake-claude` behind the `.cmd` shim, as `claude` from npm is: killing
+/// cmd.exe alone would leave it running.
+fn shim(dir: &std::path::Path) -> PathBuf {
+    let shim = dir.join("claude.cmd");
+    std::fs::write(&shim, format!("@\"{FAKE}\" %*\r\n")).unwrap();
+    shim
+}
+
+/// The pid of the fake's latest `-p` run, once it has started.
+async fn fake_pid(env: &Env) -> u32 {
+    let path = env.scratch.path().join("pid.txt");
+    for _ in 0..200 {
+        if let Some(pid) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+        {
+            return pid;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the fake never wrote its pid");
+}
+
+/// Whether process `pid` exits within `within`.
+#[cfg(windows)]
+fn exits_within(pid: u32, within: Duration) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+    // SAFETY: plain Win32 calls; the handle is closed before returning.
+    unsafe {
+        let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if h.is_null() {
+            return true; // already gone
+        }
+        let r = WaitForSingleObject(h, u32::try_from(within.as_millis()).unwrap());
+        CloseHandle(h);
+        r == WAIT_OBJECT_0
+    }
+}
+
+#[tokio::test]
+async fn run_past_its_timeout_fails() {
+    // 0.02 minutes = 1.2 s; the fake would take 20 s.
+    let env = Env::new(finish_only(20_000), |s| {
+        s.helper_run_timeout_minutes = 0.02;
+    })
+    .await;
+    let mut ws = env.ws().await;
+    let started = std::time::Instant::now();
+    env.import(&mut ws, THREE, "named").await;
+    let failed = wait_helper(&mut ws, "failed").await;
+    let error = failed["error"].as_str().unwrap();
+    assert!(error.contains("took longer than"), "{error}");
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "the child was not killed: {:?}",
+        started.elapsed()
+    );
+    let row = env.run_row(failed["run_id"].as_i64().unwrap());
+    assert_eq!(row.status, "failed");
+}
+
+#[tokio::test]
+async fn cancel_kills_the_run_and_its_process_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = Env::with_bin(Some(shim(dir.path())), finish_only(30_000), |s| {
+        s.helper_enabled = false;
+    })
+    .await;
+    let mut ws = env.ws().await;
+    let shoot = env.import(&mut ws, THREE, "named").await[0];
+    let cancel = env.url(&format!("/api/shoots/{shoot}/helper/cancel"));
+    assert_eq!(env.http.post(&cancel).send().await.unwrap().status(), 404);
+
+    let run = env
+        .http
+        .post(env.url(&format!("/api/shoots/{shoot}/helper/run")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(run.status(), 202);
+    wait_helper(&mut ws, "running").await;
+    let pid = fake_pid(&env).await;
+    let started = std::time::Instant::now();
+    assert_eq!(env.http.post(&cancel).send().await.unwrap().status(), 204);
+    let failed = wait_helper(&mut ws, "failed").await;
+    assert_eq!(failed["error"], "stopped by you", "{failed}");
+    assert!(started.elapsed() < Duration::from_secs(15));
+    #[cfg(windows)]
+    assert!(
+        exits_within(pid, Duration::from_secs(5)),
+        "the fake behind the shim survived the cancel"
+    );
+    let _ = pid;
+    let review = env.get(&format!("/api/shoots/{shoot}/review")).await;
+    assert_eq!(review["helper"]["status"], "failed");
+    assert_eq!(review["helper"]["error"], "stopped by you");
+    // Nothing left to stop.
+    assert_eq!(env.http.post(&cancel).send().await.unwrap().status(), 404);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn dropping_the_kill_tree_kills_grandchildren() {
+    use photosift::helper::kill_tree::KillTree;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("script.json");
+    std::fs::write(&script, finish_only(30_000).to_string()).unwrap();
+    let pid_file = dir.path().join("pid.txt");
+    let mcp = json!({"mcpServers": {"photosift": {"type": "http",
+        "url": "http://127.0.0.1:9/mcp"}}});
+    let mut child = std::process::Command::new(shim(dir.path()))
+        .args(["-p", "run_id 1", "--mcp-config", &mcp.to_string()])
+        .env("FAKE_CLAUDE_SCRIPT", &script)
+        .env("FAKE_CLAUDE_PID_FILE", &pid_file)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let tree = KillTree::adopt(&child).unwrap();
+    let mut pid = None;
+    for _ in 0..200 {
+        pid = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok());
+        if pid.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let grandchild = pid.expect("the fake never started");
+    assert_ne!(grandchild, child.id(), "the shim should start the fake");
+    assert!(!exits_within(grandchild, Duration::from_millis(200)));
+    // As when PhotoSift exits: the last handle closes.
+    drop(tree);
+    assert!(exits_within(grandchild, Duration::from_secs(5)));
+    assert!(exits_within(child.id(), Duration::from_secs(5)));
+    child.wait().unwrap();
 }
 
 // ---------------------------------------------------------------- MCP guard

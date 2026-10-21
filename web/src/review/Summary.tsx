@@ -20,6 +20,8 @@ interface Props {
   onChat: () => void;
   chatOpen: boolean;
   onRetry: () => void;
+  /** Stops the run in progress. */
+  onStop: () => void;
   onAcceptAll: () => void;
 }
 
@@ -35,12 +37,24 @@ function HelperLine({
   helper,
   unavailableReason,
   onRetry,
-}: Pick<Props, "helper" | "unavailableReason" | "onRetry">) {
+  onStop,
+}: Pick<Props, "helper" | "unavailableReason" | "onRetry" | "onStop">) {
   const { status } = helper;
   if (status === "queued" || status === "running") {
     return (
-      <span className="muted helper-status" role="status" data-helper={status}>
-        Helper is reading the shoot…
+      <span className="helper-status" data-helper={status}>
+        <span className="muted" role="status">
+          Helper is reading the shoot…
+        </span>
+        <button
+          type="button"
+          onClick={(e) => {
+            onStop();
+            e.currentTarget.blur();
+          }}
+        >
+          Stop
+        </button>
       </span>
     );
   }
@@ -97,6 +111,7 @@ export function Summary({
   onChat,
   chatOpen,
   onRetry,
+  onStop,
   onAcceptAll,
 }: Props) {
   const suggested = suggestedLine(helper.suggested);
@@ -119,7 +134,12 @@ export function Summary({
           </p>
         )}
         <div className="helper-row">
-          <HelperLine helper={helper} unavailableReason={unavailableReason} onRetry={onRetry} />
+          <HelperLine
+            helper={helper}
+            unavailableReason={unavailableReason}
+            onRetry={onRetry}
+            onStop={onStop}
+          />
           {suggested && (
             <span className="helper-suggested" data-testid="helper-suggested">
               Suggested: {suggested}

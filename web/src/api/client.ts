@@ -131,6 +131,12 @@ export const trashDeletes = (shootId: number, photoIds: number[]) =>
 export const runHelper = (shootId: number) =>
   request<HelperRunStarted>("POST", `/api/shoots/${shootId}/helper/run`);
 
+/** Stops the shoot's helper run (it fails "stopped by you"): 204, or 404 when there is none. */
+export const cancelHelper = async (shootId: number): Promise<void> => {
+  const res = await fetch(`/api/shoots/${shootId}/helper/cancel`, { method: "POST" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
+};
+
 /** The shoot's conversation with the helper. */
 export const getChat = (shootId: number) =>
   request<ChatMessage[]>("GET", `/api/shoots/${shootId}/chat`);

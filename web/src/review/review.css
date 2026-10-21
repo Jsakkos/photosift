@@ -270,11 +270,14 @@
   display: none;
 }
 
-.helper-problem {
+.helper-status {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 0.75rem;
+}
+
+.helper-problem {
   color: var(--delete);
 }
 

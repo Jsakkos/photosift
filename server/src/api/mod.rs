@@ -130,6 +130,7 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/shoots/{id}/review", get(shoots::review))
         .route("/shoots/{id}/trash", post(trash::trash_shoot))
         .route("/shoots/{id}/helper/run", post(helper::run))
+        .route("/shoots/{id}/helper/cancel", post(helper::cancel))
         .route(
             "/shoots/{id}/chat",
             get(helper::chat_history).post(helper::chat),

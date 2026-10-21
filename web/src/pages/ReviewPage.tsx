@@ -64,10 +64,8 @@ export function ReviewPage() {
     setTimeout(() => setNotices((list) => list.filter((n) => n.id !== id)), NOTICE_MS);
   }, []);
 
-  const { review, photos, error, progress, setOutcome, reload, retryHelper, setNote } = useReview(
-    shootId,
-    notify,
-  );
+  const { review, photos, error, progress, setOutcome, reload, retryHelper, stopHelper, setNote } =
+    useReview(shootId, notify);
   const [filter, setFilter] = useState<Outcome | null>(null);
   const [mode, setMode] = useState<Mode>("grid");
   const [help, setHelp] = useState(false);
@@ -362,6 +360,7 @@ export function ReviewPage() {
         unavailableReason={unavailableReason}
         openSuggestions={openSuggestions}
         onRetry={retryHelper}
+        onStop={stopHelper}
         onAcceptAll={openAccept}
         onFilter={(o) => setFilter((f) => (f === o ? null : o))}
         onHelp={() => setHelp(true)}

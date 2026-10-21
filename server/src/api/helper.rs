@@ -41,6 +41,26 @@ pub async fn run(
     }
 }
 
+/// 204 once the shoot's helper run is stopped (it fails "stopped by you") or
+/// its waiting run dropped; 404 when it has none.
+pub async fn cancel(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    let helper = state.helper.clone();
+    let stopped = tokio::task::spawn_blocking(move || helper.cancel(id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    if stopped {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(format!(
+            "shoot {id} has no helper run to stop"
+        )))
+    }
+}
+
 fn enqueue_error(e: EnqueueError) -> ApiError {
     match e {
         EnqueueError::Unavailable(_) => ApiError::unavailable(e.to_string()),

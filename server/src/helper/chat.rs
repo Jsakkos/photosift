@@ -9,8 +9,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::stream::RunEvent;
-use super::transport::{HelperClient, RunRequest, SessionMode};
-use super::{describe_error, prompt, Ctx, Shared};
+use super::transport::{HelperClient, RunRequest, SessionMode, StopSignal};
+use super::{describe_error, prompt, run_timeout, Ctx, Shared};
 use crate::db::helper::{self, RunKind, RunStatus};
 use crate::events::ServerEvent;
 use crate::plog;
@@ -133,6 +133,8 @@ fn run(ctx: &Ctx, shoot_id: i64, run_id: i64, text: &str) -> Result<(), String> 
         session,
         client: HelperClient::Chat,
         mcp_token: ctx.mcp_token.clone(),
+        timeout: run_timeout(&ctx.settings),
+        stop: StopSignal::default(),
         cwd: ctx.work_dir.clone(),
     };
     if !helper::start_queued_run(&ctx.db, run_id).map_err(|e| format!("{e:#}"))? {

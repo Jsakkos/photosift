@@ -7,6 +7,7 @@
 //! nothing it does touches an outcome, a sidecar or the Recycle Bin.
 
 mod chat;
+pub mod kill_tree;
 pub mod learning;
 pub mod prompt;
 pub mod stream;
@@ -29,7 +30,9 @@ use crate::db::{
 use crate::events::{EventHub, ServerEvent};
 use crate::plog;
 use stream::{RunEvent, RunResult};
-use transport::{Availability, HelperClient, RunRequest, SessionMode, Transport};
+use transport::{
+    Availability, HelperClient, RunRequest, SessionMode, StopReason, StopSignal, Transport,
+};
 
 /// Tools a background run may not call: the user decides outcomes and owns
 /// the taste profile, and the app opens the run itself.
@@ -97,7 +100,8 @@ struct Job {
 #[derive(Default)]
 struct State {
     pending: VecDeque<Job>,
-    active: bool,
+    /// The shoot the worker is on, and how to stop its run.
+    active: Option<(i64, StopSignal)>,
     shutdown: bool,
     /// `None` until the first check has finished.
     availability: Option<Availability>,
@@ -258,7 +262,7 @@ impl HelperService {
             available,
             reason,
             transport: self.ctx.settings.helper_transport.clone(),
-            queue: state.pending.len() + usize::from(state.active),
+            queue: state.pending.len() + usize::from(state.active.is_some()),
         }
     }
 
@@ -363,6 +367,42 @@ impl HelperService {
 }
 
 impl HelperService {
+    /// Stops the shoot's helper run: kills the running child (the run fails
+    /// "stopped by you"), or drops a run still waiting. False when the shoot
+    /// has none.
+    pub fn cancel(&self, shoot_id: i64) -> anyhow::Result<bool> {
+        let _serial = self
+            .shared
+            .enqueue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut state = self.shared.lock();
+        if let Some((active, stop)) = &state.active {
+            if *active == shoot_id && stop.cancel() {
+                plog!("helper", "shoot {shoot_id}: run stopped by the user");
+                return Ok(true);
+            }
+        }
+        let (dropped, kept): (Vec<Job>, Vec<Job>) = state
+            .pending
+            .drain(..)
+            .partition(|j| j.shoot_id == shoot_id);
+        state.pending = kept.into();
+        drop(state);
+        for job in &dropped {
+            match job.origin {
+                Origin::Explicit(run_id, _) => {
+                    let run = Started { shoot_id, run_id };
+                    fail(&self.ctx, &run, StopReason::Cancelled.to_string());
+                }
+                Origin::Automatic { .. } => {
+                    helper::take_pending(&self.ctx.db, shoot_id)?;
+                }
+            }
+        }
+        Ok(!dropped.is_empty())
+    }
+
     /// A chat message from the user: stored now, answered on a thread of its
     /// own so it never waits behind a background run. One turn per shoot at
     /// a time. Not gated by `helper_enabled`.
@@ -451,15 +491,16 @@ fn worker_loop(shared: &Shared, ctx: &Ctx) {
     log_availability(&a);
     shared.lock().availability = Some(a);
     loop {
-        let job = {
+        let (job, stop) = {
             let mut state = shared.lock();
             loop {
                 if state.shutdown {
                     return;
                 }
                 if let Some(job) = state.pending.pop_front() {
-                    state.active = true;
-                    break job;
+                    let stop = StopSignal::default();
+                    state.active = Some((job.shoot_id, stop.clone()));
+                    break (job, stop);
                 }
                 state = shared.wake.wait(state).unwrap_or_else(|e| e.into_inner());
             }
@@ -467,7 +508,7 @@ fn worker_loop(shared: &Shared, ctx: &Ctx) {
         let availability = shared.lock().availability.clone();
         let mut started = None;
         let outcome = catch_unwind(AssertUnwindSafe(|| {
-            run_job(ctx, &job, availability, &mut started)
+            run_job(ctx, &job, availability, &stop, &mut started)
         }));
         if outcome.is_err() {
             plog!("helper", "a run of shoot {} panicked", job.shoot_id);
@@ -475,7 +516,7 @@ fn worker_loop(shared: &Shared, ctx: &Ctx) {
                 fail(ctx, &run, "the helper runner crashed".into());
             }
         }
-        shared.lock().active = false;
+        shared.lock().active = None;
     }
 }
 
@@ -509,6 +550,7 @@ fn run_job(
     ctx: &Ctx,
     job: &Job,
     availability: Option<Availability>,
+    stop: &StopSignal,
     started: &mut Option<Started>,
 ) {
     let unavailable = match availability {
@@ -599,6 +641,8 @@ fn run_job(
             session: SessionMode::New(Uuid::new_v4()),
             client,
             mcp_token: ctx.mcp_token.clone(),
+            timeout: run_timeout(&ctx.settings),
+            stop: stop.clone(),
             cwd: ctx.work_dir.clone(),
         })
     })();
@@ -696,6 +740,16 @@ fn run_job(
     if let Some(error) = error {
         fail(ctx, run, error);
     }
+}
+
+/// `helper_run_timeout_minutes`, or its default when it is not a positive
+/// number.
+fn run_timeout(settings: &Settings) -> Duration {
+    let m = settings.helper_run_timeout_minutes;
+    Duration::try_from_secs_f64(m * 60.0)
+        .ok()
+        .filter(|d| !d.is_zero())
+        .unwrap_or(Duration::from_secs(20 * 60))
 }
 
 fn describe_error(r: &RunResult, rate_limited: bool, budget: f64) -> String {

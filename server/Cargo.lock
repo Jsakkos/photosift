@@ -1091,6 +1091,7 @@ dependencies = [
  "tower-http",
  "trash",
  "uuid",
+ "windows-sys",
  "zune-jpeg",
 ]
 

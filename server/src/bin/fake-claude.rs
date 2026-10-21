@@ -11,7 +11,8 @@
 //! calls, and the calls then print no "Calling x." narration.
 //! A string `"$RUN"` anywhere in `args` becomes the `run_id <n>` named in the
 //! prompt. `FAKE_CLAUDE_ARGS_LOG`, when set, gets one JSON line per invocation
-//! with its argv (program name excluded).
+//! with its argv (program name excluded). `FAKE_CLAUDE_PID_FILE`, when set,
+//! gets the process id of each `-p` run.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -97,6 +98,9 @@ fn run(args: &[String]) -> anyhow::Result<i32> {
         return Ok(if logged_in { 0 } else { 1 });
     }
     let prompt = flag(args, "-p").ok_or_else(|| anyhow!("no -p prompt"))?;
+    if let Some(path) = std::env::var_os("FAKE_CLAUDE_PID_FILE").filter(|v| !v.is_empty()) {
+        std::fs::write(path, std::process::id().to_string())?;
+    }
     let run_id = run_id_in(prompt);
     let mcp: Value = serde_json::from_str(flag(args, "--mcp-config").unwrap_or("{}"))?;
     let url = mcp["mcpServers"]["photosift"]["url"]

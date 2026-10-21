@@ -281,6 +281,24 @@ test.describe("helper failure", () => {
   });
 });
 
+test.describe("stopping a helper run", () => {
+  test.use({ claudeScript: success({ delay_ms: 60000 }) });
+
+  test("stop_kills_the_run_and_says_so", async ({ page, server }) => {
+    const shootId = await importShoot(server, TWELVE);
+    await openReview(page, shootId);
+    await expect(page.getByText("Helper is reading the shoot…")).toBeVisible();
+    const stopped = page.waitForResponse(
+      (r) => r.url().includes(`/api/shoots/${shootId}/helper/cancel`),
+    );
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    expect((await stopped).status()).toBe(204);
+    await expect(page.locator(".helper-problem")).toContainText("stopped by you");
+    await expect(page.getByRole("button", { name: "Retry helper" })).toBeVisible();
+    await expect(page.getByTestId("helper-suggested")).toHaveCount(0);
+  });
+});
+
 test.describe("helper run in progress", () => {
   test.use({
     claudeScript: {

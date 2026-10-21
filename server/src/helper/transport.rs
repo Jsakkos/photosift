@@ -7,13 +7,14 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use super::kill_tree::KillTree;
 use super::stream::{parse_line, RunEvent, RunResult};
 use crate::plog;
 
@@ -90,6 +91,101 @@ impl HelperClient {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    TimedOut(Duration),
+    Cancelled,
+}
+
+impl std::fmt::Display for StopReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StopReason::Cancelled => f.write_str("stopped by you"),
+            StopReason::TimedOut(d) if d.as_secs() >= 60 => write!(
+                f,
+                "the run took longer than {} minutes and was stopped",
+                d.as_secs() / 60
+            ),
+            StopReason::TimedOut(d) => write!(
+                f,
+                "the run took longer than {} seconds and was stopped",
+                d.as_secs_f64().ceil()
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum StopState {
+    #[default]
+    Running,
+    Stopped(StopReason),
+    Finished,
+}
+
+/// Shared between a run and whoever may stop it (the cancel route, the
+/// run's own timeout watchdog).
+#[derive(Debug, Clone, Default)]
+pub struct StopSignal(Arc<(Mutex<StopState>, Condvar)>);
+
+impl StopSignal {
+    fn lock(&self) -> MutexGuard<'_, StopState> {
+        self.0 .0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Asks the run to stop; false when it already ended or was stopped.
+    pub fn cancel(&self) -> bool {
+        let mut s = self.lock();
+        if *s != StopState::Running {
+            return false;
+        }
+        *s = StopState::Stopped(StopReason::Cancelled);
+        self.0 .1.notify_all();
+        true
+    }
+
+    pub fn reason(&self) -> Option<StopReason> {
+        match *self.lock() {
+            StopState::Stopped(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    fn finish(&self) {
+        let mut s = self.lock();
+        if *s == StopState::Running {
+            *s = StopState::Finished;
+        }
+        self.0 .1.notify_all();
+    }
+
+    /// Blocks until the run is stopped or finished, or `timeout` passes (which
+    /// stops it). `Some` when the child must be killed.
+    fn watch(&self, timeout: Duration) -> Option<StopReason> {
+        let deadline = Instant::now() + timeout;
+        let mut s = self.lock();
+        loop {
+            match *s {
+                StopState::Stopped(r) => return Some(r),
+                StopState::Finished => return None,
+                StopState::Running => {}
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                let r = StopReason::TimedOut(timeout);
+                *s = StopState::Stopped(r);
+                return Some(r);
+            }
+            s = self
+                .0
+                 .1
+                .wait_timeout(s, deadline - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RunRequest {
     pub run_id: i64,
@@ -103,6 +199,9 @@ pub struct RunRequest {
     pub client: HelperClient,
     /// The per-process secret that marks the MCP URL as the app's own child.
     pub mcp_token: String,
+    /// Wall-clock limit; the child's process tree is killed when it passes.
+    pub timeout: Duration,
+    pub stop: StopSignal,
     /// An empty directory outside any repository, so no project settings,
     /// `CLAUDE.md` or auto-memory keyed on a git root reach the child.
     pub cwd: PathBuf,
@@ -332,17 +431,28 @@ impl Transport for ClaudeCli {
             .bin
             .as_deref()
             .ok_or_else(|| anyhow!("the claude CLI was not found"))?;
+        if let Some(reason) = req.stop.reason() {
+            anyhow::bail!("{reason}");
+        }
         let mut cmd = self.command(bin);
         cmd.args(self.run_args(req))
             .current_dir(&req.cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = KillOnDrop(
-            cmd.spawn()
-                .with_context(|| format!("starting {}", bin.display()))?,
-        );
-        let stdout = child.0.stdout.take().context("child stdout")?;
-        let stderr = child.0.stderr.take().context("child stderr")?;
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("starting {}", bin.display()))?;
+        let stdout = child.stdout.take().context("child stdout")?;
+        let stderr = child.stderr.take().context("child stderr")?;
+        let child = Arc::new(KillOnDrop::new(child));
+        let watchdog = {
+            let (child, stop, timeout) = (Arc::clone(&child), req.stop.clone(), req.timeout);
+            std::thread::spawn(move || {
+                if stop.watch(timeout).is_some() {
+                    child.kill();
+                }
+            })
+        };
         let tail = Arc::new(Mutex::new(VecDeque::new()));
         let stderr_thread = {
             let tail = Arc::clone(&tail);
@@ -370,8 +480,15 @@ impl Transport for ClaudeCli {
                 on_event(event);
             }
         }
-        let status = child.0.wait().context("waiting for claude")?;
+        req.stop.finish();
+        let _ = watchdog.join();
+        let status = child.wait().context("waiting for claude")?;
         let _ = stderr_thread.join();
+        if result.is_none() {
+            if let Some(reason) = req.stop.reason() {
+                anyhow::bail!("{reason}");
+            }
+        }
         result.ok_or_else(|| {
             let tail = tail.lock().unwrap_or_else(|e| e.into_inner());
             let tail: Vec<&str> = tail.iter().map(String::as_str).collect();
@@ -387,14 +504,49 @@ impl Transport for ClaudeCli {
     }
 }
 
-/// Kills the child if the runner unwinds or returns early.
-struct KillOnDrop(Child);
+/// The child in its own job object: `kill` (and dropping it while the child
+/// still runs) kills the child and everything it started.
+struct KillOnDrop {
+    child: Mutex<Child>,
+    tree: Option<KillTree>,
+}
+
+impl KillOnDrop {
+    fn new(child: Child) -> Self {
+        let tree = KillTree::adopt(&child)
+            .map_err(|e| plog!("helper", "no job object for the claude child: {e}"))
+            .ok();
+        Self {
+            child: Mutex::new(child),
+            tree,
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Child> {
+        self.child.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn kill(&self) {
+        if let Some(tree) = &self.tree {
+            tree.terminate();
+        }
+        let _ = self.lock().kill();
+    }
+
+    fn try_wait(&self) -> std::io::Result<Option<ExitStatus>> {
+        self.lock().try_wait()
+    }
+
+    fn wait(&self) -> std::io::Result<ExitStatus> {
+        self.lock().wait()
+    }
+}
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        if let Ok(None) = self.0.try_wait() {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+        if let Ok(None) = self.try_wait() {
+            self.kill();
+            let _ = self.wait();
         }
     }
 }
@@ -416,7 +568,9 @@ fn output_within(
     timeout: Duration,
 ) -> anyhow::Result<(ExitStatus, String, String)> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = KillOnDrop(cmd.spawn()?);
+    let mut child = cmd.spawn()?;
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let child = KillOnDrop::new(child);
     let read = |r: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
             let mut s = String::new();
@@ -428,23 +582,11 @@ fn output_within(
             s
         })
     };
-    let out = read(
-        child
-            .0
-            .stdout
-            .take()
-            .map(|s| Box::new(s) as Box<dyn Read + Send>),
-    );
-    let err = read(
-        child
-            .0
-            .stderr
-            .take()
-            .map(|s| Box::new(s) as Box<dyn Read + Send>),
-    );
+    let out = read(stdout.map(|s| Box::new(s) as Box<dyn Read + Send>));
+    let err = read(stderr.map(|s| Box::new(s) as Box<dyn Read + Send>));
     let start = Instant::now();
     let status = loop {
-        if let Some(status) = child.0.try_wait()? {
+        if let Some(status) = child.try_wait()? {
             break status;
         }
         if start.elapsed() > timeout {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  cancelHelper,
   getReview,
   runHelper,
   setDecisionNote,
@@ -35,6 +36,8 @@ export interface ReviewData {
   reload: () => void;
   /** Starts a helper run; the status line follows the `helper_status` events. */
   retryHelper: () => void;
+  /** Stops the running helper run; it then shows as failed, "stopped by you". */
+  stopHelper: () => void;
   /** Why the user chose differently from the proposal; shown at once, saved in the background. */
   setNote: (photoId: number, criterion: Criterion, note?: string) => void;
 }
@@ -213,6 +216,14 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
     );
   }, [shootId, reload]);
 
+  const stopHelper = useCallback(() => {
+    cancelHelper(shootId).then(reload, (e: unknown) => {
+      const text = e instanceof Error ? e.message : String(e);
+      notifyRef.current({ kind: "error", text: `Could not stop the helper: ${text}` });
+      reload();
+    });
+  }, [shootId, reload]);
+
   const setNote = useCallback((photoId: number, criterion: Criterion, note?: string) => {
     const key = String(photoId);
     setPhotos((p) => {
@@ -225,5 +236,5 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
     });
   }, []);
 
-  return { review, photos, error, progress, setOutcome, reload, retryHelper, setNote };
+  return { review, photos, error, progress, setOutcome, reload, retryHelper, stopHelper, setNote };
 }
