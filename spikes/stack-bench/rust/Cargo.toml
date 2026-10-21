@@ -14,7 +14,7 @@ sha2 = "0.10"
 hex = "0.4"
 rayon = "1.10"
 zune-jpeg = "0.4"
-jpeg-encoder = "0.6"
+jpeg-encoder = "0.7"
 fast_image_resize = "5"
 kamadak-exif = "0.5"
 ort = { version = "=2.0.0-rc.12", features = ["cuda"] }
