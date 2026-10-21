@@ -181,9 +181,7 @@ mod tests {
             "uncle",
         ] {
             assert!(
-                !lower
-                    .split(|c: char| !c.is_alphabetic())
-                    .any(|w| w == word),
+                !lower.split(|c: char| !c.is_alphabetic()).any(|w| w == word),
                 "the prompt suggests the label {word:?}"
             );
         }

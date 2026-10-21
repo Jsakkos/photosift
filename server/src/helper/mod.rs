@@ -531,7 +531,7 @@ fn fail(ctx: &Ctx, run: &Started, error: String) {
     let error = truncate(&error, ERROR_MAX);
     match helper::end_open_run(&ctx.db, run.run_id, RunStatus::Failed, Some(&error)) {
         Ok(true) => {
-            plog!("helper", "run {} failed: {error}", run.run_id);
+            log_failure("run", run.run_id, &error);
             emit(
                 ctx,
                 run.shoot_id,
@@ -768,6 +768,30 @@ fn describe_error(r: &RunResult, rate_limited: bool, budget: f64) -> String {
     }
 }
 
+/// Logs a failed run. Its error can carry the model's own words or detail
+/// from the user's chat, so the log keeps only the leading category; debug
+/// builds log it whole.
+fn log_failure(what: &str, run_id: i64, error: &str) {
+    plog!(
+        "helper",
+        "{what} {run_id} failed: {}",
+        failure_category(error)
+    );
+    if cfg!(debug_assertions) {
+        plog!("helper", "{what} {run_id} error: {error}");
+    }
+}
+
+/// The text before the first detail (" (" or ": "), at most 80 characters.
+fn failure_category(error: &str) -> String {
+    let end = [" (", ": "]
+        .iter()
+        .filter_map(|sep| error.find(sep))
+        .min()
+        .unwrap_or(error.len());
+    truncate(error[..end].trim(), 80)
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -775,5 +799,24 @@ fn truncate(s: &str, max: usize) -> String {
         let mut t: String = s.chars().take(max).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_category_drops_model_text() {
+        assert_eq!(
+            failure_category("the helper ended without calling finish_run: the baby in red smiles"),
+            "the helper ended without calling finish_run"
+        );
+        assert_eq!(
+            failure_category("claude reported an error (error_during_execution: boom)"),
+            "claude reported an error"
+        );
+        assert_eq!(failure_category("stopped by you"), "stopped by you");
+        assert!(failure_category(&"x".repeat(200)).chars().count() <= 81);
     }
 }

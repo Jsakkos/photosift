@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::stream::RunEvent;
 use super::transport::{HelperClient, RunRequest, SessionMode, StopSignal};
-use super::{describe_error, prompt, run_timeout, Ctx, Shared};
+use super::{describe_error, log_failure, prompt, run_timeout, Ctx, Shared};
 use crate::db::helper::{self, RunKind, RunStatus};
 use crate::events::ServerEvent;
 use crate::plog;
@@ -97,7 +97,7 @@ fn answer(ctx: &Ctx, turn: Turn, text: &str) -> Result<(), String> {
         }
         Err(reason) => {
             let _ = helper::end_open_run(&ctx.db, run_id, RunStatus::Failed, Some(reason));
-            plog!("helper", "chat run {run_id} failed: {reason}");
+            log_failure("chat run", run_id, reason);
         }
     }
     // After the status is written: a message sent right after the reply must
