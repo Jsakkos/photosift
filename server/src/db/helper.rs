@@ -78,11 +78,13 @@ pub struct RunRow {
     pub output_tokens: Option<i64>,
     pub cache_read_tokens: Option<i64>,
     pub num_turns: Option<i64>,
+    /// Re-run after a restart interrupted the shoot's previous run.
+    pub retry: bool,
 }
 
 const RUN_COLUMNS: &str = "id, shoot_id, kind, status, session_id, model, prompt_version, \
      started_at, finished_at, summary, error, cost_usd, input_tokens, output_tokens, \
-     cache_read_tokens, num_turns";
+     cache_read_tokens, num_turns, retry";
 
 fn run_row(r: &Row) -> rusqlite::Result<RunRow> {
     Ok(RunRow {
@@ -102,6 +104,7 @@ fn run_row(r: &Row) -> rusqlite::Result<RunRow> {
         output_tokens: r.get(13)?,
         cache_read_tokens: r.get(14)?,
         num_turns: r.get(15)?,
+        retry: r.get::<_, i64>(16)? != 0,
     })
 }
 
@@ -390,6 +393,48 @@ pub fn automatic_scope(pool: &DbPool, shoot_id: i64) -> anyhow::Result<RunScope>
     } else {
         RunScope::WholeShoot
     })
+}
+
+/// Notes that the shoot waits for an automatic run. `retry` is kept once set.
+pub fn add_pending(pool: &DbPool, shoot_id: i64, retry: bool) -> anyhow::Result<()> {
+    let now = now();
+    pool.with(|c| {
+        c.execute(
+            "INSERT INTO helper_pending (shoot_id, queued_at, retry) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(shoot_id) DO UPDATE SET retry = MAX(retry, excluded.retry)",
+            params![shoot_id, now, retry],
+        )
+    })?;
+    Ok(())
+}
+
+/// Removes the shoot's pending row; its `retry` flag, if there was one.
+pub fn take_pending(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<bool>> {
+    pool.with(|c| {
+        c.query_row(
+            "DELETE FROM helper_pending WHERE shoot_id = ?1 RETURNING retry",
+            [shoot_id],
+            |r| Ok(r.get::<_, i64>(0)? != 0),
+        )
+        .optional()
+    })
+}
+
+/// Every pending shoot with its `retry` flag, oldest first.
+pub fn pending_shoots(pool: &DbPool) -> anyhow::Result<Vec<(i64, bool)>> {
+    pool.with(|c| {
+        let mut stmt =
+            c.prepare("SELECT shoot_id, retry FROM helper_pending ORDER BY queued_at, shoot_id")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)))?
+            .collect();
+        rows
+    })
+}
+
+pub fn mark_retry(pool: &DbPool, run_id: i64) -> anyhow::Result<()> {
+    pool.with(|c| c.execute("UPDATE helper_runs SET retry = 1 WHERE id = ?1", [run_id]))?;
+    Ok(())
 }
 
 pub fn get_run(pool: &DbPool, run_id: i64) -> anyhow::Result<Option<RunRow>> {

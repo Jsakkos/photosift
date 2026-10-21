@@ -72,4 +72,17 @@ pub const STEPS: &[(i64, &str)] = &[
             at TEXT NOT NULL
         );",
     ),
+    // Automatic helper runs waiting for the worker, so a restart does not
+    // lose them; `retry` marks one re-queued for a run a restart interrupted.
+    // `helper_runs.retry` marks a run that was itself that retry: it is not
+    // retried again.
+    (
+        4,
+        "CREATE TABLE helper_pending (
+            shoot_id INTEGER PRIMARY KEY REFERENCES shoots ON DELETE CASCADE,
+            queued_at TEXT NOT NULL,
+            retry INTEGER NOT NULL DEFAULT 0
+        );
+        ALTER TABLE helper_runs ADD COLUMN retry INTEGER NOT NULL DEFAULT 0;",
+    ),
 ];

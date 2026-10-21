@@ -8,6 +8,8 @@ use tempfile::TempDir;
 pub struct TestServer {
     pub base_url: String,
     pub data_root: TempDir,
+    /// Aborts the accept loop, which drops the app once open connections close.
+    pub task: tokio::task::AbortHandle,
 }
 
 pub async fn spawn_server() -> TestServer {
@@ -70,6 +72,7 @@ pub async fn respawn_server(old: TestServer) -> TestServer {
 }
 
 /// The helper's `claude` and extra child environment for one server.
+#[derive(Clone)]
 pub struct HelperSetup {
     pub claude_bin: PathBuf,
     pub env: Vec<(String, String)>,
@@ -100,6 +103,18 @@ pub async fn spawn_server_with_helper(
     serve_with(data_root, None, overrides).await
 }
 
+/// Stops `old` (as far as a test can: its listener; the app and its helper
+/// thread go once the caller has closed its connections) and starts a fresh
+/// app with `setup` on the same data root, as after an app restart.
+pub async fn restart_server_with_helper(old: TestServer, setup: HelperSetup) -> TestServer {
+    old.task.abort();
+    let overrides = photosift::Overrides {
+        claude_bin: Some(setup.claude_bin),
+        claude_env: setup.env,
+    };
+    serve_with(old.data_root, None, overrides).await
+}
+
 async fn serve(data_root: TempDir, web_dist: Option<PathBuf>) -> TestServer {
     // Never the real `claude` on PATH: a test import would start a real run.
     let overrides = photosift::Overrides {
@@ -120,12 +135,14 @@ async fn serve_with(
     let addr = listener.local_addr().expect("local addr");
     let app = photosift::build_app_with(data_root.path(), web_dist, addr.port(), overrides)
         .expect("build app");
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
-    });
+    })
+    .abort_handle();
     TestServer {
         base_url: format!("http://{addr}"),
         data_root,
+        task,
     }
 }
 

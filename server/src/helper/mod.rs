@@ -68,10 +68,12 @@ pub enum EnqueueError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Origin {
-    /// Queued after enrichment. Its run row is created only when the worker
-    /// takes it and finds unproposed photos, so a follow-up that an earlier
-    /// run already covered leaves no row and spawns no `claude`.
-    Automatic,
+    /// Queued after enrichment (and kept in `helper_pending` until the worker
+    /// takes it). Its run row is created only when the worker finds
+    /// unproposed photos, so a follow-up that an earlier run already covered
+    /// leaves no row and spawns no `claude`. `retry`: re-queued for a run a
+    /// restart interrupted; its run is not retried again.
+    Automatic { retry: bool },
     /// The run button or the eval harness: the row exists from the request,
     /// and the run reviews the whole shoot.
     Explicit(i64),
@@ -138,6 +140,11 @@ impl HelperService {
     /// `<data root>\helper\`, and starts the worker, which first checks that
     /// the transport is available. The transport already carries the `/mcp`
     /// URL (see `lib::build_state`).
+    ///
+    /// Re-queued at startup: the automatic jobs that were waiting
+    /// (`helper_pending`), and once each, the shoots whose background run this
+    /// startup interrupted. Nothing else: a sweep of every shoot with
+    /// unproposed photos would spend the user's allowance on old shoots.
     pub fn start(
         db: DbPool,
         events: EventHub,
@@ -148,6 +155,11 @@ impl HelperService {
         match helper::interrupt_open_runs(&db) {
             Ok(runs) => {
                 for run in runs {
+                    if run.kind == RunKind::Background.as_str() && !run.retry {
+                        if let Err(e) = helper::add_pending(&db, run.shoot_id, true) {
+                            plog!("helper", "re-queueing shoot {}: {e:#}", run.shoot_id);
+                        }
+                    }
                     plog!(
                         "helper",
                         "run {} of shoot {} was {} at shutdown; marked interrupted",
@@ -170,8 +182,23 @@ impl HelperService {
         let work_dir = helper_dir.join("work");
         prepare_dirs(&runs_dir, &work_dir);
 
+        let mut state = State::default();
+        if settings.helper_enabled {
+            match helper::pending_shoots(&db) {
+                Ok(shoots) => {
+                    for (shoot_id, retry) in shoots {
+                        plog!("helper", "shoot {shoot_id}: re-queued its pending run");
+                        state.pending.push_back(Job {
+                            shoot_id,
+                            origin: Origin::Automatic { retry },
+                        });
+                    }
+                }
+                Err(e) => plog!("helper", "could not read pending runs: {e:#}"),
+            }
+        }
         let shared = Arc::new(Shared {
-            state: Mutex::new(State::default()),
+            state: Mutex::new(state),
             wake: Condvar::new(),
             enqueue: Mutex::new(()),
         });
@@ -266,9 +293,15 @@ impl HelperService {
                 }
             };
         if !skip {
+            if let Err(e) = helper::add_pending(&self.ctx.db, shoot_id, false) {
+                plog!(
+                    "helper",
+                    "recording the pending run of shoot {shoot_id}: {e:#}"
+                );
+            }
             self.shared.lock().pending.push_back(Job {
                 shoot_id,
-                origin: Origin::Automatic,
+                origin: Origin::Automatic { retry: false },
             });
             self.shared.wake.notify_one();
         }
@@ -428,10 +461,22 @@ fn run_job(
     // `focus`: None reviews the whole shoot, Some(ids) only the new photos.
     let (run_id, focus) = match job.origin {
         Origin::Explicit(run_id) => (run_id, None),
-        Origin::Automatic => {
+        Origin::Automatic { retry } => {
+            // Left in `helper_pending`: the next start tries again.
             if unavailable.is_some() {
                 return;
             }
+            let retry = match helper::take_pending(&ctx.db, job.shoot_id) {
+                Ok(row) => retry || row.unwrap_or(false),
+                Err(e) => {
+                    plog!(
+                        "helper",
+                        "clearing the pending run of shoot {}: {e:#}",
+                        job.shoot_id
+                    );
+                    retry
+                }
+            };
             let focus = match helper::automatic_scope(&ctx.db, job.shoot_id) {
                 Ok(RunScope::Nothing) => {
                     plog!(
@@ -452,7 +497,13 @@ fn run_job(
                     return;
                 }
             };
-            match create_queued(ctx, job.shoot_id, RunKind::Background) {
+            let created = create_queued(ctx, job.shoot_id, RunKind::Background).and_then(|id| {
+                if retry {
+                    helper::mark_retry(&ctx.db, id)?;
+                }
+                Ok(id)
+            });
+            match created {
                 Ok(run_id) => (run_id, focus),
                 Err(e) => {
                     plog!("helper", "creating a run for shoot {}: {e:#}", job.shoot_id);

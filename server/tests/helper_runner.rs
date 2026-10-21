@@ -105,6 +105,7 @@ fn parse_line_cases() {
 
 struct Env {
     server: TestServer,
+    setup: HelperSetup,
     _library: TempDir,
     scratch: TempDir,
     script: PathBuf,
@@ -129,27 +130,24 @@ impl Env {
         let script_path = scratch.path().join("script.json");
         let args_log = scratch.path().join("args.jsonl");
         std::fs::write(&script_path, script.to_string()).unwrap();
-        let server = spawn_server_with_helper(
-            library.path(),
-            edit,
-            HelperSetup {
-                claude_bin: bin.unwrap_or_else(|| PathBuf::from(FAKE)),
-                env: vec![
-                    (
-                        "FAKE_CLAUDE_SCRIPT".into(),
-                        script_path.to_string_lossy().into_owned(),
-                    ),
-                    (
-                        "FAKE_CLAUDE_ARGS_LOG".into(),
-                        args_log.to_string_lossy().into_owned(),
-                    ),
-                ],
-            },
-        )
-        .await;
+        let setup = HelperSetup {
+            claude_bin: bin.unwrap_or_else(|| PathBuf::from(FAKE)),
+            env: vec![
+                (
+                    "FAKE_CLAUDE_SCRIPT".into(),
+                    script_path.to_string_lossy().into_owned(),
+                ),
+                (
+                    "FAKE_CLAUDE_ARGS_LOG".into(),
+                    args_log.to_string_lossy().into_owned(),
+                ),
+            ],
+        };
+        let server = spawn_server_with_helper(library.path(), edit, setup.clone()).await;
         let pool = open(&server.data_root.path().join("photosift.db")).unwrap();
         Env {
             server,
+            setup,
             _library: library,
             scratch,
             script: script_path,
@@ -157,6 +155,104 @@ impl Env {
             pool,
             http: reqwest::Client::new(),
         }
+    }
+
+    /// An app restart on the same data root. Callers drop their WebSockets
+    /// first; the HTTP client is replaced so pooled connections close too.
+    async fn restart(self) -> Env {
+        let Env {
+            server,
+            setup,
+            _library,
+            scratch,
+            script,
+            args_log,
+            pool,
+            http,
+        } = self;
+        drop(http);
+        let server = common::restart_server_with_helper(server, setup.clone()).await;
+        Env {
+            server,
+            setup,
+            _library,
+            scratch,
+            script,
+            args_log,
+            pool,
+            http: reqwest::Client::new(),
+        }
+    }
+
+    /// Run invocations whose prompt names `shoot`.
+    fn runs_for(&self, shoot: i64) -> usize {
+        let needle = format!("Review shoot {shoot} ");
+        self.run_invocations()
+            .iter()
+            .filter(|a| prompt_of(a).starts_with(&needle))
+            .count()
+    }
+
+    /// A named shoot with one enriched, unreviewed photo, written straight
+    /// into the database (no import, so no automatic run).
+    fn add_shoot_with_photo(&self, name: &str) -> (i64, i64) {
+        let folder = self.scratch.path().join(name);
+        let shoot = photos::insert_shoot(
+            &self.pool,
+            &NewShoot {
+                kind: ShootKind::Named,
+                name: Some(name.into()),
+                folder: folder.to_string_lossy().into_owned(),
+                date_start: "2026-10-18".parse().ok(),
+                date_end: "2026-10-18".parse().ok(),
+            },
+        )
+        .unwrap();
+        let photo = photos::insert_photo(
+            &self.pool,
+            &NewPhoto {
+                shoot_id: shoot,
+                jpeg_path: Some(folder.join("a.jpg").to_string_lossy().into_owned()),
+                sha256: format!("hash-{name}"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        self.pool
+            .with(|c| {
+                c.execute(
+                    "UPDATE photos SET enriched_at = '2026-10-18T12:00:00' WHERE id = ?1",
+                    [photo],
+                )
+            })
+            .unwrap();
+        (shoot, photo)
+    }
+
+    fn run_rows(&self) -> Vec<(i64, i64, String, bool)> {
+        self.pool
+            .with(|c| {
+                let mut st =
+                    c.prepare("SELECT id, shoot_id, status, retry FROM helper_runs ORDER BY id")?;
+                let rows = st
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                    .collect::<Result<Vec<_>, _>>();
+                rows
+            })
+            .unwrap()
+    }
+
+    /// Waits until the helper's queue is empty, then a little longer.
+    async fn settle(&self) {
+        for _ in 0..200 {
+            let h = self.status().await["helper"].clone();
+            if h["queue"] == 0 && h["available"] == true {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(self.status().await["helper"]["queue"], 0);
     }
 
     fn url(&self, p: &str) -> String {
@@ -887,4 +983,108 @@ async fn automatic_follow_up_with_nothing_new_spawns_no_claude() {
     let review = env.get("/api/shoots/1/review").await;
     assert_eq!(review["helper"]["status"], "done");
     assert_eq!(review["helper"]["summary"], "Five everyday frames.");
+}
+
+fn finish_only(delay_ms: u64) -> Value {
+    let mut s = script(json!([
+        {"tool": "finish_run", "args": {"run_id": "$RUN", "summary": "Looked."}},
+    ]));
+    s["delay_ms"] = json!(delay_ms);
+    s
+}
+
+#[tokio::test]
+async fn pending_automatic_job_survives_restart() {
+    let env = Env::new(finish_only(3000), |_| {}).await;
+    let mut ws = env.ws().await;
+    let a = env.import(&mut ws, THREE, "named").await[0];
+    wait_helper(&mut ws, "running").await;
+    // A second shoot is enriched while A's run is busy: its automatic job
+    // waits, and is written down.
+    let b = env
+        .import(&mut ws, &[("DSCF0009.JPG", "2026:09:01 12:00:00")], "named")
+        .await[0];
+    assert_ne!(a, b);
+    // The hook runs just after `enrich_done` is broadcast.
+    let mut pending: Vec<i64> = Vec::new();
+    for _ in 0..100 {
+        pending = env
+            .pool
+            .with(|c| {
+                let mut st = c.prepare("SELECT shoot_id FROM helper_pending")?;
+                let rows = st.query_map([], |r| r.get(0))?.collect();
+                rows
+            })
+            .unwrap();
+        if !pending.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(pending, vec![b]);
+
+    env.set_script(finish_only(0));
+    drop(ws);
+    let env = env.restart().await;
+    let mut ws = env.ws().await;
+    let mut done_for_b = false;
+    next_events(&mut ws, |v| {
+        if v["type"] == "helper_status" && v["status"] == "done" && v["shoot_id"] == b {
+            done_for_b = true;
+        }
+        done_for_b
+    })
+    .await;
+    env.settle().await;
+    // Wait past the old run's delay: the stopped app must not run B too.
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    assert_eq!(env.runs_for(b), 1, "{:?}", env.run_invocations());
+    let left: i64 = env
+        .pool
+        .with(|c| c.query_row("SELECT COUNT(*) FROM helper_pending", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(left, 0);
+}
+
+#[tokio::test]
+async fn interrupted_run_retried_once() {
+    let env = Env::new(finish_only(0), |_| {}).await;
+    env.settle().await;
+    let (shoot, _) = env.add_shoot_with_photo("Party");
+    let first = helper::create_run(&env.pool, shoot, RunKind::Background, None, None).unwrap();
+    helper::set_run_status(&env.pool, first, RunStatus::Running, None).unwrap();
+
+    // Restart 1: the run is interrupted and retried once.
+    let env = env.restart().await;
+    env.settle().await;
+    let rows = env.run_rows();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0], (first, shoot, "interrupted".into(), false));
+    let retry = rows[1].0;
+    assert_eq!(rows[1], (retry, shoot, "done".into(), true));
+    assert_eq!(env.runs_for(shoot), 1);
+
+    // The retry itself is cut off by a restart: no second retry.
+    helper::set_run_status(&env.pool, retry, RunStatus::Running, None).unwrap();
+    let env = env.restart().await;
+    env.settle().await;
+    let rows = env.run_rows();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[1].2, "interrupted");
+    assert_eq!(env.runs_for(shoot), 1);
+}
+
+#[tokio::test]
+async fn startup_does_not_sweep_old_shoots() {
+    let env = Env::new(finish_only(0), |_| {}).await;
+    env.settle().await;
+    env.add_shoot_with_photo("Old Party");
+    let env = env.restart().await;
+    env.settle().await;
+    assert!(
+        env.run_invocations().is_empty(),
+        "{:?}",
+        env.run_invocations()
+    );
+    assert!(env.run_rows().is_empty());
 }
