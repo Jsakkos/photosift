@@ -1,6 +1,7 @@
 //! Pixels and metadata from camera files: embedded-JPEG extraction, EXIF,
 //! oriented preview/thumbnail rendering, and the perceptual hash.
 
+pub mod crops;
 pub mod embedded;
 pub mod exif;
 pub mod phash;

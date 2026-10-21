@@ -130,6 +130,12 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
     let guard = middleware::from_fn_with_state(state.clone(), guard::check);
     let app = Router::new()
         .route("/ws", get(ws::handler).with_state(state.clone()))
+        .route(
+            "/mcp",
+            post(crate::mcp::post)
+                .get(crate::mcp::get_not_allowed)
+                .with_state(state.clone()),
+        )
         // Top level, before the SPA fallback, so a missing id is a 404.
         .route("/media/preview/{id}", get(media::preview))
         .route("/media/thumb/{id}", get(media::thumb))

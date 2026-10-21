@@ -75,6 +75,7 @@ Routes in `server/src/api/mod.rs`. JSON bodies, errors are `{"error": "..."}`. M
 | `GET /api/shoots`, `GET /api/shoots/{id}/review`, `POST /api/shoots/{id}/trash` | shoot list, review data, approved delete (body `{photo_ids}`: only those pending deletes are trashed) |
 | `POST /api/photos/{id}/outcome` | set outcome (+ blooper) and rewrite the sidecar (409 for a trashed photo) |
 | `GET /media/preview/{id}`, `/media/thumb/{id}`, `/media/scan/{scan}/{idx}` | JPEGs served from the cache |
+| `POST /mcp` | stateless MCP (Streamable HTTP, JSON replies) over the read operations plus `set_outcome`; tool table in `server/src/mcp/tools.rs`; `GET` is 405 |
 | `GET /ws` | `ServerEvent` stream: import/enrichment progress, `card_detected`, `card_scan_failed` |
 
 Anything else under `/` serves `web/dist` with an SPA fallback to `index.html`.
