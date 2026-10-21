@@ -472,3 +472,139 @@ async fn helper_mode_scores_the_runs_proposals() {
     assert!((r.cost_usd - 0.0123).abs() < 1e-9, "{r:?}");
     assert_eq!(snapshot(shoot.path()), before, "the library folder changed");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nested_export_dirs_matched() {
+    let shoot = TempDir::new().unwrap();
+    let eval_dir = TempDir::new().unwrap();
+    shoot_with_originals(shoot.path(), 4);
+    // Two top-level folders that differ only in case, and one a level down:
+    // the scan excludes all three, so all three must supply truth.
+    write(
+        &shoot.path().join("Export").join("DSCF0001.jpg"),
+        &export_of(pattern(1), 2),
+    );
+    write(
+        &shoot.path().join("export").join("DSCF0002.jpg"),
+        &export_of(pattern(2), 4),
+    );
+    write(
+        &shoot
+            .path()
+            .join("day2")
+            .join("EXPORT")
+            .join("DSCF0004.jpg"),
+        &export_of(pattern(4), 8),
+    );
+
+    let rows = eval::run(&options(eval_dir.path(), vec![shoot.path().into()]))
+        .await
+        .unwrap();
+
+    assert_eq!(rows[0].photos, 4);
+    assert_eq!(rows[0].truth, 3, "{:?}", rows[0]);
+    assert!(rows[0].unmatched.is_empty(), "{:?}", rows[0].unmatched);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn skipped_shoot_reported() {
+    let ok = TempDir::new().unwrap();
+    let no_export = TempDir::new().unwrap();
+    let eval_dir = TempDir::new().unwrap();
+    shoot_with_originals(ok.path(), 2);
+    write(
+        &ok.path().join("Export").join("DSCF0001.jpg"),
+        &export_of(pattern(1), 2),
+    );
+    shoot_with_originals(no_export.path(), 2);
+
+    let out = eval::run_detailed(&options(
+        eval_dir.path(),
+        vec![no_export.path().into(), ok.path().into()],
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(out.rows.len(), 1);
+    assert_eq!(out.skipped.len(), 1);
+    let hash = eval::shoot_hash(no_export.path());
+    assert_eq!(out.skipped[0].shoot_hash, hash);
+    let text = eval::format_skipped(&out.skipped);
+    assert!(text.contains("skipped 1"), "{text}");
+    assert!(text.contains(&hash), "{text}");
+    assert!(text.contains("no Export folder"), "{text}");
+    assert!(
+        !text.contains(&no_export.path().to_string_lossy().to_string()),
+        "a path leaked: {text}"
+    );
+    assert_eq!(eval::format_skipped(&[]), "");
+}
+
+fn frame(second: i64, phash: Option<i64>) -> photosift::enrich::moments::MomentInput {
+    photosift::enrich::moments::MomentInput {
+        capture_time: NaiveDateTime::parse_from_str("2026-03-14T10:00:00", "%Y-%m-%dT%H:%M:%S")
+            .unwrap()
+            + chrono::Duration::seconds(second),
+        phash,
+    }
+}
+
+/// Four frames one second apart whose pHash distances from the first are
+/// 0, 0, 6 and 16 bits; the user kept the first and the last.
+fn sweep_shoot() -> eval::sweep::ShootInputs {
+    eval::sweep::ShootInputs {
+        photos: vec![
+            frame(0, Some(0)),
+            frame(1, Some(0)),
+            frame(2, Some(0b11_1111)),
+            frame(3, Some(0xFFFF)),
+        ],
+        truth: HashSet::from([0, 3]),
+    }
+}
+
+fn params(phash_max: u32) -> photosift::enrich::moments::SplitParams {
+    photosift::enrich::moments::SplitParams {
+        moment_gap_seconds: 90,
+        burst_window_seconds: 10,
+        burst_phash_max: phash_max,
+    }
+}
+
+#[test]
+fn sweep_collision_counts() {
+    let shoots = [sweep_shoot()];
+    let fine = eval::sweep::evaluate(&shoots, &params(12));
+    assert_eq!(fine.truth_collisions, 0.0);
+    // Frames 0-2 form one burst, frame 3 its own: 2 bursts of 4 photos.
+    assert_eq!(fine.bursts_per_100, 50.0);
+    assert_eq!(fine.near_dupe_coverage, 0.5);
+
+    let coarse = eval::sweep::evaluate(&shoots, &params(20));
+    assert_eq!(coarse.truth_collisions, 1.0);
+    assert_eq!(coarse.bursts_per_100, 25.0);
+    assert_eq!(coarse.near_dupe_coverage, 1.0);
+}
+
+#[test]
+fn sweep_is_pure() {
+    let shoots = [sweep_shoot(), sweep_shoot()];
+    let a = eval::sweep::evaluate(&shoots, &params(16));
+    let b = eval::sweep::evaluate(&shoots, &params(16));
+    assert_eq!(a, b);
+}
+
+#[test]
+fn sweep_recommends_fewest_bursts_within_the_collision_budget() {
+    let shoots = [sweep_shoot()];
+    let default = params(12);
+    let rows = eval::sweep::sweep(&shoots);
+    assert_eq!(rows.len(), 8 * 3 * 3);
+    let pick = eval::sweep::recommend(&rows, &default).unwrap();
+    let base = eval::sweep::evaluate(&shoots, &default);
+    assert!(pick.1.truth_collisions <= base.truth_collisions + 0.02);
+    assert!(rows
+        .iter()
+        .filter(|r| r.1.truth_collisions <= base.truth_collisions + 0.02)
+        .all(|r| r.1.bursts_per_100 >= pick.1.bursts_per_100));
+}

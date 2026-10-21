@@ -9,6 +9,7 @@
 
 pub mod exports;
 pub mod score;
+pub mod sweep;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -88,6 +89,20 @@ pub struct ShootRow {
     pub cost_usd: f64,
     /// Local time the row was scored.
     pub at: String,
+}
+
+/// A listed shoot that could not be scored, by hash only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    pub shoot_hash: String,
+    pub reason: String,
+}
+
+/// What `run_detailed` produced.
+#[derive(Debug, Clone)]
+pub struct RunOutcome {
+    pub rows: Vec<ShootRow>,
+    pub skipped: Vec<Skipped>,
 }
 
 /// `PHOTOSIFT_EVAL_DIR` (empty = unset), else `<repo>\.photosift-eval`.
@@ -307,17 +322,44 @@ pub fn burst_of(review: &review::ShootReview) -> HashMap<i64, (i64, i64)> {
     out
 }
 
-fn find_export_dir(folder: &Path) -> anyhow::Result<PathBuf> {
-    for entry in fs::read_dir(folder).with_context(|| "reading the shoot folder")? {
-        let entry = entry?;
-        let is_export = EXCLUDE_DIRS
-            .iter()
-            .any(|x| entry.file_name().to_string_lossy().eq_ignore_ascii_case(x));
-        if is_export && entry.file_type()?.is_dir() {
-            return Ok(entry.path());
+/// Every `Export\` directory under `folder`, at any depth and in any case
+/// (the same rule the scan's exclusion uses), sorted. An export directory's
+/// own subfolders are not searched again: `match_exports` walks them.
+fn find_export_dirs(folder: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    let mut pending = vec![folder.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries = fs::read_dir(&dir).with_context(|| "reading the shoot folder")?;
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let is_export = EXCLUDE_DIRS
+                .iter()
+                .any(|x| entry.file_name().to_string_lossy().eq_ignore_ascii_case(x));
+            if is_export {
+                found.push(entry.path());
+            } else {
+                pending.push(entry.path());
+            }
         }
     }
-    bail!("no Export folder; list only shoots that have one")
+    if found.is_empty() {
+        bail!("no Export folder; list only shoots that have one");
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// `match_exports` over every export directory, merged.
+fn match_all_exports(export_dirs: &[PathBuf], keys: &[PhotoKey]) -> exports::ExportMatch {
+    let mut all = exports::ExportMatch::default();
+    for dir in export_dirs {
+        let m = exports::match_exports(dir, keys);
+        all.matched.extend(m.matched);
+        all.unmatched.extend(m.unmatched);
+    }
+    all
 }
 
 /// Queues one eval run through the real helper and waits for it to end.
@@ -350,12 +392,12 @@ fn eval_shoot(
     settings_hash: &str,
 ) -> anyhow::Result<ShootRow> {
     let hash = shoot_hash(folder);
-    let export_dir = find_export_dir(folder)?;
+    let export_dirs = find_export_dirs(folder)?;
     let shoot_id = index_in_place(state, folder)?;
     plog!("eval", "shoot {hash}: waiting for enrichment");
     wait_for_enrichment(state, shoot_id)?;
 
-    let matched = exports::match_exports(&export_dir, &photo_keys(&state.db, shoot_id)?);
+    let matched = match_all_exports(&export_dirs, &photo_keys(&state.db, shoot_id)?);
     let truth: HashSet<i64> = matched.matched.iter().map(|(_, id)| *id).collect();
     let review = review::shoot_review(&state.db, shoot_id)?.context("the shoot vanished")?;
     let bursts = burst_of(&review);
@@ -424,6 +466,11 @@ fn append_result(eval_dir: &Path, row: &ShootRow) -> anyhow::Result<()> {
 /// logged and skipped. Each scored row is appended to `results.jsonl` as soon
 /// as it is ready.
 pub async fn run(opts: &RunOptions) -> anyhow::Result<Vec<ShootRow>> {
+    Ok(run_detailed(opts).await?.rows)
+}
+
+/// `run`, also reporting the shoots that were skipped and why.
+pub async fn run_detailed(opts: &RunOptions) -> anyhow::Result<RunOutcome> {
     let root = opts.eval_dir.join("root");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -443,9 +490,10 @@ pub async fn run(opts: &RunOptions) -> anyhow::Result<Vec<ShootRow>> {
     result?
 }
 
-fn run_shoots(state: &AppState, opts: &RunOptions) -> anyhow::Result<Vec<ShootRow>> {
+fn run_shoots(state: &AppState, opts: &RunOptions) -> anyhow::Result<RunOutcome> {
     let settings_hash = settings_hash(&state.settings);
     let mut rows = Vec::new();
+    let mut skipped = Vec::new();
     for folder in opts
         .shoots
         .iter()
@@ -456,10 +504,29 @@ fn run_shoots(state: &AppState, opts: &RunOptions) -> anyhow::Result<Vec<ShootRo
                 append_result(&opts.eval_dir, &row)?;
                 rows.push(row);
             }
-            Err(e) => plog!("eval", "shoot {} skipped: {e:#}", shoot_hash(folder)),
+            Err(e) => {
+                let shoot_hash = shoot_hash(folder);
+                plog!("eval", "shoot {shoot_hash} skipped: {e:#}");
+                skipped.push(Skipped {
+                    shoot_hash,
+                    reason: format!("{e:#}"),
+                });
+            }
         }
     }
-    Ok(rows)
+    Ok(RunOutcome { rows, skipped })
+}
+
+/// `skipped N: <hash>: <reason>` lines, or nothing when none were skipped.
+pub fn format_skipped(skipped: &[Skipped]) -> String {
+    if skipped.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("skipped {}:\n", skipped.len());
+    for s in skipped {
+        out.push_str(&format!("  {}: {}\n", s.shoot_hash, s.reason));
+    }
+    out
 }
 
 /// The per-shoot table `run` prints.

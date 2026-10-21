@@ -3,6 +3,7 @@
 //! ```text
 //! photosift-eval run [--shoots <file>] [--helper] [--max-shoots N] [--label TEXT]
 //! photosift-eval report [--label A --label B ...]
+//! photosift-eval sweep [--shoots <file>]
 //! ```
 
 use std::path::PathBuf;
@@ -13,7 +14,8 @@ use photosift::eval::{self, RunOptions};
 
 const USAGE: &str = "usage:\n  \
     photosift-eval run [--shoots <file>] [--helper] [--max-shoots N] [--label TEXT]\n  \
-    photosift-eval report [--label A --label B ...]";
+    photosift-eval report [--label A --label B ...]
+  \n    photosift-eval sweep [--shoots <file>]";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
     match command.as_deref() {
         Some("run") => run(&rest).await,
         Some("report") => report(&rest),
+        Some("sweep") => sweep(&rest),
         _ => bail!("{USAGE}"),
     }
 }
@@ -65,8 +68,10 @@ async fn run(args: &[String]) -> anyhow::Result<()> {
         helper_timeout: Duration::from_secs(45 * 60),
     };
     std::fs::create_dir_all(&opts.eval_dir)?;
-    let rows = eval::run(&opts).await?;
+    let outcome = eval::run_detailed(&opts).await?;
+    let rows = outcome.rows;
     print!("{}", eval::format_table(&rows));
+    print!("{}", eval::format_skipped(&outcome.skipped));
     println!(
         "{} shoot(s) scored; results appended to {}",
         rows.len(),
@@ -85,5 +90,42 @@ fn report(args: &[String]) -> anyhow::Result<()> {
         }
     }
     print!("{}", eval::report(&eval::default_eval_dir(), &labels)?);
+    Ok(())
+}
+
+/// Pure computation over shoots `run` already indexed; no Claude, no writes.
+fn sweep(args: &[String]) -> anyhow::Result<()> {
+    let mut shoots_file = eval::default_shoots_file();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--shoots" => shoots_file = PathBuf::from(value(&mut it, a)?),
+            other => bail!(
+                "unknown argument {other:?}
+{USAGE}"
+            ),
+        }
+    }
+    let shoots = eval::read_shoots_file(&shoots_file)?;
+    let (inputs, skipped) = eval::sweep::load_inputs(&eval::default_eval_dir(), &shoots)?;
+    if inputs.is_empty() {
+        bail!(
+            "no indexed shoot with an Export folder
+{}",
+            eval::format_skipped(&skipped)
+        );
+    }
+    let photos: usize = inputs.iter().map(|i| i.photos.len()).sum();
+    let truth: usize = inputs.iter().map(|i| i.truth.len()).sum();
+    println!(
+        "{} shoot(s), {photos} photos, {truth} exported",
+        inputs.len()
+    );
+    let rows = eval::sweep::sweep(&inputs);
+    print!(
+        "{}",
+        eval::sweep::format_sweep(&rows, &eval::sweep::current_default())
+    );
+    print!("{}", eval::format_skipped(&skipped));
     Ok(())
 }
