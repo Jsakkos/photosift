@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ReviewPhoto, ShootReview } from "../api/types";
 import {
   MutationClock,
+  acceptable,
   buildView,
   burstOf,
   mergePhotos,
@@ -11,7 +12,11 @@ import {
   stepPhoto,
 } from "./model";
 
-function photo(id: number, outcome: ReviewPhoto["outcome"] = "unreviewed"): ReviewPhoto {
+function photo(
+  id: number,
+  outcome: ReviewPhoto["outcome"] = "unreviewed",
+  proposal: ReviewPhoto["proposal"] = null,
+): ReviewPhoto {
   return {
     id,
     w: 640,
@@ -23,8 +28,12 @@ function photo(id: number, outcome: ReviewPhoto["outcome"] = "unreviewed"): Revi
     face_count: 0,
     signal_score: null,
     has_video: false,
-    proposal: null,
+    proposal,
   };
+}
+
+function proposing(outcome: "album" | "archive" | "delete", blooper = false) {
+  return { outcome, blooper, reason: "because", criterion: null };
 }
 
 const review: Pick<ShootReview, "moments" | "highlights"> = {
@@ -157,5 +166,85 @@ describe("MutationClock", () => {
     const onScreen = { "1": photo(1, "album") };
     const merged = mergePhotos(fetched, onScreen, (id) => clock.changedSince(id, began));
     expect(merged["1"]!.outcome).toBe("album");
+  });
+});
+
+describe("acceptable", () => {
+  const rev: Pick<ShootReview, "moments" | "highlights"> = {
+    highlights: [],
+    moments: [
+      {
+        idx: 0,
+        start: null,
+        end: null,
+        bursts: [
+          { idx: 0, photo_ids: [1] },
+          { idx: 1, photo_ids: [2] },
+          { idx: 2, photo_ids: [3] },
+        ],
+      },
+      { idx: 1, start: null, end: null, bursts: [{ idx: 3, photo_ids: [4, 5] }] },
+    ],
+  };
+  const map = Object.fromEntries(
+    [
+      photo(1, "unreviewed", proposing("album")),
+      photo(2, "library", proposing("archive")),
+      photo(3, "unreviewed"),
+      photo(4, "unreviewed", proposing("delete", true)),
+      photo(5, "unreviewed", proposing("archive")),
+    ].map((p) => [String(p.id), p]),
+  );
+  const view = buildView(rev, map, null);
+
+  it("skips decided photos and photos without a proposal, in navigation order", () => {
+    expect(acceptable(view, map, "all")).toEqual([
+      { photoId: 1, outcome: "album", blooper: false },
+      { photoId: 4, outcome: "delete", blooper: true },
+      { photoId: 5, outcome: "archive", blooper: false },
+    ]);
+  });
+
+  it("limits itself to a moment or a photo", () => {
+    expect(acceptable(view, map, { momentIdx: 1 }).map((a) => a.photoId)).toEqual([4, 5]);
+    expect(acceptable(view, map, { photoId: 1 }).map((a) => a.photoId)).toEqual([1]);
+    expect(acceptable(view, map, { photoId: 2 })).toEqual([]);
+    expect(acceptable(view, map, { photoId: 3 })).toEqual([]);
+  });
+});
+
+describe("your-call pairs", () => {
+  const rev: Pick<ShootReview, "moments" | "highlights"> = {
+    highlights: [],
+    moments: [
+      {
+        idx: 0,
+        start: null,
+        end: null,
+        bursts: [
+          { idx: 0, photo_ids: [1] },
+          { idx: 1, photo_ids: [2, 3] },
+          { idx: 2, photo_ids: [4] },
+        ],
+      },
+    ],
+  };
+  const map = Object.fromEntries(
+    [1, 2, 3, 4].map((id) => [String(id), photo(id)]),
+  );
+
+  it("lifts the pair out of the bursts and puts it first in navigation order", () => {
+    const view = buildView(rev, map, null, [{ id: 7, a: 4, b: 1, tradeoff: "t" }]);
+    const moment = view.moments[0];
+    expect(moment?.pairs).toEqual([{ id: 7, a: 4, b: 1, tradeoff: "t" }]);
+    expect(moment?.bursts.map((b) => b.top)).toEqual([2]);
+    expect(moment?.order).toEqual([4, 1, 2, 3]);
+    expect(burstOf(view, 1)).toEqual([4, 1]);
+  });
+
+  it("ignores a pair with a photo the filter hides", () => {
+    const view = buildView(rev, map, null, [{ id: 7, a: 4, b: 9, tradeoff: "t" }]);
+    expect(view.moments[0]?.pairs).toEqual([]);
+    expect(view.order).toEqual([1, 2, 4, 3]);
   });
 });

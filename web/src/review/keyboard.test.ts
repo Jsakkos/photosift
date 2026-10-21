@@ -12,6 +12,12 @@ describe("resolveKey", () => {
     expect(resolveKey({ key: "?" })).toEqual({ kind: "help" });
   });
 
+  it("tells y from Y and nothing else by case", () => {
+    expect(resolveKey({ key: "y" })).toEqual({ kind: "accept", scope: "one" });
+    expect(resolveKey({ key: "Y" })).toEqual({ kind: "accept", scope: "moment" });
+    expect(resolveKey({ key: "L" })).toEqual({ kind: "outcome", outcome: "library" });
+  });
+
   it("leaves browser shortcuts and unknown keys alone", () => {
     expect(resolveKey({ key: "a", ctrlKey: true })).toBeNull();
     expect(resolveKey({ key: "r", metaKey: true })).toBeNull();

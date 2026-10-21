@@ -2,6 +2,8 @@ import type {
   CardScan,
   CardScanSummary,
   ClientSettings,
+  Criterion,
+  DecisionNoteRequest,
   HelperRunStarted,
   ImportRequest,
   ImportStarted,
@@ -125,6 +127,21 @@ export const trashDeletes = (shootId: number, photoIds: number[]) =>
 /** Runs the helper on the shoot now: 409 while one is queued or running, 503 when unavailable. */
 export const runHelper = (shootId: number) =>
   request<HelperRunStarted>("POST", `/api/shoots/${shootId}/helper/run`);
+
+/** Why the user overrode a proposal; `note` goes with `other`. */
+export const setDecisionNote = async (
+  photoId: number,
+  criterion: Criterion,
+  note?: string,
+): Promise<void> => {
+  const body: DecisionNoteRequest = note === undefined ? { criterion } : { criterion, note };
+  const res = await fetch(`/api/photos/${photoId}/decision-note`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
+};
 
 export const previewUrl = (photoId: number) => `/media/preview/${photoId}`;
 /** A thumbnail of a picture still on the card, by scan and item index. */

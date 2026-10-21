@@ -10,11 +10,14 @@ export type Action =
   | { kind: "compare" }
   | { kind: "back" }
   | { kind: "filter"; outcome: Outcome }
+  | { kind: "accept"; scope: "one" | "moment" }
   | { kind: "help" };
 
 export interface Binding {
-  /** `KeyboardEvent.key` values (letters are matched case-insensitively). */
+  /** `KeyboardEvent.key` values (letters are matched case-insensitively unless `exactCase`). */
   keys: readonly string[];
+  /** The key is told apart from its other case: `y` and `Y` are different bindings. */
+  exactCase?: boolean;
   /** What the `?` overlay shows. */
   label: string;
   description: string;
@@ -52,6 +55,20 @@ export const BINDINGS: readonly Binding[] = [
       action: { kind: "filter", outcome },
     }),
   ),
+  {
+    keys: ["y"],
+    exactCase: true,
+    label: "Y",
+    description: "Accept the helper's suggestion",
+    action: { kind: "accept", scope: "one" },
+  },
+  {
+    keys: ["Y"],
+    exactCase: true,
+    label: "Shift+Y",
+    description: "Accept every suggestion in this moment",
+    action: { kind: "accept", scope: "moment" },
+  },
   { keys: ["?"], label: "?", description: "This list", action: { kind: "help" } },
 ];
 
@@ -64,8 +81,10 @@ export interface KeyLike {
 
 export function resolveKey(e: KeyLike): Action | null {
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
+  const exact = BINDINGS.find((b) => b.exactCase && b.keys.includes(e.key));
+  if (exact) return exact.action;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  return BINDINGS.find((b) => b.keys.includes(key))?.action ?? null;
+  return BINDINGS.find((b) => !b.exactCase && b.keys.includes(key))?.action ?? null;
 }
 
 /** Keys typed into a field, or Enter/Space on a focused button, are not shortcuts. */

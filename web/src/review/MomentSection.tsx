@@ -4,7 +4,8 @@ import { thumbUrl } from "../api/client";
 import { OUTCOME_LABEL, FILTER_ORDER, aspectOf, momentTitle, plural } from "./model";
 import type { PhotoMap, ViewMoment } from "./model";
 import { JustifiedRows } from "./JustifiedRow";
-import { PhotoTile } from "./PhotoTile";
+import { PhotoTile, type NoteHandler } from "./PhotoTile";
+import { YourCallPair } from "./YourCallPair";
 
 const LARGE_HEIGHT = 200;
 const STRIP_HEIGHT = 72;
@@ -17,6 +18,7 @@ interface Props {
   withDay: boolean;
   onSelect: (id: number) => void;
   onOpen: (id: number) => void;
+  onNote: NoteHandler;
 }
 
 function summary(moment: ViewMoment): string {
@@ -36,6 +38,7 @@ export const MomentSection = memo(function MomentSection({
   withDay,
   onSelect,
   onOpen,
+  onNote,
 }: Props) {
   const tops = useMemo(
     () =>
@@ -61,6 +64,17 @@ export const MomentSection = memo(function MomentSection({
           {summary(moment) && ` → ${summary(moment)}`}
         </span>
       </header>
+      {moment.pairs.map((pair) => (
+        <YourCallPair
+          key={pair.id}
+          pair={pair}
+          photos={photos}
+          focusId={focusId}
+          onSelect={onSelect}
+          onOpen={onOpen}
+          onNote={onNote}
+        />
+      ))}
       <JustifiedRows
         items={tops}
         targetHeight={LARGE_HEIGHT}
@@ -78,6 +92,7 @@ export const MomentSection = memo(function MomentSection({
               burstSize={sizeOf.get(id)}
               onSelect={onSelect}
               onOpen={onOpen}
+              onNote={onNote}
             />
           ) : null;
         }}

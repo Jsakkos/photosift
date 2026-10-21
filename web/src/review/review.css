@@ -243,6 +243,116 @@
   top: 18px;
 }
 
+/* --- helper: summary, status, suggestions ---------------------------------- */
+
+.summary-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+}
+
+.helper-summary {
+  margin: 0;
+  max-width: 62rem;
+  line-height: 1.5;
+}
+
+.helper-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.helper-row:empty {
+  display: none;
+}
+
+.helper-problem {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  color: var(--delete);
+}
+
+.helper-suggested {
+  color: var(--text);
+}
+
+.badge-suggest {
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 0 0 1px currentColor;
+  color: #fff;
+}
+
+.badge-suggest[data-suggested="album"] { color: var(--album); }
+.badge-suggest[data-suggested="library"] { color: var(--library); }
+.badge-suggest[data-suggested="delete"] { color: var(--delete); }
+.badge-suggest[data-suggested="archive"] { color: #cfcfd6; }
+
+.why {
+  line-height: 1.3;
+}
+
+.why s {
+  opacity: 0.65;
+}
+
+.override-why {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding-top: 0.25rem;
+}
+
+.why-chip {
+  padding: 0 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  background: transparent;
+  color: var(--muted);
+}
+
+.why-chip[aria-pressed="true"] {
+  background: #2a2f3a;
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.why-input {
+  flex: 1 1 10rem;
+  min-width: 0;
+  font-size: 0.78rem;
+  padding: 0 0.5rem;
+}
+
+/* --- your-call pair --------------------------------------------------------- */
+
+.your-call {
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.75rem 0.5rem;
+  border: 1px dashed var(--call);
+  border-radius: 8px;
+}
+
+.your-call h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--call);
+}
+
+.tradeoff {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+}
+
 /* --- delete bar ---------------------------------------------------------- */
 
 .delete-bar {
