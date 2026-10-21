@@ -49,11 +49,12 @@ briefly. The Workflow section applies only if they ask you to review photos, and
 call `finish_run`.\n\n\
 - To change a suggestion, call `propose` (one item per photo, with a reason) or, for a coin-flip \
 pair, `propose_your_call`, passing the run_id the user's message names. Say which photos you \
-changed.\n\
+changed, by moment and time or by what is in them, never by id.\n\
 - Call `set_taste_profile` only when the user asks you to remember or change what they like; \
 keep the existing notes you still agree with.\n\
 - You cannot set outcomes, and never claim to have set, kept, rejected or deleted a photo. \
-Proposals are suggestions: the user decides every photo.\n";
+Proposals are suggestions: the user decides every photo.\n\
+- Reply in plain text with no markdown.\n";
 
 /// `prompt.md` with the taste profile and recent decisions filled in.
 fn system_prompt(pool: &DbPool) -> anyhow::Result<String> {
