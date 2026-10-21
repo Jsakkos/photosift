@@ -4,7 +4,7 @@ A local-first photo pipeline for Windows. Plug in an SD card (or point at a fold
 
 PhotoSift is a small Rust server on `127.0.0.1` plus a React UI you open in a normal browser tab. Nothing leaves your machine.
 
-**Status: Plan 1 of 4 (foundation).** Ingest, enrichment, review and the Lightroom handoff are built. The Claude helper and MCP endpoint, albums and Immich publishing, and people recognition are planned but not built yet.
+**Status: Plans 1 and 2 of 4.** Ingest, enrichment, review, the Lightroom handoff, the Claude helper, the MCP endpoint and an evaluation harness are built. Albums and Immich publishing, and people recognition, are planned but not built yet.
 
 ## What it does today
 
@@ -12,6 +12,8 @@ PhotoSift is a small Rust server on `127.0.0.1` plus a React UI you open in a no
 - **Enrich.** In the background, on your GPU when available (CPU otherwise): embedded-preview rendering, perceptual hash, face detection and identity embeddings (YuNet + SFace), sharpness and exposure, near-duplicate bursts, and moments. These annotate the review screen; they never hide or decide anything.
 - **Review.** A shoot opens as a summary and highlights, then moments of justified rows (every photo whole, at its own aspect ratio). Set one outcome per photo — album, library, archive or delete? — and tag bloopers. Loupe and burst compare views. Every action saves immediately.
 - **Hand off.** Outcomes become star ratings, a red label for delete, and a `PhotoSift|Blooper` keyword in XMP sidecars, merged into any existing sidecar without touching other fields. Deletes go to the Recycle Bin, only after you approve the batch.
+
+- **Helper.** Optionally, Claude looks at a shoot's moments and proposes an outcome and a short reason for every photo, flags coin-flip pairs for you to decide, and answers questions in a chat panel. It runs the official `claude` CLI under your own login (set `helper_transport = "off"` in `settings.toml` to disable it), sees only downsized previews, and **only proposes**: you accept or override each photo, and nothing it does changes a file or a rating. It learns from your overrides through an editable taste profile. The same tools are exposed at `http://127.0.0.1:<port>/mcp`. Runs draw on your Claude plan's usage limits; a ~370-photo shoot is about $0.6 estimated. `photosift-eval` scores picks against past shoots you exported; see `tests/eval/README.md`.
 
 Keyboard: arrows move between photos and moments, `A` album, `L` library, `R` archive, `X` delete?, `U` unreviewed, `B` blooper, `Enter` loupe, `C` compare, `1`-`5` filters, `?` shows the full map.
 
