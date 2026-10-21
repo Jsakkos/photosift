@@ -214,7 +214,7 @@ export function acceptable(
     const photo = photos[String(id)];
     const proposal = photo?.proposal;
     if (photo && proposal && photo.outcome === "unreviewed") {
-      out.push({ photoId: id, outcome: proposal.outcome, blooper: proposal.blooper });
+      out.push({ photoId: id, outcome: proposal.outcome, blooper: proposal.blooper || photo.blooper });
     }
   }
   return out;

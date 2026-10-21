@@ -205,6 +205,12 @@ describe("acceptable", () => {
     ]);
   });
 
+  it("keeps a blooper the user set on a photo the proposal does not call one", () => {
+    const marked = { ...map, "5": { ...photo(5, "unreviewed", proposing("archive")), blooper: true } };
+    const found = acceptable(buildView(rev, marked, null), marked, { photoId: 5 });
+    expect(found).toEqual([{ photoId: 5, outcome: "archive", blooper: true }]);
+  });
+
   it("limits itself to a moment or a photo", () => {
     expect(acceptable(view, map, { momentIdx: 1 }).map((a) => a.photoId)).toEqual([4, 5]);
     expect(acceptable(view, map, { photoId: 1 }).map((a) => a.photoId)).toEqual([1]);
