@@ -71,8 +71,9 @@ pub fn record_decision(pool: &DbPool, photo_id: i64, chosen: Outcome) -> anyhow:
     })
 }
 
-/// Sets why the user decided as they did, on the photo's latest decision.
-/// `Ok(false)` when the photo has no decision.
+/// Sets why the user decided as they did, on the decision against the photo's
+/// current proposal. `Ok(false)` when there is none (no proposal, or the user
+/// has not decided on the current one yet).
 pub fn set_criterion(
     pool: &DbPool,
     photo_id: i64,
@@ -84,9 +85,8 @@ pub fn set_criterion(
     }
     let n = pool.with(|c| {
         c.execute(
-            "UPDATE decisions SET criterion = ?2, note = ?3 WHERE rowid = \
-             (SELECT rowid FROM decisions WHERE photo_id = ?1 \
-              ORDER BY decided_at DESC, rowid DESC LIMIT 1)",
+            "UPDATE decisions SET criterion = ?2, note = ?3 WHERE photo_id = ?1 \
+             AND run_id = (SELECT run_id FROM proposals WHERE photo_id = ?1)",
             params![photo_id, criterion, note],
         )
     })?;

@@ -10,7 +10,9 @@ use serde_json::{json, Value};
 use crate::{
     api::AppState,
     db::{
-        helper::{self, NewProposal, RunKind, RunRow, RunStatus, YourCallError, TASTE_MAX},
+        helper::{
+            self, NewProposal, NotRunning, RunKind, RunRow, RunStatus, YourCallError, TASTE_MAX,
+        },
         photos::{self, FaceRow, PhotoRow},
         review,
     },
@@ -648,6 +650,16 @@ fn photo_problem(state: &AppState, run: &RunRow, id: i64) -> Result<Option<Strin
     })
 }
 
+/// A run that stopped running between the first check and the write (the
+/// runner failed it, or a restart interrupted it) is the model's error to
+/// read, not an internal one.
+fn write_failed(e: anyhow::Error) -> ToolResult {
+    match e.downcast_ref::<NotRunning>() {
+        Some(nr) => ToolResult::error(nr.to_string()),
+        None => internal(format!("{e:#}")),
+    }
+}
+
 fn running(state: &AppState, run_id: i64) -> Result<RunRow, ToolResult> {
     helper::active_run(&state.db, run_id).map_err(|e| ToolResult::error(e.to_string()))
 }
@@ -764,7 +776,7 @@ fn propose(state: &AppState, args: Value) -> ToolResult {
         ));
     }
     if let Err(e) = helper::upsert_proposals(&state.db, run.id, &valid) {
-        return internal(format!("{e:#}"));
+        return write_failed(e);
     }
     state.events.send(ServerEvent::ProposalsChanged {
         shoot_id: run.shoot_id,
@@ -823,7 +835,9 @@ fn propose_your_call(state: &AppState, args: Value) -> ToolResult {
                 a.photo_a, a.photo_b
             ))
         }
-        Err(e @ YourCallError::Duplicate(..)) => ToolResult::error(e.to_string()),
+        Err(e @ (YourCallError::Duplicate(..) | YourCallError::NotRunning(_))) => {
+            ToolResult::error(e.to_string())
+        }
         Err(YourCallError::Other(e)) => internal(format!("{e:#}")),
     }
 }
@@ -848,7 +862,7 @@ fn finish_run(state: &AppState, args: Value) -> ToolResult {
         Err(e) => return ToolResult::error(e),
     };
     if let Err(e) = helper::complete_run(&state.db, run.id, &summary) {
-        return internal(format!("{e:#}"));
+        return write_failed(e);
     }
     status_event(state, &run, RunStatus::Done);
     ToolResult::text(format!("run {} finished", run.id))

@@ -105,7 +105,33 @@ fn run_row(r: &Row) -> rusqlite::Result<RunRow> {
     })
 }
 
-/// What `claude -p` reported for a run.
+/// A helper write to a run that is not `running`: finished, failed,
+/// interrupted by a restart, or never started.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("run {run_id} is not running (it is {status})")]
+pub struct NotRunning {
+    pub run_id: i64,
+    pub status: String,
+}
+
+/// Fails unless the run is `running`. Called on the transaction the caller
+/// writes with, so a run the runner has just failed cannot still write.
+fn ensure_running(c: &rusqlite::Connection, run_id: i64) -> anyhow::Result<()> {
+    let status: Option<String> = c
+        .query_row(
+            "SELECT status FROM helper_runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match status {
+        Some(s) if s == RunStatus::Running.as_str() => Ok(()),
+        Some(status) => Err(NotRunning { run_id, status }.into()),
+        None => bail!("run {run_id} does not exist"),
+    }
+}
+
+/// What `claude -p` reported for a run. `input_tokens` includes cache writes.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunUsage {
     pub cost_usd: f64,
@@ -219,15 +245,142 @@ pub fn finish_run(pool: &DbPool, run_id: i64, usage: &RunUsage) -> anyhow::Resul
     Ok(())
 }
 
-/// The helper's `finish_run` tool: the summary, and status `done`.
+/// The helper's `finish_run` tool: the summary, and status `done`. Only a
+/// `running` run can finish; check and write are one statement, so a run the
+/// runner has just failed stays failed.
 pub fn complete_run(pool: &DbPool, run_id: i64, summary: &str) -> anyhow::Result<()> {
-    pool.with(|c| {
+    let now = now();
+    let n = pool.with(|c| {
         c.execute(
-            "UPDATE helper_runs SET summary = ?2 WHERE id = ?1",
-            params![run_id, summary],
+            "UPDATE helper_runs SET summary = ?2, status = 'done', error = NULL, finished_at = ?3 \
+             WHERE id = ?1 AND status = 'running'",
+            params![run_id, summary, now],
         )
     })?;
-    set_run_status(pool, run_id, RunStatus::Done, None)
+    if n == 0 {
+        let status = get_run(pool, run_id)?
+            .ok_or_else(|| anyhow!("run {run_id} does not exist"))?
+            .status;
+        return Err(NotRunning { run_id, status }.into());
+    }
+    Ok(())
+}
+
+/// `queued` -> `running`. False when the run is no longer queued.
+pub fn start_queued_run(pool: &DbPool, run_id: i64) -> anyhow::Result<bool> {
+    let now = now();
+    let n = pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET status = 'running', started_at = ?2 \
+             WHERE id = ?1 AND status = 'queued'",
+            params![run_id, now],
+        )
+    })?;
+    Ok(n > 0)
+}
+
+/// Moves a `queued` or `running` run to the final `status`. False when it had
+/// already ended (e.g. `finish_run` made it `done`); that run is left alone.
+pub fn end_open_run(
+    pool: &DbPool,
+    run_id: i64,
+    status: RunStatus,
+    error: Option<&str>,
+) -> anyhow::Result<bool> {
+    if !status.is_final() {
+        bail!("{} is not a final status", status.as_str());
+    }
+    let now = now();
+    let n = pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET status = ?2, error = ?3, finished_at = ?4 \
+             WHERE id = ?1 AND status IN ('queued', 'running')",
+            params![run_id, status.as_str(), error, now],
+        )
+    })?;
+    Ok(n > 0)
+}
+
+/// Marks every `queued` or `running` run `interrupted` and returns them as
+/// they were. Run at startup: no `claude` from before a restart may write.
+pub fn interrupt_open_runs(pool: &DbPool) -> anyhow::Result<Vec<RunRow>> {
+    let now = now();
+    pool.with(|c| {
+        let tx = c.unchecked_transaction()?;
+        let rows = {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {RUN_COLUMNS} FROM helper_runs WHERE status IN ('queued', 'running') \
+                 ORDER BY id"
+            ))?;
+            let rows = stmt
+                .query_map([], run_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        tx.execute(
+            "UPDATE helper_runs SET status = 'interrupted', \
+             error = 'PhotoSift restarted before the run finished', finished_at = ?1 \
+             WHERE status IN ('queued', 'running')",
+            [&now],
+        )?;
+        tx.commit()?;
+        Ok(rows)
+    })
+}
+
+/// The shoot's newest `queued` or `running` run.
+pub fn open_run(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<RunRow>> {
+    pool.with(|c| {
+        c.query_row(
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM helper_runs \
+                 WHERE shoot_id = ?1 AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1"
+            ),
+            [shoot_id],
+            run_row,
+        )
+        .optional()
+    })
+}
+
+/// Live, unreviewed photos without a current proposal: none at all, or one
+/// from a run that is not `done` or finished before the photo was enriched.
+const UNPROPOSED: &str = "SELECT p.id FROM photos p \
+     WHERE p.shoot_id = ?1 AND p.trashed_at IS NULL AND p.outcome = 'unreviewed' \
+     AND NOT EXISTS (SELECT 1 FROM proposals pr JOIN helper_runs r ON r.id = pr.run_id \
+        WHERE pr.photo_id = p.id AND r.status = 'done' AND r.finished_at >= p.enriched_at) \
+     ORDER BY p.id";
+
+fn unproposed(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<i64>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(UNPROPOSED)?;
+        let ids = stmt.query_map([shoot_id], |r| r.get(0))?.collect();
+        ids
+    })
+}
+
+/// False when every live, unreviewed photo already has a proposal from a
+/// `done` run newer than its enrichment, so an automatic run has nothing to do.
+pub fn shoot_needs_run(pool: &DbPool, shoot_id: i64) -> anyhow::Result<bool> {
+    Ok(!unproposed(pool, shoot_id)?.is_empty())
+}
+
+/// The photos a follow-up run should focus on: empty while no photo of the
+/// shoot has a proposal (the run covers the whole shoot), else the live,
+/// unreviewed photos still without a current one.
+pub fn new_photo_ids(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<i64>> {
+    let any: bool = pool.with(|c| {
+        c.query_row(
+            "SELECT EXISTS (SELECT 1 FROM proposals pr JOIN photos p ON p.id = pr.photo_id \
+             WHERE p.shoot_id = ?1)",
+            [shoot_id],
+            |r| r.get(0),
+        )
+    })?;
+    if !any {
+        return Ok(Vec::new());
+    }
+    unproposed(pool, shoot_id)
 }
 
 pub fn get_run(pool: &DbPool, run_id: i64) -> anyhow::Result<Option<RunRow>> {
@@ -265,12 +418,13 @@ pub fn latest_run(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<RunRow>
     })
 }
 
-/// Writes all proposals or none. Validation is the caller's; the schema still
+/// Writes all proposals or none, and only while the run is `running`
+/// (`NotRunning` otherwise). Validation is the caller's; the schema still
 /// refuses an `unreviewed` outcome.
 pub fn upsert_proposals(pool: &DbPool, run_id: i64, items: &[NewProposal]) -> anyhow::Result<()> {
     let now = now();
-    pool.with(|c| {
-        let tx = c.unchecked_transaction()?;
+    pool.with_tx(|tx| {
+        ensure_running(tx, run_id)?;
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO proposals (photo_id, run_id, outcome, blooper, reason, created_at) \
@@ -290,7 +444,7 @@ pub fn upsert_proposals(pool: &DbPool, run_id: i64, items: &[NewProposal]) -> an
                 ])?;
             }
         }
-        tx.commit()
+        Ok(())
     })
 }
 
@@ -299,12 +453,14 @@ pub enum YourCallError {
     #[error("photos {0} and {1} already form a your-call pair in this run")]
     Duplicate(i64, i64),
     #[error(transparent)]
+    NotRunning(NotRunning),
+    #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
 
 /// Stores the pair with the lower id first, so `(b, a)` collides with `(a, b)`.
 /// A pair from an earlier run is taken over by this one; the same run naming
-/// it twice is refused.
+/// it twice is refused. Only a `running` run may add one.
 pub fn add_your_call(
     pool: &DbPool,
     run_id: i64,
@@ -313,8 +469,8 @@ pub fn add_your_call(
     tradeoff: &str,
 ) -> Result<i64, YourCallError> {
     let (lo, hi) = (a.min(b), a.max(b));
-    pool.with(|c| {
-        let tx = c.unchecked_transaction()?;
+    let stored = pool.with_tx(|tx| {
+        ensure_running(tx, run_id)?;
         let shoot: i64 = tx.query_row(
             "SELECT shoot_id FROM helper_runs WHERE id = ?1",
             [run_id],
@@ -331,25 +487,29 @@ pub fn add_your_call(
             Some((_, run)) if run == run_id => return Ok(None),
             Some((id, _)) => {
                 tx.execute(
-                    "UPDATE your_call_pairs SET run_id = ?2, shoot_id = ?3, tradeoff = ?4 \
-                     WHERE id = ?1",
+                    "UPDATE your_call_pairs SET run_id = ?2, shoot_id = ?3, tradeoff = ?4                      WHERE id = ?1",
                     params![id, run_id, shoot, tradeoff],
                 )?;
                 id
             }
             None => {
                 tx.execute(
-                    "INSERT INTO your_call_pairs (run_id, shoot_id, photo_a, photo_b, tradeoff) \
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO your_call_pairs (run_id, shoot_id, photo_a, photo_b, tradeoff)                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![run_id, shoot, lo, hi, tradeoff],
                 )?;
                 tx.last_insert_rowid()
             }
         };
-        tx.commit()?;
         Ok(Some(id))
-    })?
-    .ok_or(YourCallError::Duplicate(lo, hi))
+    });
+    match stored {
+        Ok(Some(id)) => Ok(id),
+        Ok(None) => Err(YourCallError::Duplicate(lo, hi)),
+        Err(e) => Err(match e.downcast::<NotRunning>() {
+            Ok(nr) => YourCallError::NotRunning(nr),
+            Err(e) => YourCallError::Other(e),
+        }),
+    }
 }
 
 /// Empty until one has been written.

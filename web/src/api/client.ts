@@ -2,6 +2,7 @@ import type {
   CardScan,
   CardScanSummary,
   ClientSettings,
+  HelperRunStarted,
   ImportRequest,
   ImportStarted,
   JobStateReply,
@@ -120,6 +121,10 @@ export const setOutcome = (photoId: number, outcome: Outcome, blooper?: boolean)
 /** Trashes only `photoIds`, the photos the confirm dialog listed. */
 export const trashDeletes = (shootId: number, photoIds: number[]) =>
   request<TrashReport>("POST", `/api/shoots/${shootId}/trash`, { photo_ids: photoIds });
+
+/** Runs the helper on the shoot now: 409 while one is queued or running, 503 when unavailable. */
+export const runHelper = (shootId: number) =>
+  request<HelperRunStarted>("POST", `/api/shoots/${shootId}/helper/run`);
 
 export const previewUrl = (photoId: number) => `/media/preview/${photoId}`;
 /** A thumbnail of a picture still on the card, by scan and item index. */

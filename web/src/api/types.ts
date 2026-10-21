@@ -245,10 +245,28 @@ export interface ClientSettings {
 
 export type AiBackend = "cuda" | "cpu" | "unavailable";
 
+/** `helper_transport` in settings.toml (`cli`, `cli-api-key` or `off`). */
+export type HelperTransport = string;
+
+export interface HelperStatusInfo {
+  available: boolean;
+  /** Why the helper cannot run, or that the first check is still going. */
+  reason: string | null;
+  transport: HelperTransport;
+  /** Runs waiting or running. */
+  queue: number;
+}
+
 export interface ServerStatus {
   ai_backend: AiBackend;
   embeddings: boolean;
   queue: number;
+  helper: HelperStatusInfo;
+}
+
+/** `POST /api/shoots/{id}/helper/run` (202). */
+export interface HelperRunStarted {
+  run_id: number;
 }
 
 export interface EventSummary {

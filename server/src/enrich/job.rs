@@ -97,19 +97,30 @@ pub struct EnrichWorker {
     _shutdown: Arc<ShutdownOnDrop>,
 }
 
+/// Called with a shoot's id once all its photos are enriched and grouped.
+pub type AfterEnriched = Box<dyn Fn(i64) + Send + Sync>;
+
 struct Ctx {
     db: DbPool,
     events: EventHub,
     cache_root: PathBuf,
     models: Option<Models>,
     settings: Settings,
+    after_enriched: AfterEnriched,
 }
 
 impl EnrichWorker {
     /// Loads the models from `<data_root>/models` (their absence is not an
     /// error: photos still get quality signals), starts the thread, and queues
-    /// any shoot left unenriched by an earlier run.
-    pub fn start(db: DbPool, events: EventHub, data_root: &Path, settings: Settings) -> Self {
+    /// any shoot left unenriched by an earlier run. `after_enriched` follows
+    /// every `EnrichDone` of a shoot that was enriched (the helper's queue).
+    pub fn start(
+        db: DbPool,
+        events: EventHub,
+        data_root: &Path,
+        settings: Settings,
+        after_enriched: AfterEnriched,
+    ) -> Self {
         let models = load_models(&data_root.join("models"));
         let stamp = models.as_ref().map(Models::stamp);
         let shared = Arc::new(Shared {
@@ -124,6 +135,7 @@ impl EnrichWorker {
             cache_root: data_root.join("cache"),
             models,
             settings,
+            after_enriched,
         };
         let thread_shared = Arc::clone(&shared);
         let spawned = std::thread::Builder::new()
@@ -273,6 +285,7 @@ fn run_shoot(ctx: &Ctx, shoot_id: i64) {
     });
     after_shoot_enriched(ctx, shoot_id);
     ctx.events.send(ServerEvent::EnrichDone { shoot_id });
+    (ctx.after_enriched)(shoot_id);
 }
 
 /// Groups the shoot's photos into moments and bursts once every photo has its

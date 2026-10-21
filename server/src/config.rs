@@ -15,6 +15,18 @@ pub struct Settings {
     pub moment_gap_seconds: i64,
     pub burst_phash_max: u32,
     pub burst_window_seconds: i64,
+    /// Gates only the automatic run after enrichment; the run button and the
+    /// eval harness still work when it is off.
+    pub helper_enabled: bool,
+    /// `"cli"` (the user's own `claude` login), `"cli-api-key"` (the same CLI
+    /// with `ANTHROPIC_API_KEY` from PhotoSift's environment) or `"off"`.
+    pub helper_transport: String,
+    pub helper_model: String,
+    /// Passed as `--max-turns`; its semantics are untested on the CLI, so the
+    /// budget below is the cap that matters.
+    pub helper_max_turns: u32,
+    pub helper_max_budget_usd: f64,
+    pub helper_frames_per_burst: u32,
 }
 
 impl Settings {
@@ -35,6 +47,12 @@ impl Settings {
             moment_gap_seconds: 90,
             burst_phash_max: 12,
             burst_window_seconds: 10,
+            helper_enabled: true,
+            helper_transport: "cli".into(),
+            helper_model: "sonnet".into(),
+            helper_max_turns: 120,
+            helper_max_budget_usd: 3.0,
+            helper_frames_per_burst: 3,
         }
     }
 }
@@ -71,6 +89,23 @@ pub fn web_dist() -> Option<PathBuf> {
         _ => std::env::current_exe().ok()?.parent()?.join("web"),
     };
     dir.is_dir().then_some(dir)
+}
+
+/// The `claude` CLI: `PHOTOSIFT_CLAUDE_BIN` (empty = unset), else the first
+/// `claude.exe`, then `claude.cmd`, on `PATH`. The path is not checked here;
+/// the helper reports a missing file as unavailable.
+pub fn claude_bin() -> Option<PathBuf> {
+    match std::env::var_os("PHOTOSIFT_CLAUDE_BIN") {
+        Some(p) if !p.is_empty() => Some(PathBuf::from(p)),
+        _ => {
+            let path = std::env::var_os("PATH")?;
+            ["claude.exe", "claude.cmd"].iter().find_map(|name| {
+                std::env::split_paths(&path)
+                    .map(|dir| dir.join(name))
+                    .find(|p| p.is_file())
+            })
+        }
+    }
 }
 
 /// Loads `<root>/settings.toml`, writing defaults first if it is missing.

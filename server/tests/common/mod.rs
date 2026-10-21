@@ -69,12 +69,57 @@ pub async fn respawn_server(old: TestServer) -> TestServer {
     serve(old.data_root, None).await
 }
 
+/// The helper's `claude` and extra child environment for one server.
+pub struct HelperSetup {
+    pub claude_bin: PathBuf,
+    pub env: Vec<(String, String)>,
+}
+
+/// Like `spawn_server_with_library`, with `edit` applied to the settings and
+/// the helper running `setup.claude_bin` (normally the `fake-claude` binary).
+pub async fn spawn_server_with_helper(
+    library: &Path,
+    edit: impl FnOnce(&mut photosift::config::Settings),
+    setup: HelperSetup,
+) -> TestServer {
+    let data_root = tempfile::tempdir().expect("temp data root");
+    let mut settings = photosift::config::Settings {
+        library_root: library.to_path_buf(),
+        ..Default::default()
+    };
+    edit(&mut settings);
+    std::fs::write(
+        data_root.path().join("settings.toml"),
+        toml::to_string_pretty(&settings).expect("serialize settings"),
+    )
+    .expect("write settings");
+    let overrides = photosift::Overrides {
+        claude_bin: Some(setup.claude_bin),
+        claude_env: setup.env,
+    };
+    serve_with(data_root, None, overrides).await
+}
+
 async fn serve(data_root: TempDir, web_dist: Option<PathBuf>) -> TestServer {
+    // Never the real `claude` on PATH: a test import would start a real run.
+    let overrides = photosift::Overrides {
+        claude_bin: Some(data_root.path().join("no-claude-in-tests.exe")),
+        claude_env: Vec::new(),
+    };
+    serve_with(data_root, web_dist, overrides).await
+}
+
+async fn serve_with(
+    data_root: TempDir,
+    web_dist: Option<PathBuf>,
+    overrides: photosift::Overrides,
+) -> TestServer {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind ephemeral port");
     let addr = listener.local_addr().expect("local addr");
-    let app = photosift::build_app(data_root.path(), web_dist, addr.port()).expect("build app");
+    let app = photosift::build_app_with(data_root.path(), web_dist, addr.port(), overrides)
+        .expect("build app");
     tokio::spawn(async move {
         axum::serve(listener, app).await.expect("serve");
     });

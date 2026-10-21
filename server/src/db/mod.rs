@@ -29,6 +29,19 @@ impl DbPool {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         Ok(f(&conn)?)
     }
+
+    /// Runs `f` in one transaction, committed when it returns `Ok`. Unlike
+    /// `with`, `f` may fail with any error (e.g. a typed domain error).
+    pub fn with_tx<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.unchecked_transaction()?;
+        let value = f(&tx)?;
+        tx.commit()?;
+        Ok(value)
+    }
 }
 
 pub fn open(path: &Path) -> anyhow::Result<DbPool> {

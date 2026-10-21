@@ -94,7 +94,8 @@ async function startServer(): Promise<{ server: TestServer; stop: () => Promise<
   // TOML literal strings (single quotes) keep Windows backslashes verbatim.
   await fs.writeFile(
     path.join(home, "settings.toml"),
-    `library_root = '${libraryRoot}'\nport = ${port}\n`,
+    // The helper is off: an e2e import must never start a real `claude` run.
+    `library_root = '${libraryRoot}'\nport = ${port}\nhelper_transport = 'off'\n`,
   );
 
   let output = "";

@@ -504,3 +504,58 @@ async fn moment_and_overview_show_proposals() {
     );
     assert!(t.contains("(1 of 2 unreviewed)"), "{t}");
 }
+
+#[tokio::test]
+async fn writes_recheck_run_status_in_the_transaction() {
+    use photosift::db::helper::{self, NewProposal, RunStatus, YourCallError};
+    let mut env = Env::new().await;
+    let a = env.add_photo();
+    let b = env.add_photo();
+    let run = env.start_run(env.shoot).await;
+    // The runner failed the run after a tool's first check passed.
+    helper::end_open_run(&env.pool, run, RunStatus::Failed, Some("usage limit")).unwrap();
+
+    let proposal = NewProposal {
+        photo_id: a,
+        outcome: Outcome::Album,
+        blooper: false,
+        reason: "late".into(),
+    };
+    let e = helper::upsert_proposals(&env.pool, run, &[proposal]).unwrap_err();
+    let nr = e.downcast_ref::<helper::NotRunning>().expect("NotRunning");
+    assert_eq!(nr.status, "failed");
+    assert!(matches!(
+        helper::add_your_call(&env.pool, run, a, b, "coin flip"),
+        Err(YourCallError::NotRunning(_))
+    ));
+    let e = helper::complete_run(&env.pool, run, "late summary").unwrap_err();
+    assert!(e.downcast_ref::<helper::NotRunning>().is_some(), "{e:#}");
+    let row = helper::get_run(&env.pool, run).unwrap().unwrap();
+    assert_eq!(row.status, "failed");
+    assert_eq!(row.summary, None);
+    assert_eq!(env.count("proposals"), 0);
+    assert_eq!(env.count("your_call_pairs"), 0);
+}
+
+#[tokio::test]
+async fn decision_note_targets_current_proposal() {
+    let mut env = Env::new().await;
+    let p = env.add_photo();
+    let url = format!("{}/api/photos/{p}/decision-note", env.server.base_url);
+    let run1 = env.start_run(env.shoot).await;
+    env.propose(run1, json!([item(p, "archive", "soft focus")]))
+        .await;
+    env.set_outcome(p, "album").await;
+    // A newer run proposes again; the user has not decided on it yet.
+    let run2 = env.start_run(env.shoot).await;
+    env.propose(run2, json!([item(p, "library", "second look")]))
+        .await;
+    let note = json!({"criterion": "expression"});
+    let resp = env.http.post(&url).json(&note).send().await.unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(
+        env.decision(p),
+        Some(("archive".into(), "album".into(), None)),
+        "the old run's decision is untouched"
+    );
+}

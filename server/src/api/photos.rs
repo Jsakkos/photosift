@@ -98,6 +98,8 @@ pub async fn decision_note(
     if found {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(ApiError::not_found(format!("photo {id} has no decision")))
+        Err(ApiError::not_found(format!(
+            "photo {id} has no decision on its current proposal"
+        )))
     }
 }

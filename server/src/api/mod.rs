@@ -1,4 +1,5 @@
 mod guard;
+mod helper;
 mod import;
 mod media;
 mod photos;
@@ -26,7 +27,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::{
     config::Settings, db::DbPool, drives::CardRegistry, enrich::job::EnrichWorker,
-    events::EventHub, ingest::scan::CardScan,
+    events::EventHub, helper::HelperService, ingest::scan::CardScan,
 };
 
 /// Scans kept for the import step; older ones are dropped, which just makes
@@ -42,6 +43,7 @@ pub struct AppState {
     pub port: u16,
     pub events: EventHub,
     pub enrich: EnrichWorker,
+    pub helper: HelperService,
     pub scans: ScanCache,
     /// Cards the watcher has announced and that are still inserted.
     pub cards: CardRegistry,
@@ -97,6 +99,9 @@ impl ApiError {
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(StatusCode::CONFLICT, message)
     }
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, message)
+    }
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
@@ -124,6 +129,7 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/shoots", get(shoots::list))
         .route("/shoots/{id}/review", get(shoots::review))
         .route("/shoots/{id}/trash", post(trash::trash_shoot))
+        .route("/shoots/{id}/helper/run", post(helper::run))
         .route("/photos/{id}/outcome", post(photos::set_outcome))
         .route("/photos/{id}/decision-note", post(photos::decision_note))
         .fallback(|| async { StatusCode::NOT_FOUND })
@@ -160,6 +166,7 @@ async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
         "ai_backend": s.ai_backend,
         "embeddings": s.embeddings,
         "queue": s.queue,
+        "helper": state.helper.status(),
     }))
 }
 
