@@ -91,7 +91,6 @@ fn answer(ctx: &Ctx, turn: Turn, text: &str) -> Result<(), String> {
     )
     .map_err(|e| format!("{e:#}"))?;
     let result = run(ctx, shoot_id, run_id, text);
-    drop(turn);
     match &result {
         Ok(()) => {
             let _ = helper::end_open_run(&ctx.db, run_id, RunStatus::Done, None);
@@ -101,6 +100,9 @@ fn answer(ctx: &Ctx, turn: Turn, text: &str) -> Result<(), String> {
             plog!("helper", "chat run {run_id} failed: {reason}");
         }
     }
+    // After the status is written: a message sent right after the reply must
+    // find the done session, not start a fresh one.
+    drop(turn);
     result
 }
 
