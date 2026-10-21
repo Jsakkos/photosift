@@ -7,15 +7,16 @@ param(
   [switch]$Crops,
   [switch]$Probe,       # 10 photos, stream-json, saves the system/init event
   [int]$Limit = 0,
-  [double]$MaxBudget = 15,
+  [double]$MaxBudget = 3,
   [int]$MaxTurns = 40
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $root = Join-Path $PSScriptRoot 'out'
-$thumbs = Join-Path $root 'thumbs'; $cropDir = Join-Path $root 'crops'; $cwd = Join-Path $root 'cwd'
+$thumbs = Join-Path $root 'thumbs'; $cropDir = Join-Path $root 'crops'
+$cwd = Join-Path ([IO.Path]::GetTempPath()) 'photosift-helper-cwd'   # outside any repo: no CLAUDE.md / .mcp.json / git-root memory pickup
 foreach ($d in $root, $thumbs, $cropDir, $cwd) { New-Item -ItemType Directory -Force $d | Out-Null }
-Get-ChildItem $cwd -Force | Remove-Item -Recurse -Force   # empty cwd: no CLAUDE.md / .mcp.json pickup
+Get-ChildItem $cwd -Force | Remove-Item -Recurse -Force
 
 function Save-Scaled($src, $dst, $long, $q) {
   $img = [System.Drawing.Image]::FromFile($src)
@@ -53,7 +54,7 @@ foreach ($f in $files) {
   Save-Scaled $f.FullName (Join-Path $thumbs "$id.jpg") 400 80
   $photos += [pscustomobject]@{ id = $id; src = $f.FullName; taken = (Get-Taken $f.FullName) }
 }
-$photos = $photos | Sort-Object taken
+$photos = @($photos | Sort-Object taken)
 $moments = @(); $cur = $null; $prev = $null
 foreach ($p in $photos) {
   if (-not $cur -or ($p.taken - $prev).TotalSeconds -gt 90) { $cur = New-Object System.Collections.ArrayList; $moments += , $cur }
@@ -81,14 +82,16 @@ Return structured output: album_picks (id + one-line reason; pick about one in t
 "@
 
 $verStr = ((& claude --version) -split ' ')[0]; $ver = [version]$verStr
+# Read is deliberately not in --allowedTools: under dontAsk only reads inside the working dirs (cwd + --add-dir out) should be allowed. Unverified on 2.1.240.
 $flags = @('-p', '--model', $Model, '--strict-mcp-config', '--tools', 'Read', '--add-dir', $root,
   '--setting-sources', 'local', '--disable-slash-commands', '--permission-mode', 'dontAsk',
-  '--allowedTools', 'Read', '--system-prompt-file', (Join-Path $root 'system.txt'),
+  '--system-prompt-file', (Join-Path $root 'system.txt'),
   '--max-turns', $MaxTurns, '--max-budget-usd', $MaxBudget, '--session-id', ([guid]::NewGuid().ToString()),
   '--json-schema', ($schema -replace '"', '\"'))   # Windows PowerShell 5.1 drops embedded quotes passed to native exes
 if ($ver -ge [version]'2.1.259') { $flags += @('--permission-prompts', 'none') }   # unknown option before 2.1.259
 $fmt = if ($Probe) { @('--output-format', 'stream-json', '--verbose') } else { @('--output-format', 'json') }
 
+$prevMem = $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY
 $env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1'   # else the user's auto-memory index leaks into the child's context
 function Invoke-Claude($p, $extra) {
   $flags = $script:flags
@@ -125,3 +128,4 @@ $row = [ordered]@{ model = $Model; crops = [bool]$Crops; cli = $verStr; photos =
   num_turns = $turns; duration_ms = $ms; total_cost_usd = $cost; is_error = [bool]$res.is_error; usage = $usage }
 ($row | ConvertTo-Json -Depth 8 -Compress) | Add-Content (Join-Path $root 'runs.jsonl')
 $row | ConvertTo-Json -Depth 8
+$env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = $prevMem
