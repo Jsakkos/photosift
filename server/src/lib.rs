@@ -3,6 +3,7 @@ pub mod config;
 pub mod db;
 pub mod drives;
 pub mod enrich;
+pub mod eval;
 pub mod events;
 pub mod helper;
 pub mod ingest;
@@ -22,13 +23,15 @@ use api::AppState;
 use events::EventHub;
 use helper::transport::{ClaudeCli, CliAuth, Off, Transport};
 
-/// What tests (and only tests) set per server instead of process env.
+/// What tests and the eval harness set per server instead of process env.
 #[derive(Debug, Clone, Default)]
 pub struct Overrides {
     /// Replaces `config::claude_bin()` (`PHOTOSIFT_CLAUDE_BIN`, then `PATH`).
     pub claude_bin: Option<PathBuf>,
     /// Extra environment for every `claude` child.
     pub claude_env: Vec<(String, String)>,
+    /// Sets `Settings::read_only` (the eval harness).
+    pub read_only: bool,
 }
 
 /// Opens the database, starts the enrich worker and assembles shared state.
@@ -43,7 +46,9 @@ pub fn build_state_with(
     port: u16,
     overrides: Overrides,
 ) -> anyhow::Result<AppState> {
-    let settings = Arc::new(config::load(data_root)?);
+    let mut settings = config::load(data_root)?;
+    settings.read_only = overrides.read_only;
+    let settings = Arc::new(settings);
     let db = db::open(&data_root.join("photosift.db"))?;
     // Card thumbnails belong to scans, which live only in memory.
     let _ = std::fs::remove_dir_all(data_root.join("cache").join("scan"));

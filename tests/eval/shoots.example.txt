@@ -1,0 +1,6 @@
+# Copy to tests/eval/shoots.txt (gitignored) and list your own shoot folders.
+# One folder per line; blank lines and lines starting with # are skipped.
+# List only shoots that have an Export\ folder: it is the answer key.
+# Originals may sit at the top of the folder or under RAW\.
+D:\photos\2026\2026-01_Example
+D:\photos\2025\2025-07_Another-Example

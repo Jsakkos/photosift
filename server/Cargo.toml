@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "photosift"
 path = "src/main.rs"
 
+[[bin]]
+name = "photosift-eval"
+path = "src/bin/eval.rs"
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"

@@ -591,7 +591,13 @@ fn set_outcome(state: &AppState, args: Value) -> ToolResult {
         Ok(o) => o,
         Err(e) => return ToolResult::error(format!("{e}")),
     };
-    match outcome::set_and_mirror(&state.db, a.photo_id, outcome, a.blooper) {
+    match outcome::set_and_mirror(
+        &state.db,
+        a.photo_id,
+        outcome,
+        a.blooper,
+        state.settings.read_only,
+    ) {
         Ok((photo, xmp_error)) => {
             if let Err(e) = learning::record_decision(&state.db, photo.id, photo.outcome) {
                 plog!(

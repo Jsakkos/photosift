@@ -267,6 +267,7 @@ async fn cards_endpoint_lists_announced_cards() {
     let no_claude = photosift::Overrides {
         claude_bin: Some(data_root.path().join("no-claude-in-tests.exe")),
         claude_env: Vec::new(),
+        ..Default::default()
     };
     let state = photosift::build_state_with(data_root.path(), port, no_claude).unwrap();
     let app = photosift::api::router(state.clone(), None);

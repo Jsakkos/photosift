@@ -38,12 +38,15 @@ pub fn sidecar_target(photo: &PhotoRow) -> Option<PathBuf> {
 /// Persists the outcome and rewrites the sidecar as one critical section.
 /// Returns the stored row and, if the sidecar could not be written, why (the
 /// database change stands). A photo already in the Recycle Bin is refused so no
-/// sidecar reappears beside a file that left.
+/// sidecar reappears beside a file that left. With `read_only`
+/// (`Settings::read_only`) no sidecar is written and the reason is
+/// `"read-only"`.
 pub fn set_and_mirror(
     db: &DbPool,
     id: i64,
     outcome: Outcome,
     blooper: Option<bool>,
+    read_only: bool,
 ) -> Result<(PhotoRow, Option<String>), ApplyError> {
     let _guard = OUTCOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     match photos::get_photo(db, id)? {
@@ -53,7 +56,7 @@ pub fn set_and_mirror(
     }
     let photo = photos::set_outcome(db, id, outcome, blooper)?;
     let xmp_error = sidecar_target(&photo).and_then(|image| {
-        xmp::apply(&image, &xmp_fields(photo.outcome, photo.blooper))
+        xmp::apply(&image, &xmp_fields(photo.outcome, photo.blooper), read_only)
             .err()
             .map(|e| e.to_string())
     });

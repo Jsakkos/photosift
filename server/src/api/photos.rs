@@ -40,8 +40,9 @@ pub async fn set_outcome(
     Json(body): Json<OutcomeBody>,
 ) -> Result<Json<OutcomeResponse>, ApiError> {
     let db = state.db.clone();
+    let read_only = state.settings.read_only;
     let res = tokio::task::spawn_blocking(move || {
-        let res = outcome::set_and_mirror(&db, id, body.outcome, body.blooper);
+        let res = outcome::set_and_mirror(&db, id, body.outcome, body.blooper, read_only);
         if let Ok((photo, _)) = &res {
             if let Err(e) = learning::record_decision(&db, id, photo.outcome) {
                 plog!(

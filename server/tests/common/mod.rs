@@ -99,6 +99,7 @@ pub async fn spawn_server_with_helper(
     let overrides = photosift::Overrides {
         claude_bin: Some(setup.claude_bin),
         claude_env: setup.env,
+        ..Default::default()
     };
     serve_with(data_root, None, overrides).await
 }
@@ -111,6 +112,7 @@ pub async fn restart_server_with_helper(old: TestServer, setup: HelperSetup) -> 
     let overrides = photosift::Overrides {
         claude_bin: Some(setup.claude_bin),
         claude_env: setup.env,
+        ..Default::default()
     };
     serve_with(old.data_root, None, overrides).await
 }
@@ -120,6 +122,7 @@ async fn serve(data_root: TempDir, web_dist: Option<PathBuf>) -> TestServer {
     let overrides = photosift::Overrides {
         claude_bin: Some(data_root.path().join("no-claude-in-tests.exe")),
         claude_env: Vec::new(),
+        ..Default::default()
     };
     serve_with(data_root, web_dist, overrides).await
 }

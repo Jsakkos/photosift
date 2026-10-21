@@ -27,6 +27,11 @@ pub struct Settings {
     pub helper_max_turns: u32,
     pub helper_max_budget_usd: f64,
     pub helper_frames_per_burst: u32,
+    /// Set only by the eval harness (never read from or written to
+    /// `settings.toml`): no sidecar is written and nothing is sent to the
+    /// Recycle Bin, so a past shoot indexed in place stays untouched.
+    #[serde(skip)]
+    pub read_only: bool,
 }
 
 impl Settings {
@@ -53,6 +58,7 @@ impl Settings {
             helper_max_turns: 120,
             helper_max_budget_usd: 3.0,
             helper_frames_per_burst: 3,
+            read_only: false,
         }
     }
 }

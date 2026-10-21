@@ -47,7 +47,7 @@ fn read(raw: &Path) -> String {
 }
 
 fn set(raw: &Path, o: Outcome, blooper: bool) {
-    xmp::apply(raw, &xmp_fields(o, blooper)).unwrap();
+    xmp::apply(raw, &xmp_fields(o, blooper), false).unwrap();
 }
 
 fn count(haystack: &str, needle: &str) -> usize {
@@ -307,7 +307,7 @@ fn malformed_sidecar_is_an_error_and_untouched() {
     let raw = raw_in(dir.path());
     for junk in ["<x:xmpmeta><rdf:RDF>", "not xml at all", ""] {
         std::fs::write(sidecar(&raw), junk).unwrap();
-        assert!(xmp::apply(&raw, &xmp_fields(Outcome::Album, false)).is_err());
+        assert!(xmp::apply(&raw, &xmp_fields(Outcome::Album, false), false).is_err());
         assert_eq!(read(&raw), junk);
     }
 }
@@ -622,7 +622,7 @@ fn fields_in_a_second_description_are_refused() {
         let doc = format!("{SPLIT_HEAD}{second}{SPLIT_TAIL}");
         std::fs::write(sidecar(&raw), &doc).unwrap();
         for (o, blooper) in [(Outcome::Album, false), (Outcome::Delete, true)] {
-            let err = xmp::apply(&raw, &xmp_fields(o, blooper)).unwrap_err();
+            let err = xmp::apply(&raw, &xmp_fields(o, blooper), false).unwrap_err();
             assert!(err.to_string().contains("second rdf:Description"), "{err}");
             assert_eq!(read(&raw), doc);
         }
