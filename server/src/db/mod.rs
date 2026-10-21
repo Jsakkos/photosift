@@ -1,3 +1,4 @@
+pub mod migrations;
 pub mod photos;
 pub mod review;
 
@@ -9,7 +10,7 @@ use std::{
 use anyhow::Context;
 use rusqlite::Connection;
 
-const SCHEMA_V1: &str = include_str!("schema.sql");
+pub const SCHEMA_V1: &str = include_str!("schema.sql");
 
 /// Single shared connection. SQLite serializes writers anyway and this server
 /// is single-user, so a mutex beats a pool's complexity.
@@ -50,6 +51,16 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             "BEGIN;\n{SCHEMA_V1}\nPRAGMA user_version = 1;\nCOMMIT;"
         ))
         .context("applying schema v1")?;
+    }
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    for &(step, sql) in migrations::STEPS.iter().filter(|(n, _)| *n > version) {
+        conn.execute_batch(&format!(
+            "BEGIN;
+{sql}
+PRAGMA user_version = {step};
+COMMIT;"
+        ))
+        .with_context(|| format!("applying migration step {step}"))?;
     }
     Ok(())
 }
