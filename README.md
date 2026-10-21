@@ -15,7 +15,7 @@ PhotoSift is a small Rust server on `127.0.0.1` plus a React UI you open in a no
 
 - **Helper.** Optionally, Claude looks at a shoot's moments and proposes an outcome and a short reason for every photo, flags coin-flip pairs for you to decide, and answers questions in a chat panel. It runs the official `claude` CLI under your own login (set `helper_transport = "off"` in `settings.toml` to disable it), sees only downsized previews, and **only proposes**: you accept or override each photo, and nothing it does changes a file or a rating. It learns from your overrides through an editable taste profile. The same tools are exposed at `http://127.0.0.1:<port>/mcp`. Runs draw on your Claude plan's usage limits; a ~370-photo shoot is about $0.6 estimated. `photosift-eval` scores picks against past shoots you exported; see `tests/eval/README.md`.
 
-Keyboard: arrows move between photos and moments, `A` album, `L` library, `R` archive, `X` delete?, `U` unreviewed, `B` blooper, `Enter` loupe, `C` compare, `1`-`5` filters, `?` shows the full map.
+Keyboard: arrows move between photos and moments, `A` album, `L` library, `R` archive, `X` delete?, `U` unreviewed, `B` blooper, `Enter` loupe, `C` compare, `1`-`5` filters, `Y` accept the helper's suggestion, `Shift+Y` accept every suggestion in the moment, `H` helper chat, `?` shows the full map.
 
 ## Build and run
 

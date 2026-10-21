@@ -6,7 +6,7 @@ PhotoSift is a local-first photo pipeline: a Rust server on `127.0.0.1` plus a R
 
 **Status: Plans 1 (foundation) and 2 (Claude helper, MCP endpoint, taste profile, evaluation harness) are built; the helper's quality bar is pending the user.** Plans 3-4 (albums + Immich, people) are not built yet; nothing in the code references them.
 
-**The helper proposes, never decides.** Claude (via the user's own `claude` CLI login) proposes an outcome and a short reason per photo; proposals are suggestions the user accepts or overrides. No MCP tool or helper path sets an outcome or deletes anything on its own authority, and nothing the helper does touches a photo's file or XMP.
+**The helper proposes, never decides.** Claude (via the user's own `claude` CLI login) proposes an outcome and a short reason per photo; proposals are suggestions the user accepts or overrides. A helper run the app spawns cannot set an outcome: besides its CLI deny list, its MCP URL carries a per-process token and the server refuses `set_outcome` and `start_run` to it (and `set_taste_profile` to background and eval runs). Nothing the helper does touches a photo's file or XMP. External MCP clients (plain `/mcp`, e.g. Claude Desktop) may call `set_outcome`, like the HTTP API; nothing deletes without the in-app approval.
 
 Docs:
 - `docs/superpowers/specs/2026-10-19-photosift-overhaul-design.md` — design of record (intent, constraints, architecture).
@@ -46,7 +46,7 @@ When the design doc and the code disagree, the code wins — flag the divergence
 - `enrich/` — `faces` (YuNet with tiling), `identity` (SFace), `quality` (sharpness, exposure), `moments` (moments + bursts + signal score, pure), `job` (background worker)
 - `outcome.rs` — `Outcome` enum + XMP field mapping; `xmp.rs` merge-write sidecar; `trash.rs` approved delete
 - `drives.rs` — removable-drive watcher (injectable lister); `events.rs` — `ServerEvent` + WebSocket broadcast hub; `logging.rs` — `plog!` timestamped log macro
-- `helper/` — helper runs and chat turns: `prompt.md` (system prompt; `PROMPT_VERSION` is a hash of it, so edits are tracked per run), `prompt.rs`, `transport.rs` (spawns the `claude` CLI with isolation flags), `chat.rs`, taste profile and learning from past decisions
+- `helper/` — helper runs and chat turns: `prompt.md` (system prompt; `PROMPT_VERSION` is a hash of it, so edits are tracked per run), `prompt.rs`, `transport.rs` (spawns the `claude` CLI with isolation flags, a run timeout and cancel), `kill_tree.rs` (Windows Job Object: killing a child, or PhotoSift exiting, kills its whole process tree, e.g. the npm `.cmd` shim's node), `chat.rs`, taste profile and learning from past decisions
 - `mcp/` — the `/mcp` endpoint (JSON-RPC over POST) and its tool definitions
 - `eval/` — evaluation harness library: scores picks against a shoot's `Export\` folder
 - `bin/make-synthetic-card.rs` — writes a fake card of synthetic JPEGs for tests; `bin/fake-claude.rs` — scripted stand-in for the `claude` CLI (tests, e2e); `bin/eval.rs` — `photosift-eval`
@@ -78,18 +78,18 @@ Routes in `server/src/api/mod.rs`. JSON bodies, errors are `{"error": "..."}`. M
 | `POST /api/scan`, `GET /api/scan/{id}`, `POST /api/scan/{id}/events`, `POST /api/slug` | scan a card/folder, re-group into events, slugify a name |
 | `POST /api/import`, `GET /api/import/current`, `GET /api/import/{job}` | start / observe the single import job |
 | `GET /api/shoots`, `GET /api/shoots/{id}/review`, `POST /api/shoots/{id}/trash` | shoot list, review data, approved delete (body `{photo_ids}`: only those pending deletes are trashed) |
-| `POST /api/shoots/{id}/helper/run` | start a helper run for a shoot |
+| `POST /api/shoots/{id}/helper/run` | start a helper run for a shoot (202 `{run_id}`; 409 while one is open; 503 when unavailable) |
+| `POST /api/shoots/{id}/helper/cancel` | stop the shoot's helper run: kills the child's process tree and fails the run "stopped by you", or drops a waiting run (204; 404 when there is none) |
 | `GET` / `POST /api/shoots/{id}/chat` | chat history / send a chat turn about the shoot |
 | `GET` / `PUT /api/taste` | the taste profile the helper is told |
-| `GET /api/taste/decisions` | recent accepts and overrides of proposals |
+| `GET /api/taste/decisions` | recent overrides of proposals (decisions that differ from the proposal), newest first; `?limit=` (50, at most 200) |
 | `POST /api/photos/{id}/decision-note` | attach a note to the user's decision |
-| `POST /mcp` | MCP endpoint (JSON-RPC); `GET` is 405 |
 | `POST /api/photos/{id}/outcome` | set outcome (+ blooper) and rewrite the sidecar (409 for a trashed photo) |
 | `GET /media/preview/{id}`, `/media/thumb/{id}`, `/media/scan/{scan}/{idx}` | JPEGs served from the cache |
-| `POST /mcp` | stateless MCP (Streamable HTTP, JSON replies) over the read operations plus `set_outcome`; tool table in `server/src/mcp/tools.rs`; `GET` is 405 |
-| `GET /ws` | `ServerEvent` stream: import/enrichment progress, `card_detected`, `card_scan_failed` |
+| `POST /mcp` | stateless MCP (Streamable HTTP, JSON replies) over the read operations plus `set_outcome`; tool table in `server/src/mcp/tools.rs`; `GET` is 405. `?client=helper&kind=<background\|chat\|eval>&token=<t>` marks the app's own helper child: a wrong token is 403, and its denied tools are refused (`isError`) and left out of `tools/list` |
+| `GET /ws` | `ServerEvent` stream: import/enrichment progress (`import_*`, `enrich_*`), `card_detected` / `card_removed` / `card_scan_failed`, `proposals_changed`, `helper_status` (run queued/running/done/failed/interrupted, with the error), `chat_message`, `taste_changed` |
 
-MCP tools (`mcp/tools.rs`): `list_shoots`, `get_shoot_overview`, `get_moment`, `get_photos`, `get_faces`, `get_taste_profile`, `set_outcome`, `start_run`, `propose`, `propose_your_call`, `finish_run`, `set_taste_profile`. The helper's own child process is given only the propose-side tools.
+MCP tools (`mcp/tools.rs`): `list_shoots`, `get_shoot_overview`, `get_moment`, `get_photos`, `get_faces`, `get_taste_profile`, `set_outcome`, `start_run`, `propose`, `propose_your_call`, `finish_run`, `set_taste_profile`. The helper's own child process is given only the propose-side tools, and the server enforces that (see `/mcp`).
 
 Anything else under `/` serves `web/dist` with an SPA fallback to `index.html`.
 
@@ -108,7 +108,7 @@ Anything else under `/` serves `web/dist` with an SPA fallback to `index.html`.
 
 - Every photo is rendered whole at its own aspect ratio (fixed-height justified rows), never cropped.
 - Every action persists immediately; no save button.
-- Keyboard-first. `web/src/review/keyboard.ts` `BINDINGS` is the single binding source; the `?` overlay renders from it. Keys: arrows navigate moments/photos, `A` album · `L` library · `R` archive · `X` delete? · `U` unreviewed · `B` blooper · `Enter` loupe · `C` compare · `1`-`5` filters · `Esc` back.
+- Keyboard-first. `web/src/review/keyboard.ts` `BINDINGS` is the single binding source; the `?` overlay renders from it. Keys: arrows navigate moments/photos, `A` album · `L` library · `R` archive · `X` delete? · `U` unreviewed · `B` blooper · `Enter` loupe · `C` compare · `1`-`5` filters · `Y` accept the helper's suggestion · `Shift+Y` accept every suggestion in the moment · `H` helper chat · `?` key map · `Esc` back.
 
 ## Data Roots and Environment
 
@@ -122,7 +122,7 @@ Anything else under `/` serves `web/dist` with an SPA fallback to `index.html`.
 | `PHOTOSIFT_MODELS_DIR` | models dir for the golden enrichment test; default `<data root>\models` |
 | `PHOTOSIFT_CLAUDE_BIN` | path to the `claude` executable; default is `claude.exe` / `claude.cmd` on `PATH`. Tests point it at `fake-claude`. |
 | `PHOTOSIFT_EVAL_DIR` | eval harness scratch dir (scratch data root + `results.jsonl`); default `<repo>\.photosift-eval\` (gitignored) |
-| Helper settings | `settings.toml`: `helper_enabled` (true; gates only the automatic run after enrichment), `helper_transport` (`cli`; or `cli-api-key`, `off`), `helper_model` (`sonnet`), `helper_max_turns` (120), `helper_max_budget_usd` (3.0), `helper_frames_per_burst` (3) |
+| Helper settings | `settings.toml`: `helper_enabled` (true; gates only the automatic run after enrichment), `helper_transport` (`cli`; or `cli-api-key`, `off`), `helper_model` (`sonnet`), `helper_max_turns` (120), `helper_max_budget_usd` (3.0), `helper_frames_per_burst` (3), `helper_run_timeout_minutes` (20; wall-clock limit of one run or chat turn, after which its process tree is killed and the run fails) |
 | Library root | `settings.toml` `library_root`; default release `E:\photos\DSLR`, debug `<dev data root>\library` |
 | Port | `settings.toml` `port`; default release `7420`, debug `7421` |
 
@@ -192,6 +192,7 @@ Only summarize what you actually observed. Don't say "works" on the strength of 
 
 - **Host/Origin guard.** `api/guard.rs` rejects any `Host` other than `127.0.0.1:<port>` / `localhost:<port>` (DNS rebinding) and any foreign `Origin` on non-GET and WebSocket requests. Debug builds also trust Vite's `http://localhost:5173`. The Vite proxy therefore **must** set `changeOrigin: true` (it does in `web/vite.config.ts`); a new proxied path needs it too.
 - **CUDA.** `ort` is built with `cuda`. ORT ships `onnxruntime_providers_cuda.dll` / `_shared.dll` beside the exe (copied by `build-release.ps1`), but not cuBLAS/cuDNN: those must be on `PATH`, or bundled with `build-release.ps1 -CudaDllDir <dir>` (the pip `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels are a source). If CUDA init fails the server logs it and falls back to CPU; never fatal. Models absent ⇒ enrichment reports unavailable and the app still runs.
+- **No silent helper spend.** Only an enrichment pass that enriched *new* photos queues the automatic helper run. A start that merely re-detects faces (`photos.faces_model` stale or NULL, e.g. every Plan-1 photo once models load) never does, and a photo whose preview the models cannot read is stamped `<stamp>:no-preview` so it is not re-queued every start. Tests exercise these paths without the ONNX files through `Overrides::fake_faces`.
 - **Dev profile** sets `opt-level = 3` for `ort`, `ort-sys`, `fast_image_resize` and image/JPEG crates; ONNX inference is >1 s/image without it. Don't lower without measuring.
 - **Port 7420 (release) / 7421 (debug)** is the single-instance lock. A second `photosift.exe` on the same port finds the first via `/api/health` and exits. Debug uses its own port and library so it coexists with the logon-started release. Orphaned dev servers hold their port, and Vite pins `5173` (`strictPort`). Kill both before ending a session.
 - **Release exe is a GUI-subsystem build**: no console; output goes to `<data root>\logs\photosift.log`.
