@@ -1,9 +1,10 @@
 //! The Claude helper: it proposes outcomes, the user decides.
 //!
 //! `HelperService` owns one worker thread that runs one `claude -p` at a time.
-//! A run only writes through PhotoSift's MCP tools, and the background deny
-//! list keeps it away from `set_outcome`: nothing it does touches an outcome,
-//! a sidecar or the Recycle Bin.
+//! A run only writes through PhotoSift's MCP tools. Its MCP URL names it as
+//! the app's own child (with a per-process token), and the server refuses
+//! `set_outcome` and `start_run` to such a child whatever its CLI flags say:
+//! nothing it does touches an outcome, a sidecar or the Recycle Bin.
 
 mod chat;
 pub mod learning;
@@ -28,7 +29,7 @@ use crate::db::{
 use crate::events::{EventHub, ServerEvent};
 use crate::plog;
 use stream::{RunEvent, RunResult};
-use transport::{Availability, RunRequest, SessionMode, Transport};
+use transport::{Availability, HelperClient, RunRequest, SessionMode, Transport};
 
 /// Tools a background run may not call: the user decides outcomes and owns
 /// the taste profile, and the app opens the run itself.
@@ -85,7 +86,7 @@ enum Origin {
     Automatic { retry: bool },
     /// The run button or the eval harness: the row exists from the request,
     /// and the run reviews the whole shoot.
-    Explicit(i64),
+    Explicit(i64, HelperClient),
 }
 
 struct Job {
@@ -126,6 +127,8 @@ struct Ctx {
     runs_dir: PathBuf,
     /// The child's cwd: empty and outside any repository.
     work_dir: PathBuf,
+    /// Marks an MCP request as coming from a child this process started.
+    mcp_token: String,
 }
 
 /// Stops the worker thread when the last `HelperService` clone goes away.
@@ -221,6 +224,7 @@ impl HelperService {
             transport,
             runs_dir,
             work_dir,
+            mcp_token: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
         });
         let (thread_shared, thread_ctx) = (Arc::clone(&shared), Arc::clone(&ctx));
         let spawned = std::thread::Builder::new()
@@ -234,6 +238,13 @@ impl HelperService {
             shared,
             ctx,
         }
+    }
+
+    /// Whether `token` is this process's MCP token (see `HelperClient`).
+    pub fn is_own_token(&self, token: &str) -> bool {
+        let own = self.ctx.mcp_token.as_bytes();
+        let t = token.as_bytes();
+        own.len() == t.len() && own.iter().zip(t).fold(0u8, |d, (a, b)| d | (a ^ b)) == 0
     }
 
     pub fn status(&self) -> HelperStatusInfo {
@@ -336,10 +347,15 @@ impl HelperService {
         if helper::open_run(&self.ctx.db, shoot_id)?.is_some() {
             return Err(EnqueueError::Conflict(shoot_id));
         }
+        let client = if kind == RunKind::Eval {
+            HelperClient::Eval
+        } else {
+            HelperClient::Background
+        };
         let run_id = create_queued(&self.ctx, shoot_id, kind)?;
         self.shared.lock().pending.push_back(Job {
             shoot_id,
-            origin: Origin::Explicit(run_id),
+            origin: Origin::Explicit(run_id, client),
         });
         self.shared.wake.notify_one();
         Ok(run_id)
@@ -500,8 +516,8 @@ fn run_job(
         _ => None,
     };
     // `focus`: None reviews the whole shoot, Some(ids) only the new photos.
-    let (run_id, focus) = match job.origin {
-        Origin::Explicit(run_id) => (run_id, None),
+    let (run_id, focus, client) = match job.origin {
+        Origin::Explicit(run_id, client) => (run_id, None, client),
         Origin::Automatic { retry } => {
             // Left in `helper_pending`: the next start tries again.
             if unavailable.is_some() {
@@ -545,7 +561,7 @@ fn run_job(
                 Ok(id)
             });
             match created {
-                Ok(run_id) => (run_id, focus),
+                Ok(run_id) => (run_id, focus, HelperClient::Background),
                 Err(e) => {
                     plog!("helper", "creating a run for shoot {}: {e:#}", job.shoot_id);
                     return;
@@ -581,7 +597,8 @@ fn run_job(
             max_turns: ctx.settings.helper_max_turns,
             max_budget_usd: ctx.settings.helper_max_budget_usd,
             session: SessionMode::New(Uuid::new_v4()),
-            deny_tools: BACKGROUND_DENY.to_vec(),
+            client,
+            mcp_token: ctx.mcp_token.clone(),
             cwd: ctx.work_dir.clone(),
         })
     })();

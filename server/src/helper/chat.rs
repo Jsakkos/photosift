@@ -1,7 +1,7 @@
 //! Chat: the user talks to the same Claude helper about one shoot. A turn is
 //! a `claude -p` of kind `chat` on a thread of its own, resuming the shoot's
 //! session. It may change suggestions and, when asked, the taste profile; it
-//! cannot set outcomes (`CHAT_DENY`). Message text is never logged.
+//! cannot set outcomes (`CHAT_DENY`, also refused by the server). Message text is never logged.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
@@ -9,8 +9,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::stream::RunEvent;
-use super::transport::{RunRequest, SessionMode};
-use super::{describe_error, prompt, Ctx, Shared, CHAT_DENY};
+use super::transport::{HelperClient, RunRequest, SessionMode};
+use super::{describe_error, prompt, Ctx, Shared};
 use crate::db::helper::{self, RunKind, RunStatus};
 use crate::events::ServerEvent;
 use crate::plog;
@@ -131,7 +131,8 @@ fn run(ctx: &Ctx, shoot_id: i64, run_id: i64, text: &str) -> Result<(), String> 
         max_turns: ctx.settings.helper_max_turns,
         max_budget_usd: ctx.settings.helper_max_budget_usd,
         session,
-        deny_tools: CHAT_DENY.to_vec(),
+        client: HelperClient::Chat,
+        mcp_token: ctx.mcp_token.clone(),
         cwd: ctx.work_dir.clone(),
     };
     if !helper::start_queued_run(&ctx.db, run_id).map_err(|e| format!("{e:#}"))? {

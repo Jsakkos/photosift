@@ -585,7 +585,13 @@ async fn argv_is_isolated_and_denies_writes() {
     }
     let mcp: Value = serde_json::from_str(flag(a, "--mcp-config").unwrap()).unwrap();
     let url = mcp["mcpServers"]["photosift"]["url"].as_str().unwrap();
-    assert_eq!(url, format!("{}/mcp", env.server.base_url));
+    assert!(
+        url.starts_with(&format!(
+            "{}/mcp?client=helper&kind=background&token=",
+            env.server.base_url
+        )),
+        "{url}"
+    );
     assert!(flag(a, "--session-id").is_some_and(|s| s.len() == 36));
     assert!(flag(a, "--system-prompt-file").is_some());
     assert!(!a.iter().any(|x| x == "--bare"), "{a:?}");
@@ -1103,6 +1109,144 @@ async fn startup_does_not_sweep_old_shoots() {
         env.run_invocations()
     );
     assert!(env.run_rows().is_empty());
+}
+
+// ---------------------------------------------------------------- MCP guard
+
+/// The `--mcp-config` URL a run was given.
+fn mcp_url_of(args: &[String]) -> String {
+    let mcp: Value = serde_json::from_str(flag(args, "--mcp-config").unwrap()).unwrap();
+    mcp["mcpServers"]["photosift"]["url"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+async fn mcp_call(env: &Env, url: &str, tool: &str, args: Value) -> reqwest::Response {
+    env.http
+        .post(url)
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": tool, "arguments": args}}))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn helper_child_cannot_set_an_outcome_through_its_url() {
+    // A child that ignores --disallowedTools: the server itself refuses it.
+    let env = Env::new(
+        script(json!([
+            {"tool": "set_outcome", "args": {"photo_id": 1, "outcome": "album"}},
+            {"tool": "set_taste_profile", "args": {"text": "likes everything"}},
+            {"tool": "start_run", "args": {"shoot_id": 1}},
+            {"tool": "finish_run", "args": {"run_id": "$RUN", "summary": "Tried."}},
+        ])),
+        |_| {},
+    )
+    .await;
+    let mut ws = env.ws().await;
+    let shoots = env.import(&mut ws, THREE, "named").await;
+    wait_helper(&mut ws, "done").await;
+    let review = env.get(&format!("/api/shoots/{}/review", shoots[0])).await;
+    assert_eq!(review["photos"]["1"]["outcome"], "unreviewed", "{review}");
+    assert_eq!(env.get("/api/taste").await["text"], "");
+    let external: i64 = env
+        .pool
+        .with(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM helper_runs WHERE kind = 'external'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(external, 0, "start_run opened a run");
+
+    // The URL names the client; a direct call with it is refused too.
+    let url = mcp_url_of(&env.run_invocations()[0]);
+    assert!(
+        url.starts_with(&format!(
+            "{}/mcp?client=helper&kind=background&token=",
+            env.server.base_url
+        )),
+        "{url}"
+    );
+    let resp = mcp_call(
+        &env,
+        &url,
+        "set_outcome",
+        json!({"photo_id": 1, "outcome": "album"}),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["result"]["isError"], true, "{body}");
+    let chat = url.replace("kind=background", "kind=chat");
+    let body: Value = mcp_call(
+        &env,
+        &chat,
+        "set_outcome",
+        json!({"photo_id": 1, "outcome": "album"}),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(body["result"]["isError"], true, "{body}");
+    // A chat turn may rewrite the taste profile when the user asks.
+    let body: Value = mcp_call(&env, &chat, "set_taste_profile", json!({"text": "candids"}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["result"]["isError"], false, "{body}");
+    let eval = url.replace("kind=background", "kind=eval");
+    let body: Value = mcp_call(&env, &eval, "set_taste_profile", json!({"text": "x"}))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(body["result"]["isError"], true, "{body}");
+    assert_eq!(env.get("/api/taste").await["text"], "candids");
+    let review = env.get(&format!("/api/shoots/{}/review", shoots[0])).await;
+    assert_eq!(review["photos"]["1"]["outcome"], "unreviewed");
+
+    // External clients (plain /mcp) keep set_outcome, like the HTTP API.
+    let plain = format!("{}/mcp", env.server.base_url);
+    let body: Value = mcp_call(
+        &env,
+        &plain,
+        "set_outcome",
+        json!({"photo_id": 1, "outcome": "album"}),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(body["result"]["isError"], false, "{body}");
+}
+
+#[tokio::test]
+async fn helper_url_with_a_bad_token_is_rejected() {
+    let env = Env::new(finish_only(0), |_| {}).await;
+    env.settle().await;
+    let base = env.server.base_url.clone();
+    for url in [
+        format!("{base}/mcp?client=helper&kind=background&token=wrong"),
+        format!("{base}/mcp?client=helper&kind=background"),
+        format!("{base}/mcp?client=helper&kind=nonsense&token=wrong"),
+        format!("{base}/mcp?client=someone"),
+    ] {
+        let resp = env
+            .http
+            .post(&url)
+            .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .send()
+            .await
+            .unwrap();
+        assert!(resp.status().is_client_error(), "{url}: {}", resp.status());
+    }
 }
 
 /// Polls until `photo`'s `faces_model` is set, and returns it.

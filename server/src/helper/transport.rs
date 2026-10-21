@@ -45,6 +45,51 @@ pub enum SessionMode {
     Resume(String),
 }
 
+/// Which of the app's own runs a child is, named in its MCP URL so the
+/// server can refuse what the run may not do even if the CLI's own deny list
+/// fails (`mcp::post`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperClient {
+    Background,
+    Chat,
+    Eval,
+}
+
+impl HelperClient {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HelperClient::Background => "background",
+            HelperClient::Chat => "chat",
+            HelperClient::Eval => "eval",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "background" => Some(HelperClient::Background),
+            "chat" => Some(HelperClient::Chat),
+            "eval" => Some(HelperClient::Eval),
+            _ => None,
+        }
+    }
+
+    /// Tools this client may not call, as the CLI names them.
+    pub fn denied(self) -> &'static [&'static str] {
+        match self {
+            HelperClient::Chat => super::CHAT_DENY,
+            HelperClient::Background | HelperClient::Eval => super::BACKGROUND_DENY,
+        }
+    }
+
+    /// Whether this client may call PhotoSift's tool `tool`.
+    pub fn may_call(self, tool: &str) -> bool {
+        !self
+            .denied()
+            .iter()
+            .any(|d| d.strip_prefix("mcp__photosift__") == Some(tool))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RunRequest {
     pub run_id: i64,
@@ -54,7 +99,10 @@ pub struct RunRequest {
     pub max_turns: u32,
     pub max_budget_usd: f64,
     pub session: SessionMode,
-    pub deny_tools: Vec<&'static str>,
+    /// Sets the deny list and the client named in the MCP URL.
+    pub client: HelperClient,
+    /// The per-process secret that marks the MCP URL as the app's own child.
+    pub mcp_token: String,
     /// An empty directory outside any repository, so no project settings,
     /// `CLAUDE.md` or auto-memory keyed on a git root reach the child.
     pub cwd: PathBuf,
@@ -164,7 +212,13 @@ impl ClaudeCli {
     /// The argv after the program name. The prompt follows `-p` directly so
     /// no variadic option (`--tools`, `--allowedTools`) can swallow it.
     pub fn run_args(&self, req: &RunRequest) -> Vec<String> {
-        let mcp = json!({"mcpServers": {"photosift": {"type": "http", "url": self.mcp_url}}});
+        let url = format!(
+            "{}?client=helper&kind={}&token={}",
+            self.mcp_url,
+            req.client.as_str(),
+            req.mcp_token
+        );
+        let mcp = json!({"mcpServers": {"photosift": {"type": "http", "url": url}}});
         let mut a: Vec<String> = vec![
             "-p".into(),
             req.prompt.clone(),
@@ -179,7 +233,7 @@ impl ClaudeCli {
             "--allowedTools".into(),
             "mcp__photosift__*".into(),
             "--disallowedTools".into(),
-            req.deny_tools.join(","),
+            req.client.denied().join(","),
             "--permission-mode".into(),
             "dontAsk".into(),
         ];
