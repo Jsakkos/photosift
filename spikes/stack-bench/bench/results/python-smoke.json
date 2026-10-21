@@ -1,0 +1,64 @@
+{
+ "impl": "python",
+ "label": "smoke",
+ "src": "<scratch>",
+ "startup_ms": 1649.5,
+ "idle_rss_mb": 97.2,
+ "ingest": {
+  "files": 7,
+  "photos": 4,
+  "wall_ms": 359.62479998124763,
+  "stage_ms": {
+   "read": 85.98790009273216,
+   "hash": 105.74349999660626,
+   "extract": 59.92459994740784,
+   "exif": 230.10410001734272,
+   "decode": 265.81990002887323,
+   "resize": 460.56290005799383,
+   "encode_write": 116.30490003153682,
+   "phash": 42.03969985246658,
+   "db": 15.631299989763647
+  },
+  "workers": 16,
+  "peak_rss_mb": 599.2
+ },
+ "enrich_cpu": {
+  "device": "cpu",
+  "photos": 4,
+  "faces": 13,
+  "model_load_ms": 82.92990003246814,
+  "wall_ms": 133.86970001738518,
+  "stage_ms": {
+   "decode": 66.70440005837008,
+   "detect": 70.21799997892231,
+   "embed": 163.7019999907352,
+   "sharp_expo": 40.27549992315471,
+   "db": 2.931100025307387
+  },
+  "peak_rss_mb": 226.6
+ },
+ "enrich_cuda": {
+  "device": "cuda",
+  "photos": 4,
+  "faces": 13,
+  "model_load_ms": 468.0897999787703,
+  "wall_ms": 74.10620001610368,
+  "stage_ms": {
+   "decode": 68.31060000695288,
+   "detect": 69.08290000865236,
+   "embed": 51.37920001288876,
+   "sharp_expo": 31.198699958622456,
+   "db": 2.335400029551238
+  },
+  "peak_rss_mb": 1047.4
+ },
+ "photos_json_ms": 7.5,
+ "http_preview_ms": {
+  "p50": 6.1,
+  "p90": 16.62,
+  "p99": 18.65
+ },
+ "http_preview_burst160_ms": 18.4,
+ "serve_peak_rss_mb": 983.7,
+ "settled_rss_mb": 983.7
+}

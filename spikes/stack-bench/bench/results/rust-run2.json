@@ -1,0 +1,64 @@
+{
+ "impl": "rust",
+ "label": "run2",
+ "src": "<library>/2026/2026-10_<party-shoot>",
+ "startup_ms": 350.7,
+ "idle_rss_mb": 12.3,
+ "ingest": {
+  "files": 777,
+  "photos": 405,
+  "stage_ms": {
+   "db": 7.4943,
+   "decode": 21179.445400000008,
+   "encode_write": 13604.908199999987,
+   "exif": 237.09559999999988,
+   "extract": 5223.7796,
+   "hash": 9153.11890000001,
+   "phash": 50.27070000000002,
+   "read": 937373.8326000004,
+   "resize": 10150.957000000002
+  },
+  "wall_ms": 63828.7432,
+  "workers": 16,
+  "peak_rss_mb": 772.2
+ },
+ "enrich_cpu": {
+  "device": "cpu",
+  "faces": 668,
+  "model_load_ms": 143.343,
+  "photos": 405,
+  "stage_ms": {
+   "db": 16.0895,
+   "decode": 6245.5217999999995,
+   "detect": 4923.2785,
+   "embed": 66287.91879999998,
+   "sharp_expo": 2991.279000000001
+  },
+  "wall_ms": 5140.5577,
+  "peak_rss_mb": 354.2
+ },
+ "enrich_cuda": {
+  "device": "cuda",
+  "faces": 668,
+  "model_load_ms": 1550.735,
+  "photos": 405,
+  "stage_ms": {
+   "db": 9.2598,
+   "decode": 6535.233700000001,
+   "detect": 20473.930500000024,
+   "embed": 2238.0589,
+   "sharp_expo": 3545.6630999999993
+  },
+  "wall_ms": 2138.5959,
+  "peak_rss_mb": 1127.2
+ },
+ "photos_json_ms": 3.7,
+ "http_preview_ms": {
+  "p50": 0.87,
+  "p90": 1.44,
+  "p99": 16.79
+ },
+ "http_preview_burst160_ms": 340.0,
+ "serve_peak_rss_mb": 879.1,
+ "settled_rss_mb": 879.1
+}

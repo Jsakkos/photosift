@@ -3,7 +3,6 @@ node_modules/
 
 # Build output
 dist/
-src-tauri/target/
 
 # Environment
 .env
@@ -22,22 +21,25 @@ Thumbs.db
 # Tooling artifacts
 .playwright-mcp/
 .superpowers/
-# tauri-plugin-mcp screenshot / capture outputs and its per-dev config.
-# `.mcp.json` opens a local TCP bridge that can execute JS in the
-# webview — each developer opts in explicitly, never committed.
-target/tauri-mcp/
-.mcp.json
 
 # App data (never commit local database or caches)
 .photosift/
-.photosift-ci-local*/
+.photosift-dev/
 .tools/
-
-# Screenshot CI actuals + diffs (never commit — baselines under
-# tests/e2e/__snapshots__/ ARE committed, but these intermediates are
-# regenerated every run)
-tests/e2e/__screenshots__/
-tests/e2e/__diff__/
 
 # Claude Code runtime artifacts (per-session, never commit)
 .claude/*.lock
+
+# Local real-photo fixture (never commit: public repo)
+tests/golden/manifest.txt
+.photosift-golden/
+
+# Server + web rewrite build output
+server/target/
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+
+# Local MCP config (public repo; may hold tokens)
+.mcp.json

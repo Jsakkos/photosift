@@ -1,0 +1,1256 @@
+mod common;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use common::{fake_raf, spawn_server_with_library, synthetic_jpeg_with_exif, ExifSpec, Pattern};
+use futures_util::StreamExt;
+use photosift::db::photos::{self, PhotoRow};
+use rusqlite::Connection;
+use serde_json::{json, Value};
+use tempfile::TempDir;
+use tokio::net::TcpStream;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+struct Env {
+    server: common::TestServer,
+    library: TempDir,
+    http: reqwest::Client,
+}
+
+impl Env {
+    async fn new() -> Env {
+        let library = tempfile::tempdir().unwrap();
+        let server = spawn_server_with_library(library.path()).await;
+        Env {
+            server,
+            library,
+            http: reqwest::Client::new(),
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.server.base_url)
+    }
+
+    fn db(&self) -> Connection {
+        Connection::open(self.server.data_root.path().join("photosift.db")).unwrap()
+    }
+
+    /// All photo rows, oldest capture first.
+    fn photos(&self) -> Vec<PhotoRow> {
+        let pool = photosift::db::open(&self.server.data_root.path().join("photosift.db")).unwrap();
+        let ids: Vec<i64> = {
+            let db = self.db();
+            let mut stmt = db
+                .prepare("SELECT id FROM photos ORDER BY capture_time, id")
+                .unwrap();
+            let ids = stmt
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            ids
+        };
+        ids.into_iter()
+            .map(|id| photos::get_photo(&pool, id).unwrap().unwrap())
+            .collect()
+    }
+
+    fn cache(&self, kind: &str, id: i64) -> PathBuf {
+        self.server
+            .data_root
+            .path()
+            .join("cache")
+            .join(kind)
+            .join(format!("{id}.jpg"))
+    }
+
+    async fn scan(&self, source: &Path) -> Value {
+        let resp = self
+            .http
+            .post(self.url("/api/scan"))
+            .json(&json!({ "source": source }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        resp.json().await.unwrap()
+    }
+
+    async fn ws(&self) -> Ws {
+        let url = self.url("/ws").replacen("http://", "ws://", 1);
+        let (ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+        ws
+    }
+
+    /// Scans `source`, imports every item as one event, returns the WS frames
+    /// up to and including the terminal frame for the job.
+    async fn import_all(&self, source: &Path, kind: &str, name: &str) -> Vec<Value> {
+        self.import_all_with(source, kind, name, json!({})).await
+    }
+
+    async fn import_all_with(
+        &self,
+        source: &Path,
+        kind: &str,
+        name: &str,
+        offsets: Value,
+    ) -> Vec<Value> {
+        let scan = self.scan(source).await;
+        let idxs: Vec<usize> = (0..scan["items"].as_array().unwrap().len()).collect();
+        let events = json!([{ "item_idxs": idxs, "kind": kind, "name": name }]);
+        self.import(&scan["scan_id"], events, offsets).await
+    }
+
+    async fn import(&self, scan_id: &Value, events: Value, offsets: Value) -> Vec<Value> {
+        let mut ws = self.ws().await;
+        let resp = self
+            .http
+            .post(self.url("/api/import"))
+            .json(&json!({
+                "scan_id": scan_id,
+                "events": events,
+                "camera_offsets": offsets,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: Value = resp.json().await.unwrap();
+        let job_id = body["job_id"].as_str().expect("job_id").to_string();
+        collect_until_terminal(&mut ws, &job_id).await
+    }
+}
+
+async fn collect_until_terminal(ws: &mut Ws, job_id: &str) -> Vec<Value> {
+    let mut frames = Vec::new();
+    let deadline = tokio::time::timeout(Duration::from_secs(60), async {
+        while let Some(msg) = ws.next().await {
+            let msg = msg.unwrap();
+            let Ok(text) = msg.into_text() else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+            if v["job_id"] != job_id {
+                continue;
+            }
+            let terminal = matches!(v["type"].as_str(), Some("import_done" | "import_failed"));
+            frames.push(v);
+            if terminal {
+                return;
+            }
+        }
+        panic!("websocket closed before the job finished");
+    });
+    deadline.await.expect("import did not finish in time");
+    frames
+}
+
+fn terminal(frames: &[Value]) -> &Value {
+    frames.last().expect("at least a terminal frame")
+}
+
+fn jpeg_taken(taken: &'static str) -> Vec<u8> {
+    synthetic_jpeg_with_exif(
+        64,
+        48,
+        Pattern::Blocks,
+        &ExifSpec {
+            make: Some("FUJIFILM"),
+            model: Some("X100VI"),
+            taken: Some(taken),
+            ..Default::default()
+        },
+    )
+}
+
+fn write(path: &Path, bytes: &[u8]) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// A 3-frame card on one day: DSCF0001..3, one minute apart.
+fn three_file_card() -> TempDir {
+    let card = tempfile::tempdir().unwrap();
+    for (n, t) in [
+        "2026:10:18 10:00:00",
+        "2026:10:18 10:01:00",
+        "2026:10:18 10:02:00",
+    ]
+    .iter()
+    .enumerate()
+    {
+        write(
+            &card
+                .path()
+                .join(format!("DCIM/100_FUJI/DSCF000{}.JPG", n + 1)),
+            &jpeg_taken(t),
+        );
+    }
+    card
+}
+
+fn event_dir(lib: &Path) -> PathBuf {
+    lib.join("2026").join("2026-10-18_Test-Day")
+}
+
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+fn count(db: &Connection, table: &str) -> i64 {
+    db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+        .unwrap()
+}
+
+// --- the import job ---------------------------------------------------------
+
+#[tokio::test]
+async fn import_creates_folders_rows_previews() {
+    let env = Env::new().await;
+    let card = three_file_card();
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    let done = terminal(&frames);
+    assert_eq!(done["type"], "import_done", "{frames:?}");
+    assert_eq!(done["copied"], 3);
+    assert_eq!(done["skipped_duplicates"], 0);
+    assert_eq!(done["shoot_ids"].as_array().unwrap().len(), 1);
+
+    let progress: Vec<&Value> = frames
+        .iter()
+        .filter(|f| f["type"] == "import_progress")
+        .collect();
+    assert!(!progress.is_empty(), "no progress frames in {frames:?}");
+    assert!(progress.iter().all(|f| f["total"] == 3));
+    // Progress counts only ever go up, and the last one names a real file.
+    let dones: Vec<i64> = progress
+        .iter()
+        .map(|f| f["done"].as_i64().unwrap())
+        .collect();
+    assert!(dones.windows(2).all(|w| w[0] <= w[1]), "{dones:?}");
+    assert_eq!(*dones.last().unwrap(), 3);
+    assert!(progress
+        .iter()
+        .any(|f| f["current"].as_str().unwrap().starts_with("DSCF000")));
+
+    let dir = event_dir(env.library.path());
+    assert_eq!(
+        names_in(&dir),
+        ["DSCF0001.JPG", "DSCF0002.JPG", "DSCF0003.JPG"]
+    );
+
+    let db = env.db();
+    assert_eq!(count(&db, "photos"), 3);
+    assert_eq!(count(&db, "files"), 3);
+    let rows = env.photos();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows[0].capture_time.unwrap().to_string(),
+        "2026-10-18 10:00:00"
+    );
+    for row in &rows {
+        assert_eq!((row.width, row.height), (Some(64), Some(48)));
+        assert!(row.phash.is_some());
+        assert_eq!(row.shoot_id, done["shoot_ids"][0].as_i64().unwrap());
+        assert!(Path::new(row.jpeg_path.as_deref().unwrap()).starts_with(&dir));
+        assert!(env.cache("preview", row.id).is_file(), "preview {}", row.id);
+        assert!(env.cache("thumb", row.id).is_file(), "thumb {}", row.id);
+    }
+    let (folder, kind, name): (String, String, String) = db
+        .query_row("SELECT folder, kind, name FROM shoots", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(Path::new(&folder), dir);
+    assert_eq!((kind.as_str(), name.as_str()), ("named", "Test Day"));
+}
+
+#[tokio::test]
+async fn reimport_same_card_copies_nothing() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    env.import_all(card.path(), "named", "Test Day").await;
+    let dir = event_dir(env.library.path());
+    let before = names_in(&dir);
+
+    let rescan = env.scan(card.path()).await;
+    assert_eq!(rescan["already_imported"], 3);
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+    let done = terminal(&frames);
+    assert_eq!(done["type"], "import_done", "{frames:?}");
+    assert_eq!(done["copied"], 0);
+    assert_eq!(done["skipped_duplicates"], 3);
+    assert_eq!(names_in(&dir), before);
+    assert_eq!(count(&env.db(), "photos"), 3);
+    assert_eq!(count(&env.db(), "shoots"), 1);
+}
+
+#[tokio::test]
+async fn identical_files_within_one_card_are_deduped() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    let bytes = jpeg_taken("2026:10:18 10:00:00");
+    write(&card.path().join("100_FUJI/DSCF0001.JPG"), &bytes);
+    write(&card.path().join("101_FUJI/DSCF0001.JPG"), &bytes);
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+    let done = terminal(&frames);
+    assert_eq!(done["copied"], 1, "{frames:?}");
+    assert_eq!(done["skipped_duplicates"], 1);
+    assert_eq!(count(&env.db(), "photos"), 1);
+    assert_eq!(names_in(&event_dir(env.library.path())), ["DSCF0001.JPG"]);
+}
+
+#[tokio::test]
+async fn interrupted_import_resumes_cleanly() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    // What a crash mid-event leaves behind: one file fully copied but never
+    // recorded (rows are written at the end of an event), plus stale partials.
+    let dir = event_dir(env.library.path());
+    let first = std::fs::read(card.path().join("DCIM/100_FUJI/DSCF0001.JPG")).unwrap();
+    write(&dir.join("DSCF0001.JPG"), &first);
+    write(&dir.join("x.jpg.partial"), b"half a file");
+    write(&dir.join("DSCF0002.JPG.partial"), b"half of another");
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    let done = terminal(&frames);
+    assert_eq!(done["type"], "import_done", "{frames:?}");
+    assert_eq!(
+        names_in(&dir),
+        ["DSCF0001.JPG", "DSCF0002.JPG", "DSCF0003.JPG"]
+    );
+    assert_eq!(count(&env.db(), "photos"), 3);
+    assert_eq!(count(&env.db(), "files"), 3);
+}
+
+#[tokio::test]
+async fn collision_keeps_raw_jpeg_pair_together() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    // RAF previews under 10 KB are treated as EXIF thumbnails, so go bigger.
+    let jpeg = synthetic_jpeg_with_exif(
+        1600,
+        1200,
+        Pattern::Blocks,
+        &ExifSpec {
+            make: Some("FUJIFILM"),
+            model: Some("X100VI"),
+            taken: Some("2026:10:18 10:00:00"),
+            ..Default::default()
+        },
+    );
+    write(&card.path().join("DSCF0001.RAF"), &fake_raf(&jpeg));
+    write(&card.path().join("DSCF0001.JPG"), &jpeg);
+    // An unrelated frame that happens to share the RAW's name.
+    let dir = event_dir(env.library.path());
+    write(&dir.join("DSCF0001.RAF"), b"somebody else's raw");
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    assert_eq!(
+        names_in(&dir),
+        ["DSCF0001.RAF", "DSCF0001_1.JPG", "DSCF0001_1.RAF"]
+    );
+    assert_eq!(
+        std::fs::read(dir.join("DSCF0001.RAF")).unwrap(),
+        b"somebody else's raw"
+    );
+    let (raw, jpg): (String, String) = env
+        .db()
+        .query_row("SELECT raw_path, jpeg_path FROM photos", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(Path::new(&raw), dir.join("DSCF0001_1.RAF"));
+    assert_eq!(Path::new(&jpg), dir.join("DSCF0001_1.JPG"));
+    let rows = env.photos();
+    assert_eq!((rows[0].width, rows[0].height), (Some(1600), Some(1200)));
+    assert!(env.cache("preview", rows[0].id).is_file());
+    // The sibling JPEG is registered for dedupe too, under the same photo.
+    assert_eq!(count(&env.db(), "files"), 2);
+}
+
+#[tokio::test]
+async fn collision_on_the_jpeg_alone_moves_the_whole_pair() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    let jpeg = jpeg_taken("2026:10:18 10:00:00");
+    write(&card.path().join("DSCF0001.RAF"), &fake_raf(&jpeg));
+    write(&card.path().join("DSCF0001.JPG"), &jpeg);
+    // Only the JPEG slot is taken, yet a RAW named _1 beside a JPEG named
+    // plain would split the frame, so the RAW must follow.
+    let dir = event_dir(env.library.path());
+    write(&dir.join("DSCF0001.JPG"), b"somebody else's jpeg");
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    assert_eq!(
+        names_in(&dir),
+        ["DSCF0001.JPG", "DSCF0001_1.JPG", "DSCF0001_1.RAF"]
+    );
+}
+
+#[tokio::test]
+async fn same_name_items_in_one_import_get_distinct_names() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    // Cameras wrap their counters, so two folders often hold the same name.
+    write(
+        &card.path().join("100_FUJI/DSCF0001.JPG"),
+        &jpeg_taken("2026:10:18 10:00:00"),
+    );
+    write(
+        &card.path().join("101_FUJI/DSCF0001.JPG"),
+        &jpeg_taken("2026:10:18 10:05:00"),
+    );
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["copied"], 2, "{frames:?}");
+    assert_eq!(
+        names_in(&event_dir(env.library.path())),
+        ["DSCF0001.JPG", "DSCF0001_1.JPG"]
+    );
+    assert_eq!(count(&env.db(), "photos"), 2);
+}
+
+fn snapshot(root: &Path) -> BTreeMap<PathBuf, (u64, SystemTime)> {
+    fn walk(dir: &Path, out: &mut BTreeMap<PathBuf, (u64, SystemTime)>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let e = e.unwrap();
+            // Not DirEntry::metadata: on NTFS its directory mtimes can lag a
+            // just-written entry, which would look like the card being touched.
+            let meta = std::fs::metadata(e.path()).unwrap();
+            out.insert(e.path(), (meta.len(), meta.modified().unwrap()));
+            if meta.is_dir() {
+                walk(&e.path(), out);
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(root, &mut out);
+    out
+}
+
+#[tokio::test]
+async fn card_never_written() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    write(&card.path().join("DCIM/100_FUJI/CLIP0001.MOV"), b"movie");
+    let before = snapshot(card.path());
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    assert_eq!(snapshot(card.path()), before);
+}
+
+#[tokio::test]
+async fn video_copied_not_rendered() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    write(
+        &card.path().join("DSCF0001.JPG"),
+        &jpeg_taken("2026:10:18 10:00:00"),
+    );
+    let movie = card.path().join("CLIP0001.MOV");
+    write(&movie, b"not really a movie, but bytes are bytes");
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+
+    let dir = event_dir(env.library.path());
+    assert_eq!(names_in(&dir), ["CLIP0001.MOV", "DSCF0001.JPG"]);
+    let db = env.db();
+    let row = env
+        .photos()
+        .into_iter()
+        .find(|p| p.video_path.is_some())
+        .expect("a row for the movie");
+    assert_eq!(
+        Path::new(row.video_path.as_deref().unwrap()),
+        dir.join("CLIP0001.MOV")
+    );
+    assert!(row.raw_path.is_none() && row.jpeg_path.is_none());
+    assert!(row.width.is_none() && row.phash.is_none());
+    let id = row.id;
+    assert!(!env.cache("preview", id).exists());
+    assert!(!env.cache("thumb", id).exists());
+    // Videos are deduped by content like everything else.
+    assert_eq!(count(&db, "files"), 2);
+}
+
+#[tokio::test]
+async fn camera_offset_shifts_capture_time_and_is_stored() {
+    let env = Env::new().await;
+    let card = three_file_card();
+
+    let frames = env
+        .import_all_with(
+            card.path(),
+            "named",
+            "Test Day",
+            json!({ "FUJIFILM X100VI": 3600 }),
+        )
+        .await;
+
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    let db = env.db();
+    let (orig, shifted): (String, String) = db
+        .query_row(
+            "SELECT capture_time_orig, capture_time FROM photos ORDER BY capture_time LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(orig, "2026-10-18T10:00:00");
+    assert_eq!(shifted, "2026-10-18T11:00:00");
+    let (camera, secs): (String, i64) = db
+        .query_row(
+            "SELECT camera, offset_seconds FROM camera_offsets",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((camera.as_str(), secs), ("FUJIFILM X100VI", 3600));
+}
+
+#[tokio::test]
+async fn everyday_imports_share_the_month_shoot() {
+    let env = Env::new().await;
+    let first = tempfile::tempdir().unwrap();
+    write(
+        &first.path().join("DSCF0001.JPG"),
+        &jpeg_taken("2026:10:03 09:00:00"),
+    );
+    let second = tempfile::tempdir().unwrap();
+    write(
+        &second.path().join("DSCF0002.JPG"),
+        &jpeg_taken("2026:10:21 18:00:00"),
+    );
+
+    let a = env.import_all(first.path(), "everyday", "").await;
+    let b = env.import_all(second.path(), "everyday", "").await;
+
+    assert_eq!(terminal(&a)["type"], "import_done", "{a:?}");
+    assert_eq!(terminal(&b)["type"], "import_done", "{b:?}");
+    assert_eq!(terminal(&a)["shoot_ids"], terminal(&b)["shoot_ids"]);
+    let db = env.db();
+    assert_eq!(count(&db, "shoots"), 1);
+    assert_eq!(count(&db, "photos"), 2);
+    let folder: String = db
+        .query_row("SELECT folder FROM shoots", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        Path::new(&folder),
+        env.library.path().join("2026").join("2026-10_Everyday")
+    );
+    assert_eq!(
+        names_in(Path::new(&folder)),
+        ["DSCF0001.JPG", "DSCF0002.JPG"]
+    );
+}
+
+#[tokio::test]
+async fn unknown_scan_and_bad_indexes_are_rejected() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let scan = env.scan(card.path()).await;
+
+    let body = |scan_id: &Value, idxs: Value| {
+        json!({
+            "scan_id": scan_id,
+            "events": [{ "item_idxs": idxs, "kind": "named", "name": "X" }],
+            "camera_offsets": {},
+        })
+    };
+    let unknown = env
+        .http
+        .post(env.url("/api/import"))
+        .json(&body(&json!("nope"), json!([0])))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 404);
+    let out_of_range = env
+        .http
+        .post(env.url("/api/import"))
+        .json(&body(&scan["scan_id"], json!([0, 99])))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(out_of_range.status(), 400);
+    let duplicate = env
+        .http
+        .post(env.url("/api/import"))
+        .json(&body(&scan["scan_id"], json!([0, 0])))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), 400);
+    // Nothing was started, so nothing may have been created.
+    assert!(!env.library.path().join("2026").exists());
+}
+
+#[tokio::test]
+async fn a_named_event_without_a_name_is_rejected() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let scan = env.scan(card.path()).await;
+    for name in ["", "   "] {
+        let resp = env
+            .http
+            .post(env.url("/api/import"))
+            .json(&json!({
+                "scan_id": scan["scan_id"],
+                "events": [{ "item_idxs": [0, 1, 2], "kind": "named", "name": name }],
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "name {name:?}");
+        let body: Value = resp.json().await.unwrap();
+        assert!(body["error"].as_str().unwrap().contains("name"), "{body}");
+    }
+    // Everyday events carry no name and are fine.
+    let resp = env
+        .http
+        .post(env.url("/api/import"))
+        .json(&json!({
+            "scan_id": scan["scan_id"],
+            "events": [{ "item_idxs": [0, 1, 2], "kind": "everyday" }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn scan_endpoint_reports_unreadable_source() {
+    let env = Env::new().await;
+    let resp = env
+        .http
+        .post(env.url("/api/scan"))
+        .json(&json!({ "source": env.library.path().join("missing") }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn extra_same_stem_jpeg_is_imported() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    let jpeg = jpeg_taken("2026:10:18 10:00:00");
+    write(&card.path().join("A.RAF"), &fake_raf(&jpeg));
+    write(
+        &card.path().join("A.JPG"),
+        &jpeg_taken("2026:10:18 10:00:01"),
+    );
+    write(
+        &card.path().join("A.JPEG"),
+        &jpeg_taken("2026:10:18 10:00:02"),
+    );
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    assert_eq!(names_in(&event_dir(env.library.path())).len(), 3);
+    assert_eq!(count(&env.db(), "photos"), 2);
+    assert_eq!(count(&env.db(), "files"), 3);
+}
+
+// --- fix round 1 -------------------------------------------------------------
+
+/// Large enough that a RAF's embedded JPEG passes the 10 KB thumbnail cutoff.
+fn big_jpeg(taken: &'static str, pattern: Pattern) -> Vec<u8> {
+    synthetic_jpeg_with_exif(
+        1600,
+        1200,
+        pattern,
+        &ExifSpec {
+            make: Some("FUJIFILM"),
+            model: Some("X100VI"),
+            taken: Some(taken),
+            ..Default::default()
+        },
+    )
+}
+
+#[tokio::test]
+async fn late_sibling_jpeg_attaches_to_the_already_imported_raw() {
+    let env = Env::new().await;
+    let raw_jpeg = big_jpeg("2026:10:18 10:00:00", Pattern::Blocks);
+    let raf = fake_raf(&raw_jpeg);
+
+    // Day 1: only the RAW was imported (say from a RAW-only card).
+    let first = tempfile::tempdir().unwrap();
+    write(&first.path().join("DSCF0001.RAF"), &raf);
+    let frames = env.import_all(first.path(), "named", "Test Day").await;
+    assert_eq!(terminal(&frames)["copied"], 1, "{frames:?}");
+
+    // Later: the same RAW arrives again, now with its camera JPEG.
+    let second = tempfile::tempdir().unwrap();
+    write(&second.path().join("DSCF0001.RAF"), &raf);
+    let camera_jpeg = big_jpeg("2026:10:18 10:00:00", Pattern::Stripes);
+    write(&second.path().join("DSCF0001.JPG"), &camera_jpeg);
+    let frames = env.import_all(second.path(), "named", "Test Day").await;
+
+    let done = terminal(&frames);
+    assert_eq!(done["type"], "import_done", "{frames:?}");
+    assert_eq!(done["copied"], 1, "the JPEG is a copy");
+    assert_eq!(done["skipped_duplicates"], 0);
+    let dir = event_dir(env.library.path());
+    assert_eq!(names_in(&dir), ["DSCF0001.JPG", "DSCF0001.RAF"]);
+    assert_eq!(
+        std::fs::read(dir.join("DSCF0001.JPG")).unwrap(),
+        camera_jpeg
+    );
+
+    let rows = env.photos();
+    assert_eq!(rows.len(), 1, "attached, not a second photo");
+    assert_eq!(
+        Path::new(rows[0].jpeg_path.as_deref().unwrap()),
+        dir.join("DSCF0001.JPG")
+    );
+    assert_eq!(count(&env.db(), "files"), 2);
+    let owner: i64 = env
+        .db()
+        .query_row(
+            "SELECT photo_id FROM files WHERE path = ?1",
+            [dir.join("DSCF0001.JPG").to_string_lossy().into_owned()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(owner, rows[0].id);
+
+    // Importing that card a third time finds everything and copies nothing.
+    let frames = env.import_all(second.path(), "named", "Test Day").await;
+    assert_eq!(terminal(&frames)["copied"], 0, "{frames:?}");
+    assert_eq!(terminal(&frames)["skipped_duplicates"], 1);
+}
+
+#[tokio::test]
+async fn extra_jpeg_for_a_raw_that_already_has_one_becomes_its_own_photo() {
+    let env = Env::new().await;
+    let raf = fake_raf(&big_jpeg("2026:10:18 10:00:00", Pattern::Blocks));
+    let first = tempfile::tempdir().unwrap();
+    write(&first.path().join("DSCF0001.RAF"), &raf);
+    write(
+        &first.path().join("DSCF0001.JPG"),
+        &big_jpeg("2026:10:18 10:00:00", Pattern::Stripes),
+    );
+    env.import_all(first.path(), "named", "Test Day").await;
+
+    // A different JPEG for the same RAW: nothing to attach to, nothing to lose.
+    let second = tempfile::tempdir().unwrap();
+    write(&second.path().join("DSCF0001.RAF"), &raf);
+    write(
+        &second.path().join("DSCF0001.JPG"),
+        &big_jpeg("2026:10:18 10:00:05", Pattern::Stripes),
+    );
+    let frames = env.import_all(second.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["copied"], 1, "{frames:?}");
+    let dir = event_dir(env.library.path());
+    assert_eq!(
+        names_in(&dir),
+        ["DSCF0001.JPG", "DSCF0001.RAF", "DSCF0001_1.JPG"]
+    );
+    let rows = env.photos();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r.raw_path.is_none()
+        && Path::new(r.jpeg_path.as_deref().unwrap()) == dir.join("DSCF0001_1.JPG")));
+}
+
+#[tokio::test]
+async fn unrelated_jpeg_only_photo_never_shares_a_raws_sidecar_stem() {
+    let env = Env::new().await;
+    // Day 1: a RAW-only photo.
+    let first = tempfile::tempdir().unwrap();
+    write(
+        &first.path().join("DSCF0001.RAF"),
+        &fake_raf(&big_jpeg("2026:10:18 10:00:00", Pattern::Blocks)),
+    );
+    env.import_all(first.path(), "named", "Test Day").await;
+
+    // Later: a different photo, JPEG-only, whose camera reused the number.
+    let second = tempfile::tempdir().unwrap();
+    write(
+        &second.path().join("DSCF0001.JPG"),
+        &big_jpeg("2026:10:18 11:30:00", Pattern::Stripes),
+    );
+    let frames = env.import_all(second.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["copied"], 1, "{frames:?}");
+    let dir = event_dir(env.library.path());
+    assert_eq!(names_in(&dir), ["DSCF0001.RAF", "DSCF0001_1.JPG"]);
+    let rows = env.photos();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r.raw_path.is_none()
+        && Path::new(r.jpeg_path.as_deref().unwrap()) == dir.join("DSCF0001_1.JPG")));
+
+    // And the other way round: a JPEG-only photo first, then an unrelated RAW.
+    let third = tempfile::tempdir().unwrap();
+    write(
+        &third.path().join("DSCF0002.JPG"),
+        &big_jpeg("2026:10:18 12:00:00", Pattern::Blocks),
+    );
+    env.import_all(third.path(), "named", "Test Day").await;
+    let fourth = tempfile::tempdir().unwrap();
+    write(
+        &fourth.path().join("DSCF0002.RAF"),
+        &fake_raf(&big_jpeg("2026:10:18 12:30:00", Pattern::Stripes)),
+    );
+    env.import_all(fourth.path(), "named", "Test Day").await;
+    assert_eq!(
+        names_in(&dir),
+        [
+            "DSCF0001.RAF",
+            "DSCF0001_1.JPG",
+            "DSCF0002.JPG",
+            "DSCF0002_1.RAF"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn everyday_event_spanning_two_months_is_rejected() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    write(
+        &card.path().join("DSCF0001.JPG"),
+        &jpeg_taken("2026:10:31 23:30:00"),
+    );
+    write(
+        &card.path().join("DSCF0002.JPG"),
+        &jpeg_taken("2026:11:02 09:00:00"),
+    );
+    let scan = env.scan(card.path()).await;
+    let post = |offsets: Value| {
+        env.http
+            .post(env.url("/api/import"))
+            .json(&json!({
+                "scan_id": scan["scan_id"],
+                "events": [{ "item_idxs": [0, 1], "kind": "everyday", "name": "" }],
+                "camera_offsets": offsets,
+            }))
+            .send()
+    };
+
+    let resp = post(json!({})).await.unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("month"), "{body}");
+    assert!(!env.library.path().join("2026").exists());
+
+    // Offset-corrected times decide: +1h moves the first frame into November.
+    let mut ws = env.ws().await;
+    let resp = post(json!({ "FUJIFILM X100VI": 3600 })).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let job_id = resp.json::<Value>().await.unwrap()["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let frames = collect_until_terminal(&mut ws, &job_id).await;
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    assert!(env
+        .library
+        .path()
+        .join("2026")
+        .join("2026-11_Everyday")
+        .is_dir());
+}
+
+#[tokio::test]
+async fn resumed_pair_stays_together_even_with_a_sidecar_present() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    let raf = fake_raf(&big_jpeg("2026:10:18 10:00:00", Pattern::Blocks));
+    let jpeg = big_jpeg("2026:10:18 10:00:00", Pattern::Stripes);
+    write(&card.path().join("DSCF0001.RAF"), &raf);
+    write(&card.path().join("DSCF0001.JPG"), &jpeg);
+    // A crash left the RAW fully copied, and a sidecar sits beside it.
+    let dir = event_dir(env.library.path());
+    write(&dir.join("DSCF0001.RAF"), &raf);
+    write(&dir.join("DSCF0001.xmp"), b"<x:xmpmeta/>");
+
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+
+    assert_eq!(terminal(&frames)["type"], "import_done", "{frames:?}");
+    assert_eq!(
+        names_in(&dir),
+        ["DSCF0001.JPG", "DSCF0001.RAF", "DSCF0001.xmp"]
+    );
+    let rows = env.photos();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        Path::new(rows[0].jpeg_path.as_deref().unwrap()),
+        dir.join("DSCF0001.JPG")
+    );
+}
+
+// --- import screen support ----------------------------------------------------
+
+fn jpeg_from(make: &'static str, taken: &'static str) -> Vec<u8> {
+    synthetic_jpeg_with_exif(
+        64,
+        48,
+        Pattern::Blocks,
+        &ExifSpec {
+            make: Some(make),
+            taken: Some(taken),
+            ..Default::default()
+        },
+    )
+}
+
+#[tokio::test]
+async fn a_scan_can_be_fetched_again_by_id() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let scan = env.scan(card.path()).await;
+    let id = scan["scan_id"].as_str().unwrap();
+
+    let resp = env
+        .http
+        .get(env.url(&format!("/api/scan/{id}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let again: Value = resp.json().await.unwrap();
+    assert_eq!(again, scan);
+
+    let missing = env
+        .http
+        .get(env.url("/api/scan/does-not-exist"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    let body: Value = missing.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("scan"), "{body}");
+}
+
+#[tokio::test]
+async fn camera_offsets_regroup_events_with_the_server_rule() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    // Camera B's clock runs 3 h behind: 07:00 is really 10:00.
+    write(
+        &card.path().join("A1.JPG"),
+        &jpeg_from("CamA", "2026:10:18 10:00:00"),
+    );
+    write(
+        &card.path().join("B1.JPG"),
+        &jpeg_from("CamB", "2026:10:18 07:00:00"),
+    );
+    let scan = env.scan(card.path()).await;
+    assert_eq!(scan["events"].as_array().unwrap().len(), 2);
+    let id = scan["scan_id"].as_str().unwrap();
+
+    let post = |offsets: Value| {
+        env.http
+            .post(env.url(&format!("/api/scan/{id}/events")))
+            .json(&json!({ "camera_offsets": offsets }))
+            .send()
+    };
+    let resp = post(json!({ "CamB": 3 * 3600 })).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let events: Vec<Value> = resp.json().await.unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["item_idxs"].as_array().unwrap().len(), 2);
+    assert_eq!(events[0]["start"], "2026-10-18T10:00:00");
+
+    // No offsets is the scan's own proposal.
+    let resp = post(json!({})).await.unwrap();
+    let events: Vec<Value> = resp.json().await.unwrap();
+    assert_eq!(events.len(), 2);
+
+    let resp = env
+        .http
+        .post(env.url("/api/scan/nope/events"))
+        .json(&json!({ "camera_offsets": {} }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn slug_endpoint_uses_the_folder_naming_rule() {
+    let env = Env::new().await;
+    let slug = |name: &'static str| {
+        let (http, url) = (env.http.clone(), env.url("/api/slug"));
+        async move {
+            let resp = http
+                .post(url)
+                .json(&json!({ "name": name }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            resp.json::<Value>().await.unwrap()["slug"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    };
+    assert_eq!(slug("Baby's First Meal").await, "Babys-First-Meal");
+    assert_eq!(slug("  Café  au lait!! ").await, "Cafe-au-lait");
+    assert_eq!(slug("").await, "Untitled");
+}
+
+#[tokio::test]
+async fn settings_endpoint_exposes_the_library_root() {
+    let env = Env::new().await;
+    let resp = env.http.get(env.url("/api/settings")).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        Path::new(body["library_root"].as_str().unwrap()),
+        env.library.path()
+    );
+}
+
+#[tokio::test]
+async fn scan_thumbnail_is_oriented_downscaled_and_cached_as_jpeg() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    // Stored landscape 1000x500, rotated by EXIF 6 into a 500x1000 portrait.
+    write(
+        &card.path().join("P1.JPG"),
+        &synthetic_jpeg_with_exif(
+            1000,
+            500,
+            Pattern::Blocks,
+            &ExifSpec {
+                orientation: Some(6),
+                taken: Some("2026:10:18 10:00:00"),
+                ..Default::default()
+            },
+        ),
+    );
+    write(&card.path().join("V1.MOV"), b"not really a movie");
+    let scan = env.scan(card.path()).await;
+    let items = scan["items"].as_array().unwrap();
+    let photo = items.iter().position(|i| i["kind"] == "photo").unwrap();
+    let video = items.iter().position(|i| i["kind"] == "video").unwrap();
+    let id = scan["scan_id"].as_str().unwrap();
+
+    for _ in 0..2 {
+        let resp = env
+            .http
+            .get(env.url(&format!("/media/scan/{id}/{photo}")))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.headers()["content-type"], "image/jpeg");
+        let bytes = resp.bytes().await.unwrap();
+        let img = photosift::media::render::decode_jpeg(&bytes).unwrap();
+        assert_eq!((img.w, img.h), (200, 400));
+    }
+
+    // Cached on disk under the scan, not re-rendered per request.
+    assert!(env
+        .server
+        .data_root
+        .path()
+        .join("cache/scan")
+        .join(id)
+        .join(format!("{photo}.jpg"))
+        .is_file());
+
+    for path in [
+        format!("/media/scan/{id}/{video}"),
+        format!("/media/scan/{id}/999"),
+        format!("/media/scan/nope/{photo}"),
+    ] {
+        let resp = env.http.get(env.url(&path)).send().await.unwrap();
+        assert_eq!(resp.status(), 404, "{path}");
+    }
+
+    // Behind the same Host guard as everything else.
+    let resp = env
+        .http
+        .get(env.url(&format!("/media/scan/{id}/{photo}")))
+        .header(reqwest::header::HOST, "evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn scan_thumbnail_of_a_raw_comes_from_its_embedded_jpeg() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    let inner = synthetic_jpeg_with_exif(
+        800,
+        600,
+        Pattern::Blocks,
+        &ExifSpec {
+            orientation: Some(1),
+            taken: Some("2026:10:18 10:00:00"),
+            ..Default::default()
+        },
+    );
+    write(&card.path().join("DSCF0001.RAF"), &fake_raf(&inner));
+    let scan = env.scan(card.path()).await;
+    let id = scan["scan_id"].as_str().unwrap();
+
+    let resp = env
+        .http
+        .get(env.url(&format!("/media/scan/{id}/0")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let img = photosift::media::render::decode_jpeg(&resp.bytes().await.unwrap()).unwrap();
+    assert_eq!((img.w, img.h), (400, 300));
+}
+
+#[tokio::test]
+async fn job_state_endpoint_reports_the_finished_job_and_no_current_one() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let frames = env.import_all(card.path(), "named", "Test Day").await;
+    let job_id = terminal(&frames)["job_id"].as_str().unwrap().to_string();
+    assert_eq!(terminal(&frames)["type"], "import_done");
+
+    let resp = env
+        .http
+        .get(env.url(&format!("/api/import/{job_id}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let state: Value = resp.json().await.unwrap();
+    assert_eq!(state["state"], "done", "{state}");
+    assert_eq!(state["copied"], 3);
+    assert_eq!(state["skipped_duplicates"], 0);
+    assert_eq!(state["shoot_ids"], terminal(&frames)["shoot_ids"]);
+
+    let current: Value = env
+        .http
+        .get(env.url("/api/import/current"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(current["job_id"].is_null(), "{current}");
+
+    let missing = env
+        .http
+        .get(env.url("/api/import/nope"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn a_job_is_visible_as_running_or_done_right_after_it_starts() {
+    let env = Env::new().await;
+    let card = three_file_card();
+    let scan = env.scan(card.path()).await;
+    let resp = env
+        .http
+        .post(env.url("/api/import"))
+        .json(&json!({
+            "scan_id": scan["scan_id"],
+            "events": [{ "item_idxs": [0, 1, 2], "kind": "named", "name": "Test Day" }],
+        }))
+        .send()
+        .await
+        .unwrap();
+    let job_id = resp.json::<Value>().await.unwrap()["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Registered before the response returns, so never a 404; which of the two
+    // states depends on how fast the 3-frame job is.
+    let state: Value = env
+        .http
+        .get(env.url(&format!("/api/import/{job_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        matches!(state["state"].as_str(), Some("running" | "done")),
+        "{state}"
+    );
+    if state["state"] == "running" {
+        let current: Value = env
+            .http
+            .get(env.url("/api/import/current"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        // Unless it finished between the two requests.
+        assert!(current["job_id"].is_null() || current["job_id"] == job_id.as_str());
+    }
+}
+
+#[tokio::test]
+async fn concurrent_first_requests_for_a_scan_thumbnail_all_get_whole_jpegs() {
+    let env = Env::new().await;
+    let card = tempfile::tempdir().unwrap();
+    write(
+        &card.path().join("P1.JPG"),
+        &synthetic_jpeg_with_exif(
+            3000,
+            2000,
+            Pattern::Blocks,
+            &ExifSpec {
+                taken: Some("2026:10:18 10:00:00"),
+                ..Default::default()
+            },
+        ),
+    );
+    let scan = env.scan(card.path()).await;
+    let id = scan["scan_id"].as_str().unwrap().to_string();
+
+    let fetches = (0..8).map(|_| {
+        let (http, url) = (env.http.clone(), env.url(&format!("/media/scan/{id}/0")));
+        tokio::spawn(async move { http.get(url).send().await.unwrap().bytes().await.unwrap() })
+    });
+    for fetch in fetches {
+        let bytes = fetch.await.unwrap();
+        let img = photosift::media::render::decode_jpeg(&bytes).expect("a whole JPEG");
+        assert_eq!((img.w, img.h), (400, 267));
+    }
+
+    // Nothing half-written is left behind next to the cached file.
+    let dir = env.server.data_root.path().join("cache/scan").join(&id);
+    assert_eq!(names_in(&dir), ["0.jpg"]);
+}

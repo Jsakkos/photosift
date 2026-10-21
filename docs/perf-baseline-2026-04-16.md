@@ -51,7 +51,7 @@ protocol handler refactor).
 
 ## Follow-ups found
 
-- `TODO: anything that surprised you — file a GitHub issue or add to FutureWork.md.`
+- `TODO: anything that surprised you — file a GitHub issue.`
 
 ## Methodology notes
 

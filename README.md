@@ -1,127 +1,75 @@
 # PhotoSift
 
-A local-first photo culling pipeline. Import RAW photos from an SD card or folder, cut them down through a three-pass keyboard-driven workflow, and hand off the survivors to Capture One / DxO for editing or to Immich for publishing. Built with Tauri (Rust + React).
+A local-first photo pipeline for Windows. Plug in an SD card (or point at a folder), import into a dated library, let the app group and annotate the shots on-device, then cull each shoot in the browser with one keystroke per photo. Decisions are written to XMP sidecars so Lightroom Classic picks them up on import.
 
-## Workflow
+PhotoSift is a small Rust server on `127.0.0.1` plus a React UI you open in a normal browser tab. Nothing leaves your machine.
 
-```
-  Ingest  →  Triage  →  Select  →  Route  →  Export
-```
+**Status: Plan 1 of 4 (foundation).** Ingest, enrichment, review and the Lightroom handoff are built. The Claude helper and MCP endpoint, albums and Immich publishing, and people recognition are planned but not built yet.
 
-- **Triage** — `P` keep · `X` reject. Perceptual-hash bursts collapse to a single cover so 12 near-identical shots reject in one keystroke.
-- **Select** — `1`–`5` star rate, `[` `]` narrow the pass floor. Multi-pass star workflow: ≥1 survives Pass 1, ≥5 is top shelf.
-- **Route** — `E` send to the edit folder (Capture One / DxO import), `D` publish direct (Immich ingest).
-- **Export** — XMP sidecars (Lightroom-compatible `xmp:Rating` plus a custom `photosift:destination` field) written alongside the RAW; publish-direct copies the embedded JPEG preview into the configured Immich landing folder. `xmp:Label` is deliberately not written — see `PhotoSift_Spec.md` for why.
+## What it does today
 
-## Shoot folder layout
+- **Import.** Detects a card, scans it, proposes events from capture-time gaps (named event folders, or one "Everyday" folder per month for small days), and copies every file with SHA-256 verification against the source. Duplicates are skipped by content hash. The card is never written to, and files are never moved or renamed after import.
+- **Enrich.** In the background, on your GPU when available (CPU otherwise): embedded-preview rendering, perceptual hash, face detection and identity embeddings (YuNet + SFace), sharpness and exposure, near-duplicate bursts, and moments. These annotate the review screen; they never hide or decide anything.
+- **Review.** A shoot opens as a summary and highlights, then moments of justified rows (every photo whole, at its own aspect ratio). Set one outcome per photo — album, library, archive or delete? — and tag bloopers. Loupe and burst compare views. Every action saves immediately.
+- **Hand off.** Outcomes become star ratings, a red label for delete, and a `PhotoSift|Blooper` keyword in XMP sidecars, merged into any existing sidecar without touching other fields. Deletes go to the Recycle Bin, only after you approve the batch.
 
-Imports land under `~/Pictures/DSLR/YYYY/YYYY-MM_slug/RAW/`. As you finish each pass, PhotoSift auto-reorganises so the filesystem reflects your decisions:
+Keyboard: arrows move between photos and moments, `A` album, `L` library, `R` archive, `X` delete?, `U` unreviewed, `B` blooper, `Enter` loupe, `C` compare, `1`-`5` filters, `?` shows the full map.
 
-```
-DSLR/2026/2026-04_greece/
-  RAW/       still-unreviewed
-  rejects/   flag = reject
-  selects/   kept, not yet routed
-  edit/      routed → Capture One / DxO
-  export/    routed → Immich / publish direct
-```
+## Build and run
 
-The move is idempotent: flip a flag and the file follows on the next pass-complete transition. Pixel data, EXIF, and metadata are never mutated — only the layout changes.
+Prerequisites: Windows 11, Rust (stable), Node 22. An NVIDIA GPU with CUDA 12 / cuDNN 9 is optional.
 
-## Quick start
+```powershell
+# one-time: download the face models into the dev data root
+powershell -File scripts\fetch-models.ps1 -Dev
 
-Prereqs: Rust (latest stable), Node 20+, and the platform [Tauri prerequisites](https://tauri.app/start/prerequisites/) (WebView2 on Windows; Xcode CLTs on macOS; webkit2gtk/build-essential on Linux).
+# server (debug build), http://127.0.0.1:7421 (the release uses 7420)
+cargo run --manifest-path server/Cargo.toml
 
-```bash
-npm install
-npm run tauri:dev
+# UI with hot reload, http://localhost:5173 (proxies the API to the server)
+npm --prefix web ci
+npm --prefix web run dev
 ```
 
-`tauri:dev` loads `src-tauri/tauri.dev.conf.json` so the dev window is identifiable as "PhotoSift — DEV" and uses a distinct Tauri identifier — that gives it its own data dir (`~/.photosift-dev/`), its own OS keychain entries, and its own WebView2 storage. A compiled production binary keeps running unmolested while you develop. Set `PHOTOSIFT_HOME=<path>` to override the data root (e.g. point dev at prod for debugging — note writes mutate prod state).
+For a release install:
 
-To produce an installer:
-
-```bash
-npm run tauri build
+```powershell
+powershell -File scripts\build-release.ps1      # dist\photosift\: exe + web UI + ORT provider DLLs
+powershell -File scripts\install-startup.ps1    # start it at logon, hidden
 ```
 
-## Keyboard
-
-| Key | Action |
-|---|---|
-| `P` / `X` | Triage: keep / reject |
-| `1`–`5` | Select: star rating |
-| `0` | Clear rating |
-| `[` / `]` | Select: lower / raise pass floor |
-| `E` / `D` | Route: edit / publish direct |
-| `Tab` | 2-up compare |
-| `G` | Toggle grid view |
-| `Space` | Advance |
-| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo (session-scoped) |
-| `T` / `F` | Toggle all-strip / faces rail |
-| `H` | Toggle heatmap overlay |
+The release exe serves the UI itself; open `http://127.0.0.1:7420/` (or run `photosift.exe --open`). For GPU inference the CUDA 12 cuBLAS and cuDNN 9 DLLs must be on `PATH`, or bundled with `build-release.ps1 -CudaDllDir <folder>`; otherwise it falls back to CPU.
 
 ## Data locations
 
-Release builds use `~/.photosift/`; debug builds (`tauri:dev`, `tauri build --debug`, e2e harness) use `~/.photosift-dev/`. Paths below show the release location.
+| | Release | Debug build |
+|---|---|---|
+| Data root | `%USERPROFILE%\.photosift\` | `%USERPROFILE%\.photosift-dev\` |
 
-- **Database**: `~/.photosift/photosift.db` (SQLite)
-- **Preview cache**: `~/.photosift/cache/{shoot_id}/previews/` — full-res embedded JPEGs
-- **Thumbnail cache**: `~/.photosift/cache/{shoot_id}/thumbs/` — 512 px longest edge
-- **AI models** (optional): drop `eye_state.onnx`, `mouth_state.onnx`, `cat_detector.onnx` into `~/.photosift/models/` to swap the mocks for real classifiers. YuNet face detection is bundled.
-- **Curator** (optional, cloud): aesthetic / compositional culling via Anthropic, Gemini, or a local OpenAI-compatible endpoint. BYO API key — stored in the OS keychain under service `photosift` (release) or `photosift-dev` (debug); set under Settings → Curator. Suggestions are stored in `curator_judgments` and surfaced as overlays; nothing is auto-applied.
-
-## Tech stack
-
-| Layer | Choice |
-|---|---|
-| Shell | Tauri v2 |
-| Backend | Rust (SQLite via rusqlite, image crate, img_hash, ORT for ONNX) |
-| Frontend | React 19 + TypeScript strict, Zustand, Tailwind v4 |
-| Virtualisation | react-window |
-| Tests | Vitest (frontend), `cargo test` (Rust) |
-
-## Project layout
-
-```
-src-tauri/src/
-  lib.rs            Tauri command registry + app setup
-  ingest/           RAW copy, EXIF, preview extraction, pHash, clustering
-  db/schema.rs      SQLite schema + typed API (idempotent additive migrations)
-  pipeline/         Preview cache, prefetch manager, decode tiers
-  metadata/         XMP sidecar read/write, write-coalescing queue
-  ai/               ONNX face/eye/mouth/cat providers with mock fallbacks
-  layout.rs         Auto-reorganize sync: flag/destination → bucket folder
-  commands/         Tauri command handlers (thin wrappers over the above)
-src/
-  pages/            ShootListPage, CullPage
-  components/
-    chrome/         TabBar, AppShell
-    primitives/     Photo, Stars, Kbd, ScoreBar, ExifChip, ColorLabel, LogoB
-    triage/         TriageShell + 4-column rails
-    select/         SelectShell + star-grouped / rating-peer rails
-    route/          RouteShell
-    LoupeView, ComparisonView, GridView, MetadataOverlay, HeatmapOverlay, ...
-  stores/           Zustand: projectStore, settingsStore, aiStore
-  hooks/            useKeyboardNav, useImageLoader, ...
-```
-
-## Non-destructive guarantee
-
-File bytes, EXIF, and metadata are never mutated. Decisions are stored as SQLite rows and XMP sidecars. The shoot folder's *layout* is managed by PhotoSift — files move between `RAW/`, `rejects/`, `selects/`, `edit/`, and `export/` to mirror the cull state — but the moves are reversible and photo-ID-keyed caches mean no previews are invalidated. See `src-tauri/src/layout.rs`.
+Override with `PHOTOSIFT_HOME`. The root holds `photosift.db` (SQLite), `settings.toml`, `cache\preview\` and `cache\thumb\` (regenerable), `models\`, and `logs\`. The photo library itself lives at `library_root` in `settings.toml` (default release `E:\photos\DSLR`; a debug build defaults to `library\` inside its own data root, and uses port 7421), laid out as `{root}\{YYYY}\{YYYY-MM-DD}_{Slug}\`.
 
 ## Tests
 
-```bash
-# Frontend (Vitest)
-npm run test:run
+```powershell
+cargo test --manifest-path server/Cargo.toml
+npm --prefix web run test       # unit
+npm --prefix web run e2e        # Playwright against a real server and a synthetic card
+```
 
-# Rust (cargo)
-cd src-tauri && cargo test --lib
+Tests that need real RAW files are `#[ignore]`d and read a local, untracked fixture; see `tests/golden/README.md`. The repository is public, so it contains no photos or personal data: all committed test data is synthetic.
+
+## Layout
+
+```
+server/      Rust crate: API, ingest, enrichment, XMP, drive watcher
+web/         React + TypeScript UI, Vitest unit tests, Playwright e2e
+scripts/     models, release build, startup task, golden fixture
+tests/golden/  instructions for the local real-photo fixture
+benchmark/   offline Python evaluation tooling (not part of the app)
+docs/        design doc and implementation plans
 ```
 
 ## See also
 
-- `PhotoSift_Spec.md` — full design spec (architecture, data model, keyboard map, UX)
-- `PhotoSift_FutureWork.md` — roadmap beyond the shipped MVP
+- `docs/superpowers/specs/2026-10-19-photosift-overhaul-design.md` — design of record
 - `CLAUDE.md` — notes for AI-assisted development

@@ -1,0 +1,64 @@
+{
+ "impl": "python",
+ "label": "run1",
+ "src": "<library>/2026/2026-10_<party-shoot>",
+ "startup_ms": 1669.3,
+ "idle_rss_mb": 97.4,
+ "ingest": {
+  "files": 777,
+  "photos": 405,
+  "wall_ms": 71352.0370000042,
+  "stage_ms": {
+   "read": 1017074.9085989082,
+   "hash": 10002.209800295532,
+   "extract": 5787.0754998293705,
+   "exif": 1661.9970998144709,
+   "decode": 37280.9670001152,
+   "resize": 48729.83010037569,
+   "encode_write": 6650.604799913708,
+   "phash": 889.0861999243498,
+   "db": 12.113199976738542
+  },
+  "workers": 16,
+  "peak_rss_mb": 3143.9
+ },
+ "enrich_cpu": {
+  "device": "cpu",
+  "photos": 405,
+  "faces": 666,
+  "model_load_ms": 101.19890002533793,
+  "wall_ms": 8967.272399982903,
+  "stage_ms": {
+   "decode": 11450.047299731523,
+   "detect": 68080.1266002236,
+   "embed": 56047.896399511956,
+   "sharp_expo": 6210.441999719478,
+   "db": 6.237800000235438
+  },
+  "peak_rss_mb": 486.9
+ },
+ "enrich_cuda": {
+  "device": "cuda",
+  "photos": 405,
+  "faces": 666,
+  "model_load_ms": 1499.2280000005849,
+  "wall_ms": 4015.6005999888293,
+  "stage_ms": {
+   "decode": 7622.627599979751,
+   "detect": 27711.862900992855,
+   "embed": 19759.78369981749,
+   "sharp_expo": 7619.197200285271,
+   "db": 5.940000002738088
+  },
+  "peak_rss_mb": 1278.7
+ },
+ "photos_json_ms": 15.5,
+ "http_preview_ms": {
+  "p50": 2.54,
+  "p90": 3.76,
+  "p99": 15.98
+ },
+ "http_preview_burst160_ms": 426.6,
+ "serve_peak_rss_mb": 1003.1,
+ "settled_rss_mb": 1003.1
+}

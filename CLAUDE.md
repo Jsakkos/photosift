@@ -2,229 +2,171 @@
 
 ## What This Is
 
-PhotoSift is a local-first photo pipeline tool: import RAW photos, cull them through a structured three-pass workflow (triage → select → route), enrich with on-device AI (faces, eyes, sharpness) and optional cloud LLM Curator, then hand off to Capture One / DxO via XMP sidecars or publish direct to Immich. Tauri v2 (Rust backend + React/TypeScript frontend).
+PhotoSift is a local-first photo pipeline: a Rust server on `127.0.0.1` plus a React UI in a normal browser tab. It ingests an SD card or folder (copy + SHA-256 verify, embedded previews, pHash), enriches on-device (faces, sharpness, bursts, moments), and lets the user cull each shoot with one outcome per photo. Outcomes are written to XMP sidecars for Lightroom Classic; deletes go to the Recycle Bin only after explicit approval.
 
-Other docs:
-- `PhotoSift_Spec.md` — design-of-record (architecture, data model, keyboard map). Source of truth for *intent*.
-- `PhotoSift_FutureWork.md` — open items + shipped log.
-- `README.md` — user/contributor-facing overview.
+**Status: Plan 1 of 4 (foundation) is built.** Plans 2-4 (Claude helper + MCP endpoint, albums + Immich, people) are not built yet; nothing in the code references them.
 
-When the spec and the code disagree, the code wins — flag the divergence rather than implement to the spec.
+Docs:
+- `docs/superpowers/specs/2026-10-19-photosift-overhaul-design.md` — design of record (intent, constraints, architecture).
+- `docs/superpowers/plans/2026-10-19-photosift-overhaul-plan-1-foundation.md` — the plan that produced this code.
+- `PhotoSift_Spec.md` — pointer to the design doc (the old Tauri spec was removed).
+- `README.md` — user/contributor overview.
+- Older `docs/superpowers/` specs/plans and `docs/*.md` describe the removed Tauri prototype; history only.
+
+When the design doc and the code disagree, the code wins — flag the divergence rather than implement to the doc.
+
+## Public repo
+
+**The GitHub repo is public. No photos, previews, face crops, embeddings, XMP files copied from the library, real library paths, or personal names go into git.** Real-photo fixtures live outside git (`PHOTOSIFT_GOLDEN_DIR`, `tests/golden/manifest.txt` and `.photosift-golden/` are gitignored). Test data in git is synthetic.
 
 ## Tech Stack
 
 | Layer | Choice |
 |---|---|
-| Shell | Tauri v2 |
-| Backend | Rust — SQLite (rusqlite, bundled), `rawler` for NEF, `kamadak-exif`, `image`, `img_hash` style pHash (custom), `sha2`, `ort` (ONNX Runtime, CUDA-capable), `quick-xml`, `reqwest` (rustls), `keyring` |
-| Frontend | React 19 + TypeScript strict, Zustand, Tailwind v4, react-window |
-| Tests | Vitest (frontend), `cargo test --lib` (Rust), WebdriverIO + tauri-driver (e2e) |
-| Dev MCP | `tauri-plugin-mcp` on `127.0.0.1:4000` in debug builds for Claude-driven UI verification |
+| Server | Rust, axum + tokio, SQLite (`rusqlite`, bundled), `ort =2.0.0-rc.12` (ONNX Runtime, `cuda` feature), `kamadak-exif`, `quick-xml`, `zune-jpeg` + `fast_image_resize` + `jpeg-encoder`, `trash` (Recycle Bin), `sysinfo` (drive watcher) |
+| Models | YuNet (face detect) + SFace (identity), fetched by `scripts/fetch-models.ps1`, never committed |
+| Web | React 19 + TypeScript strict, React Router 7, Vite 6, no state library |
+| Tests | `cargo test` (server), Vitest (web unit), Playwright against a real server (web e2e) |
+| Platform | Windows 11 only; binds `127.0.0.1` only, default port `7420` (release) / `7421` (debug) |
 
 ## Repo Layout
 
-### `src-tauri/src/` (Rust backend)
+### `server/` (crate `photosift`, binary `photosift.exe`)
 
-Top-level modules:
-- `lib.rs` — Tauri builder, AI provider bootstrap, `invoke_handler` for **56 commands**
-- `state.rs` — `AppState` (AI/curator progress atomics, XMP write queue)
-- `layout.rs` — bucket-folder mapper; moves RAWs + sibling JPEGs as `(flag, destination, star_rating)` changes
-- `folder_template.rs` — configurable path template + bucket names
+- `main.rs` — startup: single-instance check (bind = lock; second launch just opens the browser with `--open`), config, DB, card watcher, router. `--no-browser` suppresses opening a tab.
+- `lib.rs` — module list + `build_state`
+- `config.rs` — `Settings` (`settings.toml`), data-root and web-dist resolution
+- `instance.rs` — single-instance handshake, log redirect when detached (GUI subsystem), browser opening
+- `api/` — axum router + handlers (`scan`, `import`, `shoots`, `photos`, `media`, `trash`, `ws`) and `guard.rs` (Host/Origin check)
+- `db/` — `schema.sql` (authoritative tables), `photos.rs` CRUD, `review.rs` review-screen queries
+- `ingest/` — `scan` (card/folder → CardScan), `events` (split into events, pure), `naming` (slug + folder path, pure), `copy` (copy + verify), `job` (import orchestration + progress)
+- `media/` — `embedded` (largest embedded JPEG), `exif`, `render` (orient → preview/thumb JPEGs), `phash`
+- `enrich/` — `faces` (YuNet with tiling), `identity` (SFace), `quality` (sharpness, exposure), `moments` (moments + bursts + signal score, pure), `job` (background worker)
+- `outcome.rs` — `Outcome` enum + XMP field mapping; `xmp.rs` merge-write sidecar; `trash.rs` approved delete
+- `drives.rs` — removable-drive watcher (injectable lister); `events.rs` — `ServerEvent` + WebSocket broadcast hub; `logging.rs` — `plog!` timestamped log macro
+- `bin/make-synthetic-card.rs` — writes a fake card of synthetic JPEGs for tests
+- `testsupport.rs` — synthetic JPEG/EXIF builders shared by tests and the bin; `tests/` — integration tests (`common/mod.rs` boots a test server on a temp data root)
 
-Module directories:
-- `ai/` — on-device AI: YuNet face detection, eye state (`eye_onnx`), mouth state (`mouth_onnx`), cat heuristic, sharpness (Laplacian variance), background `worker`. Optional classifiers (eye/mouth/cat) are wired as `Option<Box<dyn ...>>` — absent ⇒ NULL columns, never a mock fallback. The `mock.rs` / `MockMouthProvider` types still exist as test doubles only.
-- `curator/` — cloud LLM aesthetic judgment: providers (Anthropic, Gemini, local OpenAI-compatible) behind `CuratorProvider` trait, cost estimation, prompts, worker
-- `commands/` — thin Tauri command wrappers by domain (one file per domain: `shoots`, `import`, `scan`, `drives`, `image`, `rating`, `culling`, `settings`, `export`, `ai`, `layout`, `curator`)
-- `db/` — `schema.rs` is the authoritative table list (idempotent additive migrations) + typed CRUD
-- `ingest/` — copy, EXIF, embedded JPEG preview, thumbnail, pHash, clustering, pairing, walker, progress
-- `metadata/` — XMP read/write + write-coalescing `xmp_queue`, EXIF parsing, orientation
-- `pipeline/` — preview cache, prefetch manager, decoder tiers, embedded-preview extraction, `photosift://` protocol handler
-- `drives/` — removable drive detection for SD-card import
+### `web/`
 
-### `src/` (React frontend)
+- `src/main.tsx`, `App.tsx`, `styles.css`
+- `src/api/` — `client.ts` (typed fetch), `types.ts` (mirror of server JSON), `ws.ts` (reconnecting WebSocket)
+- `src/pages/` — `ShootsPage`, `ImportPage`, `ReviewPage`
+- `src/review/` — `Summary`, `Highlights`, `MomentSection`, `JustifiedRow`, `PhotoTile`, `Loupe`, `Compare`, `Dialogs`; `keyboard.ts` (**the only key map; `?` renders it**), `model.ts`, `useReview.ts`, `prefetch.ts`
+- `src/lib/` — pure helpers (`justify` row packing, `cards`, `importDraft`); `src/components/CardBanner.tsx`
+- `tests/e2e/` — Playwright specs; `fixtures.ts` starts a real `photosift.exe` on a free port with a temp `PHOTOSIFT_HOME` per test; `global-setup.ts` builds server + web once
 
-- `App.tsx`, `main.tsx`, `vite-env.d.ts`
-- `pages/` — `ShootListPage`, `CullPage`, `PrimitivesPage`
-- `components/` — 27 top-level + subdirs:
-  - `chrome/` — AppShell, TabBar
-  - `primitives/` — Photo, Stars, Kbd, ExifChip, ColorLabel, ScoreBar, LogoB, etc.
-  - `triage/` — TriageShell + 4-column rails (incl. FacesRail)
-  - `select/` — SelectShell + rating-peer / star-grouped rails + DetailRail
-  - `route/` — RouteShell
-  - `import/` — import flow components
-  - top-level views: LoupeView, ComparisonView, GridView, HeatmapOverlay, MetadataOverlay, ImportDialog, SettingsDialog, ShortcutsOverlay, Toolbar, ViewSelector, FirstRunModal, FolderLayoutEditor, FaceChip, FaceThumb, EyeStatusBadge, Ai{Eye,Smile,Species,Sharpness,Pick}*, CuratorChip, FlagFlash, ProgressBar, Toast, DriveDetectedToast, GroupStack, EmptyViewState
-- `stores/` — Zustand: `projectStore`, `settingsStore`, `aiStore`, `shootListStore`, `importIntentStore` (each with extensive Vitest coverage in `__tests__/`)
-- `hooks/` — `useKeyboardNav` (one binding source of truth), `useImageLoader`, `useDriveDetection`
-- `lib/` — pure utilities: `bracket`, `curatorApi`, `dateBrowser`, `faceVerdict`, `folderTemplate`, `groupRanking`, `importApi`, `loupeZoom`
-- `types/`, `styles/`, `test/`
+### `scripts/` (PowerShell)
 
-## Tauri Command Surface
+`fetch-models.ps1`, `make-golden-fixture.ps1`, `build-release.ps1`, `install-startup.ps1` (Task Scheduler entry, run at logon, hidden), `screenshot.ps1` (native desktop screenshot fallback).
 
-56 commands in `src-tauri/src/lib.rs` `invoke_handler` block, grouped by domain:
+Other top-level: `tests/golden/` (fixture instructions + `manifest.example.txt`), `benchmark/` (offline Python eval tooling, never runs in the app), `spikes/` (stack-benchmark history).
 
-| Domain | Count | Notes |
-|---|---|---|
-| Shoots | 3 | list/get/delete |
-| Import | 2 | start/cancel (streams `ImportProgress`) |
-| Scan | 2 | folder walk, thumbnail extraction |
-| Drives | 1 | removable-drive listing |
-| Image | 2 | list, metadata |
-| Rating | 1 | star rating |
-| Culling | 9 | flag, destination, bulk-flag, undo, view cursor, group CRUD |
-| Settings | 3 | get, update, recluster (after pHash threshold change) |
-| Export | 1 | publish-direct (Immich JPEG copy) |
-| AI | 6 | status, cancel, reanalyze, faces-for-photo, heatmap, sharpness percentiles |
-| Layout | 5 | sync-if-eligible, visit tracking, max-floor bump, bucket path, open in OS |
-| Curator | 17 | per-provider keys (Anthropic/Curator/Local), test connection, start/cancel/resume/clear, status, judgments, summary, agreement, cost estimate, accept/override |
+## HTTP / WebSocket Surface
 
-When adding a command, register it in `lib.rs` and mirror the type in TypeScript. Commands return typed structs, not raw JSON.
+Routes in `server/src/api/mod.rs`. JSON bodies, errors are `{"error": "..."}`. Mirror every response type in `web/src/api/types.ts`.
 
-## Data Model
+| Route | Purpose |
+|---|---|
+| `GET /api/health`, `/api/status` | liveness + version; AI backend (`cuda`/`cpu`), embeddings availability, enrichment queue |
+| `GET /api/cards`, `/api/settings` | inserted cards the watcher announced; read-only settings (library root) |
+| `POST /api/scan`, `GET /api/scan/{id}`, `POST /api/scan/{id}/events`, `POST /api/slug` | scan a card/folder, re-group into events, slugify a name |
+| `POST /api/import`, `GET /api/import/current`, `GET /api/import/{job}` | start / observe the single import job |
+| `GET /api/shoots`, `GET /api/shoots/{id}/review`, `POST /api/shoots/{id}/trash` | shoot list, review data, approved delete (body `{photo_ids}`: only those pending deletes are trashed) |
+| `POST /api/photos/{id}/outcome` | set outcome (+ blooper) and rewrite the sidecar (409 for a trashed photo) |
+| `GET /media/preview/{id}`, `/media/thumb/{id}`, `/media/scan/{scan}/{idx}` | JPEGs served from the cache |
+| `GET /ws` | `ServerEvent` stream: import/enrichment progress, `card_detected`, `card_scan_failed` |
 
-**10 tables** in `src-tauri/src/db/schema.rs` — authoritative:
+Anything else under `/` serves `web/dist` with an SPA fallback to `index.html`.
 
-`shoots` · `photos` · `groups` · `group_members` · `view_cursors` · `undo_log` · `settings` · `file_moves` · `curator_judgments` · `faces`
+## Data Model and Domain Rules
 
-Photos carry three orthogonal attributes:
-- `flag` — `unreviewed` / `pick` / `reject`
-- `destination` — `unrouted` / `edit` / `publish_direct` (a.k.a. export)
-- `star_rating` — 0-5, primary signal in the Select pass
+- Outcomes: `unreviewed | album | library | archive | delete`, plus an independent `blooper` boolean. One outcome per photo.
+- XMP mapping (`outcome.rs`): album ★4, library ★3, archive ★2, delete ★1 + `xmp:Label="Red"`, unreviewed writes nothing. Blooper adds the hierarchical keyword `PhotoSift|Blooper`. An existing ★5 is never lowered. Only these fields are written; everything else in an existing sidecar (including Lightroom `crs:*`) is preserved.
+- **Files are never moved or renamed after ingest.** Original EXIF is never rewritten. The card is never written to.
+- Every copied file is SHA-256-verified against the source before an import reports success. Global dedupe by content hash.
+- Library folders: named event `{root}\{YYYY}\{YYYY-MM-DD}_{Slug}\`, everyday `{root}\{YYYY}\{YYYY-MM}_Everyday\`. Slug is ASCII, words joined by `-`, no spaces/apostrophes ("Baby's First Meal" → `Babys-First-Meal`).
+- Delete = Recycle Bin via the `trash` crate, only after explicit batch approval. Never permanent.
+- Previews: 2560 px long edge JPEG q85; thumbnails 400 px q80; EXIF orientation applied; source is the largest embedded JPEG (RAF/NEF) or the JPEG itself.
+- AI enriches, never hides or auto-decides: signals annotate, outcomes are always the user's call.
 
-`settings` is a single-row key/value table; reads cached in `settingsStore`. `file_moves` is an audit trail for layout-sync operations. `curator_judgments` and `faces` are append-only enrichment tables keyed on `photo_id`.
+## UI Rules
 
-Single-tier pHash clustering: photos within one user-tunable hamming-distance threshold (`settings.group_threshold`, default 16) form a group.
+- Every photo is rendered whole at its own aspect ratio (fixed-height justified rows), never cropped.
+- Every action persists immediately; no save button.
+- Keyboard-first. `web/src/review/keyboard.ts` `BINDINGS` is the single binding source; the `?` overlay renders from it. Keys: arrows navigate moments/photos, `A` album · `L` library · `R` archive · `X` delete? · `U` unreviewed · `B` blooper · `Enter` loupe · `C` compare · `1`-`5` filters · `Esc` back.
 
-## Architecture Rules
+## Data Roots and Environment
 
-- **Every culling action persists immediately.** No save button, no unsaved state. Closing mid-cull is a non-event.
-- **Keyboard-first.** Every action has a keystroke. `useKeyboardNav.ts` is the single source of binding truth; `ShortcutsOverlay.tsx` mirrors it manually — keep in sync.
-- **Non-destructive data, layout-managing.** Pixel data, EXIF, and metadata are never mutated. The *layout* under a shoot folder IS managed by PhotoSift: `sync_shoot_layout` moves RAWs + sibling JPEGs into buckets — `RAW/`, `RAW/rejects/`, `RAW/selects/{0,1,2,3+}/`, `RAW/edit/`, top-level `Export/` — to mirror `(flag, destination, star_rating)`. Moves are idempotent and reversible. See `src-tauri/src/layout.rs`.
-- **XMP sidecars rewrite on every move** at the new location, with stale sidecars at the old location cleaned up. The sidecar carries `xmp:Rating` + `photosift:destination`. **`xmp:Label` is deliberately never written** — Capture One and DxO interpret it as a user color tag the user did not choose. User-set `xmp:Label`s in pre-existing sidecars are passed through untouched. See `src-tauri/src/metadata/xmp.rs:107`.
-- **Preview hot path.** `pipeline/prefetch.rs` preloads N+1..N+5 forward and N-1..N-3 backward as decoded pixel buffers. Target: zero perceptible load time on advance. Most performance-critical code path in the app.
-- **Typed IPC.** Tauri commands return typed structs; shared types defined in Rust and mirrored in `src/types/`.
-- **Two import paths.** `commands::scan::scan_folder` (pre-import preview) and `commands::import::start_import` both walk source files. Any per-file feature must be added to **both**.
+| Item | Value |
+|---|---|
+| Data root | release `%USERPROFILE%\.photosift\`, debug `%USERPROFILE%\.photosift-dev\` (a `cfg!(debug_assertions)` branch in `config::data_root`) |
+| Contents | `photosift.db`, `settings.toml`, `cache\preview\`, `cache\thumb\`, `models\`, `logs\photosift.log` (release/detached) |
+| `PHOTOSIFT_HOME` | overrides the data root; empty string = unset. Tests use a temp dir. |
+| `PHOTOSIFT_WEB_DIST` | built UI directory; default `<exe dir>\web`. Missing dir ⇒ API-only. |
+| `PHOTOSIFT_GOLDEN_DIR` | fake-card dir for the `#[ignore]` golden tests |
+| `PHOTOSIFT_MODELS_DIR` | models dir for the golden enrichment test; default `<data root>\models` |
+| Library root | `settings.toml` `library_root`; default release `E:\photos\DSLR`, debug `<dev data root>\library` |
+| Port | `settings.toml` `port`; default release `7420`, debug `7421` |
 
-## AI Subsystems
-
-### On-device AI (`src-tauri/src/ai/`)
-
-Runs at import as optional enrichment; suggest-only (never auto-applies a verdict).
-
-- **Face detection** — YuNet (bundled), via `face::YuNetProvider`. Returns boxes + landmarks.
-- **Eye state, mouth state, cat detection** — drop-in ONNX classifiers. Place `eye_state.onnx`, `mouth_state.onnx`, `cat_detector.onnx` into `~/.photosift/models/` to enable; if absent (or ORT init fails), the worker writes NULL into the corresponding face columns. UI hides those signals via `eyeProvider === "onnx"` / `mouthProvider === "onnx"` gates. No mock fallbacks at runtime — fake alternating-0/1 / constant-0.5 outputs used to corrupt the DB and were removed. Contracts in `reference_eye_mouth_onnx_integration.md` (user memory).
-- **Sharpness** — Laplacian variance via `ai/sharpness.rs`; per-shoot percentiles computed for relative scoring (a 60th-percentile shot in a shoot of soft glass is still the sharpest available).
-- **CUDA** — `ort` is compiled with the `cuda` feature. ORT ships the provider DLL but not cuBLAS/cuDNN; extract those from `pip nvidia-cublas-cu12` / `pip nvidia-cudnn-cu12` wheels into `target/debug/` if face inference is ~2s instead of ~500ms. See `reference_cuda_dll_setup.md`.
-- **Worker** — `ai/worker.rs` runs in the background with cancel/progress atomics on `AppState`. Graceful fallback on init failure: app boots, AI panel shows "unavailable", no crash.
-
-### Curator (`src-tauri/src/curator/`)
-
-Optional cloud LLM aesthetic / compositional culling. **Suggestion-only — never auto-applies, every judgment is reviewable.**
-
-- **Providers** — Anthropic (Claude), Gemini, local OpenAI-compatible (e.g. self-hosted llama.cpp / Ollama). Behind a `CuratorProvider` trait so adding a provider means implementing one trait.
-- **Keys** — per-provider, stored in OS keychain via `keyring` crate (service `photosift`). Native backends opt-in via `apple-native` / `windows-native` / `linux-native-sync-persistent` features — critical: without these, `keyring 3.x` defaults to a mock backend that silently drops writes.
-- **Judgments** — persisted to `curator_judgments` with `provider` column for cross-provider audit. Agreement stats (`get_curator_agreement_stats`) compare curator verdicts against the user's eventual cull decisions.
-- **Cost estimation** before running (`estimate_curator_cost_cents`); cancel/resume mid-run.
-
-## Three-Pass Culling Model
-
-Each "pass" is a view preset (filter + available actions), not a separate mode. Per-view filter gates configurable in Settings (`select_requires_pick`, `route_min_star`).
-
-| View | Filter | Groups | Primary Keys |
-|---|---|---|---|
-| Triage | `flag = unreviewed` | Collapsed | `P` pick · `X` reject · `Space` next · `Enter` expand group |
-| Select | `flag = pick AND star_rating >= floor` | Expanded | `1`-`5` rate · `[` `]` floor down/up · `Tab` 2-up · `X` reject |
-| Route | `flag = pick AND star_rating >= route_min_star` (default 3) | None | `E` edit · `D` publish direct · `U` reset |
-
-First time a user enters each view, `FirstRunModal` shows a one-time explainer gated by `settings.onboarded_{triage,select,route}`. "Replay tour" in `?` re-arms all three. Keep modal copy in sync with the bindings in `useKeyboardNav.ts` and the table in `ShortcutsOverlay.tsx`.
-
-## Testing
-
-```bash
-# Frontend (Vitest) — stores + lib are well-covered, components are not
-npm run test:run
-npm run test:coverage
-
-# Rust unit tests
-cd src-tauri && cargo test --lib
-
-# End-to-end (WebdriverIO + tauri-driver) — runs against a built debug binary
-npm run test:e2e:build              # produces target/debug/photosift.exe
-npm run test:e2e                    # raf-import IPC regression
-npm run test:e2e:screenshots        # screenshot CI suite (issue #20)
-npm run test:e2e:screenshots:update # regenerate the committed baselines
-```
-
-### Screenshot CI
-
-`.github/workflows/screenshots.yml` runs the screenshot suite on every PR on
-`windows-latest`. Failures upload `tests/e2e/__diff__/*.png` as artifacts and
-post a PR summary comment. To accept the new visuals as canonical, apply the
-**`regenerate-screenshots`** PR label — `.github/workflows/regenerate-screenshots.yml`
-commits fresh baselines back to the PR branch with `[skip ci]`.
-
-The harness lives in `tests/e2e/screenshots/*.spec.mjs` + `tests/e2e/helpers/`.
-DB state is seeded via the **debug-only** `seed_test_fixtures` Tauri command
-(`src-tauri/src/commands/testing.rs`), redirected at a throwaway `$PHOTOSIFT_HOME`
-that defaults to `<repo>/.photosift-ci-local/` for local runs. Release builds
-do not register these commands.
-
-E2E rig is documented in user memory `reference_tauri_driver.md`. Use it for regression coverage of hot paths; use the dev MCP bridge (below) for ad-hoc verification.
-
-## Development Cycle — MANDATORY before PR handoff
-
-**Code changes are not done when they compile and the unit tests pass.** Before opening a PR for the user to review, the change must be exercised end-to-end against the running app. Use at least one of:
-
-- **`tauri-plugin-mcp` (preferred for ad-hoc UI verification)** — runs on `127.0.0.1:4000` in debug builds (`npm run tauri:dev`). Provides programmatic screenshots, DOM inspection, JS evaluation, click/type. Walk through the affected screens, capture screenshots, **read the screenshots yourself** — do not ask the user "does this look right?". See user memory `reference_tauri_mcp.md`.
-- **`tauri-driver` / WebdriverIO (preferred for repeatable / regression coverage)** — extend or run the relevant `tests/e2e/*.spec.ts` when the change is in a hot path that other features depend on.
-
-**Rule:** A PR is handed to the user only after the change has been exercised in the running app via one of these (or a written explicit reason — e.g. "pure backend refactor, full `cargo test --lib` coverage of the changed path"). Include "verified via tauri-mcp: [screens]" or "verified via tauri-driver: [test path]" in the PR description.
-
-- **Always verify your own work before reporting it done or asking the user to test.** Use a layered approach, in order: (1) `cargo test` + `npm run test:run` + `npx tsc --noEmit` for any code change; (2) for UI changes, drive the running app via `tauri-mcp` (`cargo tauri dev` — or run `cargo run --no-default-features` from `src-tauri` if vite is already up on :1420 — then use the `mcp__tauri-mcp__*` tools to navigate, exercise the feature, and screenshot the key states), or fall back to native screenshots if the bridge won't connect; (3) for backend/filesystem behavior, exercise it via tests or a CLI repro. Only after that should you summarize what you actually observed. Don't say "this works" or "done" on the strength of the diff alone, and don't push verification onto the user when you can run it yourself.
-- Always test import with real D750 NEF files. The embedded JPEG preview extraction and pHash computation depend on the specific RAW format.
-- The perceptual-hash grouping threshold may need tuning with real-world bursts. It is a configurable setting (`group_threshold`), retunable per-shoot via the Select "regroup" control — not a magic number.
-- Preview preloading should be tested with shoots of 200+ images to verify memory behavior.
-- Keyboard handling must work when the image preview has focus. Watch for focus stealing.
-- Unit tests prove correctness; in-app verification proves the feature actually works for the user.
+Debug and release keep separate state (data root, port, library), so a running release binary is unaffected by development. Defaults only: an existing `settings.toml` keeps whatever it says, so an old dev `settings.toml` that still has `7420` / the real library must be edited or deleted.
 
 ## Commands
 
 ```powershell
-# Dev (kills the Vite + Tauri pair on Ctrl+C). Use `tauri:dev` — it loads
-# `tauri.dev.conf.json` so the running window is identifiable as "PhotoSift —
-# DEV" and uses a distinct identifier (separate WebView2 storage from prod).
-npm run tauri:dev
+# One-time: download YuNet + SFace into the debug data root (omit -Dev for release)
+powershell -File scripts\fetch-models.ps1 -Dev
 
-# Production build
-npm run tauri build
+# Run the server (debug build, data root ~\.photosift-dev, http://127.0.0.1:7421)
+cargo run --manifest-path server/Cargo.toml
+# Without PHOTOSIFT_WEB_DIST / a web\ dir beside the exe the server is API-only;
+# either point it at web/dist after `npm --prefix web run build`, or use the dev server:
+npm --prefix web ci            # first time
+npm --prefix web run dev       # Vite on http://localhost:5173, proxies /api /media /ws to :7421
 
-# Probe the database — prod uses .photosift, debug builds use .photosift-dev
-sqlite3 ~/.photosift/photosift.db
-sqlite3 ~/.photosift-dev/photosift.db
+# Tests and checks
+cargo test --manifest-path server/Cargo.toml
+cargo fmt --manifest-path server/Cargo.toml --check
+cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings
+npm --prefix web run test       # Vitest
+npm --prefix web run build      # tsc --noEmit + vite build
+npm --prefix web run e2e        # Playwright; global setup builds server + web
 
-# Test with real D750 NEFs — point at a folder, expect ~6016x4016 embedded previews
+# Release folder (exe + web + ORT provider DLLs) and logon task
+powershell -File scripts\build-release.ps1 [-CudaDllDir <dir>]
+powershell -File scripts\install-startup.ps1
 ```
 
-## Build Isolation (dev vs. prod)
+### Golden fixture (real photos, outside git)
 
-Debug builds keep their own state so a compiled prod binary can keep running uninterrupted while you develop:
+`tests/golden/README.md` has the full steps. Short version: copy `tests/golden/manifest.example.txt` to `tests/golden/manifest.txt` (gitignored) with paths to your own RAF/NEF files, run `scripts\make-golden-fixture.ps1` (writes `.photosift-golden\card\`), then:
 
-- **Data root.** Debug = `~/.photosift-dev/`, release = `~/.photosift/`. One `cfg!(debug_assertions)` branch in `db/schema.rs::photosift_home()` propagates through DB, cache, and `ensure_models_on_disk()`.
-- **Keychain.** Debug uses service `photosift-dev`, release `photosift`. `curator/mod.rs` exposes the right `KEYRING_SERVICE` via parallel `#[cfg]` consts. Re-enter API keys once when first running dev.
-- **Tauri identifier + window title.** `tauri.dev.conf.json` overrides `productName` → `PhotoSift (dev)`, `identifier` → `com.photosift.app.dev`, and window title → `PhotoSift — DEV`. Loaded only by `npm run tauri:dev` (`tauri dev --config …`). The distinct identifier also gives the WebView2 instance a separate `userDataFolder`, isolating `localStorage` UI flags.
-- **Escape hatch.** `PHOTOSIFT_HOME=<path>` env var overrides the data root. Use it sparingly to debug against prod data — writes mutate prod state.
-- **E2E.** `npm run test:e2e:build` produces a debug binary, so e2e also writes to `~/.photosift-dev/` and uses the dev keyring. No risk of e2e clobbering prod data.
+```powershell
+$env:PHOTOSIFT_GOLDEN_DIR = "$PWD\.photosift-golden\card"
+cargo test --manifest-path server/Cargo.toml -- --ignored
+```
+
+They panic when `PHOTOSIFT_GOLDEN_DIR` is unset. CI cannot run them. Run them after changes to ingest, EXIF/embedded-preview extraction, rendering, or enrichment.
+
+## Verification Loop — MANDATORY before reporting done
+
+Compiling and unit tests passing is not done. Layered, in order:
+
+1. `cargo test`, clippy, fmt, `npm --prefix web run test`, `npm --prefix web run build`.
+2. For UI changes: **verify with Playwright or the in-app browser against a running server and read the screenshots yourself** — do not ask the user "does this look right?". The e2e suite (`npm --prefix web run e2e`) starts a real server per test with a synthetic card (`make-synthetic-card`) and a temp data root; extend it for regressions, and use a browser pane/Playwright MCP against `cargo run` + `npm --prefix web run dev` for ad-hoc checks (console, network and DOM are all available).
+3. For backend/filesystem behavior: integration tests under `server/tests/`, or a CLI repro. Use the golden fixture for anything that depends on real RAW files.
+
+Only summarize what you actually observed. Don't say "works" on the strength of the diff alone.
 
 ## Gotchas & Conventions
 
-- **Port 1420 is pinned by Tauri** — no auto-increment. Orphaned `vite` / `tauri dev` processes hold it and produce "port already in use" failures plus stale-UI confusion. Always kill before ending a session.
-- **Dev profile overrides crank `opt-level=3`** for `ort`, `ort-sys`, `image`, `zune-jpeg`, `rawler`, `jpeg-decoder`, `jpeg-encoder` and `opt-level=2` for `photosift` itself. Without these, AI inference takes >1s/image in dev. **Don't lower them** without measuring.
-- **`xmp:Label` is intentionally never written.** Tests assert its absence; user-set labels in pre-existing sidecars pass through untouched. See `metadata/xmp.rs:107`.
-- **`keyring 3.x`** defaults to a mock backend without `*-native` features → `set_password()` silently succeeds but `get_password()` returns `NoEntry`. The Cargo manifest enables native backends for all three desktop OSes; don't remove them.
-- **Two import paths** — any per-file feature added to `commands::import::start_import` must also be added to `commands::scan::scan_folder` and vice versa.
-- **Tauri MCP plugin is debug-only** — `#[cfg(debug_assertions)]` gate in `lib.rs`. Release builds don't ship the bridge.
-- **`PHOTOSIFT_HOME` env override** — `db::schema::photosift_home()` consults `PHOTOSIFT_HOME` first, falling back to `~/.photosift`. Used by screenshot CI and integration tests to redirect the whole state directory (DB, models, caches) without touching the user's real library. Empty string is treated as unset.
-- **Screenshot test commands are debug-only too** — `commands::testing::{seed_test_fixtures, set_screenshot_state}` register only under `#[cfg(debug_assertions)]` via two arms in `lib.rs`'s `invoke_handler`. Cannot ship in release.
-- **Conventional commits** — `feat:`, `fix:`, `refactor:`, etc.
-- **Rust**: `rustfmt`, `clippy` clean. `anyhow` in command handlers, `thiserror` in module-internal error types.
-- **TypeScript**: strict, no `any`. Functional components with hooks.
-- **No comments explaining *what* well-named code already says.** Comments explain *why* — a hidden constraint, an invariant, a workaround. The CLAUDE.md you are reading is the place for context, not inline comments.
+- **Host/Origin guard.** `api/guard.rs` rejects any `Host` other than `127.0.0.1:<port>` / `localhost:<port>` (DNS rebinding) and any foreign `Origin` on non-GET and WebSocket requests. Debug builds also trust Vite's `http://localhost:5173`. The Vite proxy therefore **must** set `changeOrigin: true` (it does in `web/vite.config.ts`); a new proxied path needs it too.
+- **CUDA.** `ort` is built with `cuda`. ORT ships `onnxruntime_providers_cuda.dll` / `_shared.dll` beside the exe (copied by `build-release.ps1`), but not cuBLAS/cuDNN: those must be on `PATH`, or bundled with `build-release.ps1 -CudaDllDir <dir>` (the pip `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels are a source). If CUDA init fails the server logs it and falls back to CPU; never fatal. Models absent ⇒ enrichment reports unavailable and the app still runs.
+- **Dev profile** sets `opt-level = 3` for `ort`, `ort-sys`, `fast_image_resize` and image/JPEG crates; ONNX inference is >1 s/image without it. Don't lower without measuring.
+- **Port 7420 (release) / 7421 (debug)** is the single-instance lock. A second `photosift.exe` on the same port finds the first via `/api/health` and exits. Debug uses its own port and library so it coexists with the logon-started release. Orphaned dev servers hold their port, and Vite pins `5173` (`strictPort`). Kill both before ending a session.
+- **Release exe is a GUI-subsystem build**: no console; output goes to `<data root>\logs\photosift.log`.
+- **Logging.** Use `plog!("tag", ...)` (not `eprintln!`) for server diagnostics: lines carry a local timestamp and module tag, and the unattended release's log file is the debugging surface.
+- **Types** are mirrored by hand: change a response in `server/src/api/*`, update `web/src/api/types.ts` in the same commit.
+- Conventional commits (`feat:`, `fix:`, `refactor!:` ...).
+- Rust: `rustfmt` and `clippy -D warnings` clean; `anyhow` at handler boundaries, `thiserror` inside modules. TypeScript: strict, no `any`, functional components with hooks.
+- No comments explaining *what* well-named code says. Comments explain *why* — a hidden constraint, invariant, or workaround.

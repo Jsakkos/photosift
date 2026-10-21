@@ -1,0 +1,9 @@
+# Copy to tests/golden/manifest.txt (gitignored) and list your own files.
+# One absolute RAW path per line. A same-stem .JPG beside a RAW is copied too.
+# Suggested mix: a burst of near-identical frames, a few portraits (to check
+# orientation), RAFs from one camera and NEFs from another, and a couple of
+# photos from a different day so the scan proposes more than one event.
+D:\photos\2026\2026-01_Example\DSCF0001.RAF
+D:\photos\2026\2026-01_Example\DSCF0002.RAF
+D:\photos\2026\2026-01_Example\DSC_0003.NEF
+D:\photos\2026\2026-02_Example\DSCF0101.RAF

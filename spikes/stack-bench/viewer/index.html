@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stack Bench Viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 13px system-ui, sans-serif; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; height: 28px; display: flex; gap: 16px; align-items: center; padding: 0 12px; background: #1b1b1b; z-index: 2; }
+  #loupe { position: fixed; inset: 28px 0 0 0; display: flex; align-items: center; justify-content: center; }
+  #loupe img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  #grid { position: fixed; inset: 28px 0 0 0; overflow: auto; display: none; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 4px; padding: 4px; }
+  #grid img { width: 100%; aspect-ratio: 3/2; object-fit: cover; background: #222; }
+  body.grid #grid { display: grid; }
+  body.grid #loupe { display: none; }
+</style>
+</head>
+<body>
+<div id="bar"><b id="impl">…</b><span id="pos"></span><span id="name"></span><span>←/→ navigate · G grid</span></div>
+<div id="loupe"><img id="main" alt=""></div>
+<div id="grid"></div>
+<script>
+const state = { photos: [], i: 0, prefetch: 3, cacheBust: false, token: 0 };
+const main = document.getElementById('main');
+const prefetched = new Map();
+
+const previewUrl = (id, bust) => `/preview/${id}` + (bust ? `?r=${Math.random()}` : '');
+
+function prefetchAround(i) {
+  if (state.cacheBust) return;
+  for (let k = 1; k <= state.prefetch; k++) {
+    const p = state.photos[i + k];
+    if (p && !prefetched.has(p.id)) {
+      const img = new Image();
+      img.src = previewUrl(p.id, false);
+      img.decode().catch(() => {});
+      prefetched.set(p.id, img);
+    }
+  }
+}
+
+// Shows photo i; resolves once the decoded image is painted. A newer
+// show() supersedes an older one (held arrow key), mirroring how a real
+// loupe drops frames it can no longer show in time.
+async function show(i) {
+  const token = ++state.token;
+  state.i = Math.max(0, Math.min(state.photos.length - 1, i));
+  const p = state.photos[state.i];
+  document.getElementById('pos').textContent = `${state.i + 1}/${state.photos.length}`;
+  document.getElementById('name').textContent = p.name;
+  const img = new Image();
+  img.src = previewUrl(p.id, state.cacheBust);
+  try { await img.decode(); } catch { return { shown: false }; }
+  if (token !== state.token) return { shown: false };
+  main.src = img.src;
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  prefetchAround(state.i);
+  return { shown: true };
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight') show(state.i + 1);
+  else if (e.key === 'ArrowLeft') show(state.i - 1);
+  else if (e.key === 'g' || e.key === 'G') document.body.classList.toggle('grid');
+});
+
+function pct(arr, q) {
+  const s = [...arr].sort((a, b) => a - b);
+  return s.length ? +s[Math.min(s.length - 1, Math.floor(q * s.length))].toFixed(1) : null;
+}
+function summary(lat) {
+  return { n: lat.length, p50: pct(lat, 0.5), p90: pct(lat, 0.9), p99: pct(lat, 0.99), max: pct(lat, 1) };
+}
+
+async function reset(opts) {
+  prefetched.clear();
+  state.prefetch = opts.prefetch ?? 3;
+  state.cacheBust = !!opts.cacheBust;
+  await show(opts.start ?? 0);
+  await new Promise(r => setTimeout(r, 300));
+}
+
+// Sequential: press → wait for paint → press. Latency = press-to-paint.
+window.benchStep = async (opts = {}) => {
+  await reset(opts);
+  const n = opts.n ?? 100, thinkMs = opts.thinkMs ?? 0, lat = [];
+  for (let k = 0; k < n; k++) {
+    if (thinkMs) await new Promise(r => setTimeout(r, thinkMs));
+    const t0 = performance.now();
+    await show(state.i + 1);
+    lat.push(performance.now() - t0);
+  }
+  return summary(lat);
+};
+
+// Held key: fire "next" every intervalMs (Windows key repeat ≈ 33ms).
+// Reports how many requested frames actually painted and how long the
+// final frame took to appear after the key was released.
+window.benchHold = async (opts = {}) => {
+  await reset(opts);
+  const n = opts.n ?? 100, intervalMs = opts.intervalMs ?? 33;
+  let painted = 0, last;
+  const tStart = performance.now();
+  for (let k = 0; k < n; k++) {
+    last = show(state.i + 1).then(r => { if (r.shown) painted++; return r; });
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  const tRelease = performance.now();
+  await last;
+  return { requested: n, painted, settleMs: +(performance.now() - tRelease).toFixed(1), totalMs: +(performance.now() - tStart).toFixed(1) };
+};
+
+window.benchGrid = async () => {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  document.body.classList.add('grid');
+  const t0 = performance.now();
+  const loads = state.photos.map(p => new Promise(res => {
+    const img = document.createElement('img');
+    img.loading = 'eager';
+    img.onload = img.onerror = res;
+    img.src = `/thumb/${p.id}?r=${Math.random()}`;
+    grid.appendChild(img);
+  }));
+  await Promise.all(loads);
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const ms = performance.now() - t0;
+  document.body.classList.remove('grid');
+  return { thumbs: state.photos.length, allLoadedMs: +ms.toFixed(1) };
+};
+
+(async () => {
+  const info = await (await fetch('/api/health')).json();
+  document.getElementById('impl').textContent = info.impl;
+  state.photos = await (await fetch('/api/photos')).json();
+  if (state.photos.length) await show(0);
+  window.benchReady = true;
+})();
+</script>
+</body>
+</html>

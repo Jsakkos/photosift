@@ -1,0 +1,64 @@
+{
+ "impl": "rust",
+ "label": "run1",
+ "src": "<library>/2026/2026-10_<party-shoot>",
+ "startup_ms": 87.8,
+ "idle_rss_mb": 12.3,
+ "ingest": {
+  "files": 777,
+  "photos": 405,
+  "stage_ms": {
+   "db": 7.1504,
+   "decode": 21532.3929,
+   "encode_write": 13874.327300000012,
+   "exif": 233.10749999999993,
+   "extract": 5400.531399999998,
+   "hash": 9326.225299999995,
+   "phash": 51.00299999999999,
+   "read": 972780.3577000006,
+   "resize": 10457.201399999994
+  },
+  "wall_ms": 65535.2022,
+  "workers": 16,
+  "peak_rss_mb": 1159.1
+ },
+ "enrich_cpu": {
+  "device": "cpu",
+  "faces": 668,
+  "model_load_ms": 152.87220000000002,
+  "photos": 405,
+  "stage_ms": {
+   "db": 9.689400000000001,
+   "decode": 6623.454700000004,
+   "detect": 6212.676899999997,
+   "embed": 65959.82079999999,
+   "sharp_expo": 3371.687899999999
+  },
+  "wall_ms": 5298.8739000000005,
+  "peak_rss_mb": 354.8
+ },
+ "enrich_cuda": {
+  "device": "cuda",
+  "faces": 668,
+  "model_load_ms": 1610.7615,
+  "photos": 405,
+  "stage_ms": {
+   "db": 9.810899999999998,
+   "decode": 6425.3423,
+   "detect": 19413.86310000001,
+   "embed": 2139.4256999999993,
+   "sharp_expo": 3516.1240999999986
+  },
+  "wall_ms": 2055.6678,
+  "peak_rss_mb": 1123.8
+ },
+ "photos_json_ms": 3.7,
+ "http_preview_ms": {
+  "p50": 0.92,
+  "p90": 1.36,
+  "p99": 20.05
+ },
+ "http_preview_burst160_ms": 320.7,
+ "serve_peak_rss_mb": 878.7,
+ "settled_rss_mb": 878.7
+}
