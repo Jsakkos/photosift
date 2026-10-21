@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::config::Settings;
 use crate::db::{
-    helper::{self, RunKind, RunStatus},
+    helper::{self, RunKind, RunScope, RunStatus},
     review, DbPool,
 };
 use crate::events::{EventHub, ServerEvent};
@@ -66,15 +66,26 @@ pub enum EnqueueError {
     Other(#[from] anyhow::Error),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// Queued after enrichment. Its run row is created only when the worker
+    /// takes it and finds unproposed photos, so a follow-up that an earlier
+    /// run already covered leaves no row and spawns no `claude`.
+    Automatic,
+    /// The run button or the eval harness: the row exists from the request,
+    /// and the run reviews the whole shoot.
+    Explicit(i64),
+}
+
 struct Job {
-    run_id: i64,
     shoot_id: i64,
+    origin: Origin,
 }
 
 #[derive(Default)]
 struct State {
     pending: VecDeque<Job>,
-    active: Option<i64>,
+    active: bool,
     shutdown: bool,
     /// `None` until the first check has finished.
     availability: Option<Availability>,
@@ -197,7 +208,7 @@ impl HelperService {
             available,
             reason,
             transport: self.ctx.settings.helper_transport.clone(),
-            queue: state.pending.len() + usize::from(state.active.is_some()),
+            queue: state.pending.len() + usize::from(state.active),
         }
     }
 
@@ -220,10 +231,10 @@ impl HelperService {
     }
 
     /// The automatic run after enrichment. Skipped when `helper_enabled` is
-    /// off, the helper is known to be unavailable, a run is already queued
-    /// for the shoot, or every unreviewed photo already has a current
-    /// proposal. A shoot whose run is in progress gets a second one queued,
-    /// so photos imported meanwhile are not missed.
+    /// off, the helper is known to be unavailable, a run is already waiting
+    /// for the shoot, or nothing is unproposed. A shoot whose run is in
+    /// progress gets a follow-up queued, so photos imported meanwhile are not
+    /// missed; the worker checks again before starting it.
     pub fn enqueue(&self, shoot_id: i64) {
         if !self.ctx.settings.helper_enabled || self.unavailable_reason().is_some() {
             return;
@@ -233,24 +244,33 @@ impl HelperService {
             .enqueue
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let skip = match helper::open_run(&self.ctx.db, shoot_id) {
-            Ok(Some(run)) if run.status == RunStatus::Queued.as_str() => true,
-            Ok(_) => match helper::shoot_needs_run(&self.ctx.db, shoot_id) {
-                Ok(needs) => !needs,
+        let waiting = self
+            .shared
+            .lock()
+            .pending
+            .iter()
+            .any(|j| j.shoot_id == shoot_id);
+        let skip = waiting
+            || match helper::open_run(&self.ctx.db, shoot_id) {
+                Ok(Some(run)) if run.status == RunStatus::Queued.as_str() => true,
+                Ok(_) => match helper::automatic_scope(&self.ctx.db, shoot_id) {
+                    Ok(scope) => scope == RunScope::Nothing,
+                    Err(e) => {
+                        plog!("helper", "checking shoot {shoot_id} for new photos: {e:#}");
+                        true
+                    }
+                },
                 Err(e) => {
-                    plog!("helper", "checking shoot {shoot_id} for new photos: {e:#}");
+                    plog!("helper", "checking shoot {shoot_id} for open runs: {e:#}");
                     true
                 }
-            },
-            Err(e) => {
-                plog!("helper", "checking shoot {shoot_id} for open runs: {e:#}");
-                true
-            }
-        };
+            };
         if !skip {
-            if let Err(e) = self.push(shoot_id, RunKind::Background) {
-                plog!("helper", "queueing a run for shoot {shoot_id}: {e:#}");
-            }
+            self.shared.lock().pending.push_back(Job {
+                shoot_id,
+                origin: Origin::Automatic,
+            });
+            self.shared.wake.notify_one();
         }
     }
 
@@ -271,25 +291,27 @@ impl HelperService {
         if helper::open_run(&self.ctx.db, shoot_id)?.is_some() {
             return Err(EnqueueError::Conflict(shoot_id));
         }
-        Ok(self.push(shoot_id, kind)?)
-    }
-
-    fn push(&self, shoot_id: i64, kind: RunKind) -> anyhow::Result<i64> {
-        let run_id = helper::create_run(
-            &self.ctx.db,
+        let run_id = create_queued(&self.ctx, shoot_id, kind)?;
+        self.shared.lock().pending.push_back(Job {
             shoot_id,
-            kind,
-            Some(&self.ctx.settings.helper_model),
-            Some(&prompt::PROMPT_VERSION),
-        )?;
-        self.shared
-            .lock()
-            .pending
-            .push_back(Job { run_id, shoot_id });
+            origin: Origin::Explicit(run_id),
+        });
         self.shared.wake.notify_one();
-        emit(&self.ctx, shoot_id, run_id, RunStatus::Queued, None);
         Ok(run_id)
     }
+}
+
+/// A new `queued` run row, announced.
+fn create_queued(ctx: &Ctx, shoot_id: i64, kind: RunKind) -> anyhow::Result<i64> {
+    let run_id = helper::create_run(
+        &ctx.db,
+        shoot_id,
+        kind,
+        Some(&ctx.settings.helper_model),
+        Some(&prompt::PROMPT_VERSION),
+    )?;
+    emit(ctx, shoot_id, run_id, RunStatus::Queued, None);
+    Ok(run_id)
 }
 
 fn emit(ctx: &Ctx, shoot_id: i64, run_id: i64, status: RunStatus, error: Option<String>) {
@@ -346,60 +368,121 @@ fn worker_loop(shared: &Shared, ctx: &Ctx) {
                     return;
                 }
                 if let Some(job) = state.pending.pop_front() {
-                    state.active = Some(job.run_id);
+                    state.active = true;
                     break job;
                 }
                 state = shared.wake.wait(state).unwrap_or_else(|e| e.into_inner());
             }
         };
         let availability = shared.lock().availability.clone();
-        if catch_unwind(AssertUnwindSafe(|| run_job(ctx, &job, availability))).is_err() {
-            plog!("helper", "run {} panicked", job.run_id);
-            fail(ctx, &job, "the helper runner crashed".into());
+        let mut started = None;
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            run_job(ctx, &job, availability, &mut started)
+        }));
+        if outcome.is_err() {
+            plog!("helper", "a run of shoot {} panicked", job.shoot_id);
+            if let Some(run) = started {
+                fail(ctx, &run, "the helper runner crashed".into());
+            }
         }
-        shared.lock().active = None;
+        shared.lock().active = false;
     }
 }
 
+/// A job with its run row.
+struct Started {
+    shoot_id: i64,
+    run_id: i64,
+}
+
 /// Ends the run as `failed` unless it already ended, and says so.
-fn fail(ctx: &Ctx, job: &Job, error: String) {
+fn fail(ctx: &Ctx, run: &Started, error: String) {
     let error = truncate(&error, ERROR_MAX);
-    match helper::end_open_run(&ctx.db, job.run_id, RunStatus::Failed, Some(&error)) {
+    match helper::end_open_run(&ctx.db, run.run_id, RunStatus::Failed, Some(&error)) {
         Ok(true) => {
-            plog!("helper", "run {} failed: {error}", job.run_id);
+            plog!("helper", "run {} failed: {error}", run.run_id);
             emit(
                 ctx,
-                job.shoot_id,
-                job.run_id,
+                run.shoot_id,
+                run.run_id,
                 RunStatus::Failed,
                 Some(error),
             );
         }
         Ok(false) => {}
-        Err(e) => plog!("helper", "marking run {} failed: {e:#}", job.run_id),
+        Err(e) => plog!("helper", "marking run {} failed: {e:#}", run.run_id),
     }
 }
 
-fn run_job(ctx: &Ctx, job: &Job, availability: Option<Availability>) {
-    if let Some(Availability::Unavailable { reason }) = availability {
-        fail(ctx, job, reason);
+/// `started` is set as soon as the job has a run row, so a panic can fail it.
+fn run_job(
+    ctx: &Ctx,
+    job: &Job,
+    availability: Option<Availability>,
+    started: &mut Option<Started>,
+) {
+    let unavailable = match availability {
+        Some(Availability::Unavailable { reason }) => Some(reason),
+        _ => None,
+    };
+    // `focus`: None reviews the whole shoot, Some(ids) only the new photos.
+    let (run_id, focus) = match job.origin {
+        Origin::Explicit(run_id) => (run_id, None),
+        Origin::Automatic => {
+            if unavailable.is_some() {
+                return;
+            }
+            let focus = match helper::automatic_scope(&ctx.db, job.shoot_id) {
+                Ok(RunScope::Nothing) => {
+                    plog!(
+                        "helper",
+                        "shoot {}: nothing new since the last run; no run started",
+                        job.shoot_id
+                    );
+                    return;
+                }
+                Ok(RunScope::WholeShoot) => None,
+                Ok(RunScope::NewPhotos(ids)) => Some(ids),
+                Err(e) => {
+                    plog!(
+                        "helper",
+                        "checking shoot {} for new photos: {e:#}",
+                        job.shoot_id
+                    );
+                    return;
+                }
+            };
+            match create_queued(ctx, job.shoot_id, RunKind::Background) {
+                Ok(run_id) => (run_id, focus),
+                Err(e) => {
+                    plog!("helper", "creating a run for shoot {}: {e:#}", job.shoot_id);
+                    return;
+                }
+            }
+        }
+    };
+    let run = started.insert(Started {
+        shoot_id: job.shoot_id,
+        run_id,
+    });
+    if let Some(reason) = unavailable {
+        fail(ctx, run, reason);
         return;
     }
     let prepared = (|| -> anyhow::Result<RunRequest> {
-        let new_ids = helper::new_photo_ids(&ctx.db, job.shoot_id)?;
         let (system, user) = prompt::build(
             &ctx.db,
-            job.shoot_id,
-            job.run_id,
-            &new_ids,
+            run.shoot_id,
+            run.run_id,
+            focus.as_deref(),
             ctx.settings.helper_frames_per_burst,
         )?;
-        let dir = ctx.runs_dir.join(job.run_id.to_string());
+        let dir = ctx.runs_dir.join(run.run_id.to_string());
         std::fs::create_dir_all(&dir)?;
         let system_prompt_path = dir.join("system.md");
         std::fs::write(&system_prompt_path, system)?;
         Ok(RunRequest {
-            run_id: job.run_id,
+            run_id: run.run_id,
             system_prompt_path,
             prompt: user,
             model: ctx.settings.helper_model.clone(),
@@ -413,24 +496,24 @@ fn run_job(ctx: &Ctx, job: &Job, availability: Option<Availability>) {
     let req = match prepared {
         Ok(r) => r,
         Err(e) => {
-            fail(ctx, job, format!("preparing the run: {e:#}"));
+            fail(ctx, run, format!("preparing the run: {e:#}"));
             return;
         }
     };
-    match helper::start_queued_run(&ctx.db, job.run_id) {
+    match helper::start_queued_run(&ctx.db, run.run_id) {
         Ok(true) => {}
         Ok(false) => return,
         Err(e) => {
-            plog!("helper", "starting run {}: {e:#}", job.run_id);
+            plog!("helper", "starting run {}: {e:#}", run.run_id);
             return;
         }
     }
-    emit(ctx, job.shoot_id, job.run_id, RunStatus::Running, None);
+    emit(ctx, run.shoot_id, run.run_id, RunStatus::Running, None);
     plog!(
         "helper",
         "run {} for shoot {} started ({}, budget ${})",
-        job.run_id,
-        job.shoot_id,
+        run.run_id,
+        run.shoot_id,
         req.model,
         req.max_budget_usd
     );
@@ -444,10 +527,10 @@ fn run_job(ctx: &Ctx, job: &Job, availability: Option<Availability>) {
                 plog!(
                     "helper",
                     "run {}: PhotoSift's MCP server did not connect",
-                    job.run_id
+                    run.run_id
                 );
             } else if cfg!(debug_assertions) {
-                plog!("helper", "run {}: tools {}", job.run_id, tools.join(", "));
+                plog!("helper", "run {}: tools {}", run.run_id, tools.join(", "));
             }
         }
         RunEvent::Retry { attempt, error } => {
@@ -455,12 +538,12 @@ fn run_job(ctx: &Ctx, job: &Job, availability: Option<Availability>) {
             plog!(
                 "helper",
                 "run {}: API retry {attempt} ({error})",
-                job.run_id
+                run.run_id
             );
         }
         RunEvent::AssistantText(text) => {
             if cfg!(debug_assertions) {
-                plog!("helper", "run {}: {}", job.run_id, truncate(&text, 300));
+                plog!("helper", "run {}: {}", run.run_id, truncate(&text, 300));
             }
         }
         RunEvent::Result(_) => {}
@@ -468,17 +551,17 @@ fn run_job(ctx: &Ctx, job: &Job, availability: Option<Availability>) {
     let result = match outcome {
         Ok(r) => r,
         Err(e) => {
-            fail(ctx, job, format!("{e:#}"));
+            fail(ctx, run, format!("{e:#}"));
             return;
         }
     };
-    if let Err(e) = helper::finish_run(&ctx.db, job.run_id, &result.usage) {
-        plog!("helper", "recording usage of run {}: {e:#}", job.run_id);
+    if let Err(e) = helper::finish_run(&ctx.db, run.run_id, &result.usage) {
+        plog!("helper", "recording usage of run {}: {e:#}", run.run_id);
     }
     plog!(
         "helper",
         "run {} ended: {} (${:.3}, {} turns, {} in / {} out / {} cache-read tokens)",
-        job.run_id,
+        run.run_id,
         result.subtype,
         result.usage.cost_usd,
         result.usage.num_turns,
@@ -502,7 +585,7 @@ fn run_job(ctx: &Ctx, job: &Job, availability: Option<Availability>) {
     };
     // `fail` leaves a run that `finish_run` already made `done` alone.
     if let Some(error) = error {
-        fail(ctx, job, error);
+        fail(ctx, run, error);
     }
 }
 

@@ -42,13 +42,13 @@ pub fn example_line(e: &Example) -> String {
     line
 }
 
-/// `(system, user)`. `new_photo_ids` non-empty means an earlier run already
-/// proposed for the rest of the shoot.
+/// `(system, user)`. `new_photo_ids`: None reviews the whole shoot; Some
+/// means an earlier run already proposed for the rest of it.
 pub fn build(
     pool: &DbPool,
     shoot_id: i64,
     run_id: i64,
-    new_photo_ids: &[i64],
+    new_photo_ids: Option<&[i64]>,
     frames_per_burst: u32,
 ) -> anyhow::Result<(String, String)> {
     let taste = helper::get_taste(pool)?;
@@ -77,7 +77,7 @@ pub fn build(
          propose_your_call and finish_run, and call get_moment with frames_per_burst \
          {frames_per_burst}."
     );
-    if !new_photo_ids.is_empty() {
+    if let Some(new_photo_ids) = new_photo_ids {
         let ids: Vec<String> = new_photo_ids.iter().map(i64::to_string).collect();
         let _ = write!(
             user,

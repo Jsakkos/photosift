@@ -359,16 +359,24 @@ fn unproposed(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<i64>> {
     })
 }
 
-/// False when every live, unreviewed photo already has a proposal from a
-/// `done` run newer than its enrichment, so an automatic run has nothing to do.
-pub fn shoot_needs_run(pool: &DbPool, shoot_id: i64) -> anyhow::Result<bool> {
-    Ok(!unproposed(pool, shoot_id)?.is_empty())
+/// What an automatic run should look at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunScope {
+    /// No photo of the shoot has a proposal yet.
+    WholeShoot,
+    /// Earlier runs proposed for the rest; these live, unreviewed photos
+    /// still have no current proposal.
+    NewPhotos(Vec<i64>),
+    /// Every live, unreviewed photo has a proposal from a `done` run newer
+    /// than its enrichment (or the user has decided them all).
+    Nothing,
 }
 
-/// The photos a follow-up run should focus on: empty while no photo of the
-/// shoot has a proposal (the run covers the whole shoot), else the live,
-/// unreviewed photos still without a current one.
-pub fn new_photo_ids(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<i64>> {
+pub fn automatic_scope(pool: &DbPool, shoot_id: i64) -> anyhow::Result<RunScope> {
+    let ids = unproposed(pool, shoot_id)?;
+    if ids.is_empty() {
+        return Ok(RunScope::Nothing);
+    }
     let any: bool = pool.with(|c| {
         c.query_row(
             "SELECT EXISTS (SELECT 1 FROM proposals pr JOIN photos p ON p.id = pr.photo_id \
@@ -377,10 +385,11 @@ pub fn new_photo_ids(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<i64>> {
             |r| r.get(0),
         )
     })?;
-    if !any {
-        return Ok(Vec::new());
-    }
-    unproposed(pool, shoot_id)
+    Ok(if any {
+        RunScope::NewPhotos(ids)
+    } else {
+        RunScope::WholeShoot
+    })
 }
 
 pub fn get_run(pool: &DbPool, run_id: i64) -> anyhow::Result<Option<RunRow>> {

@@ -821,3 +821,70 @@ async fn cmd_shim_runs_through_cmd() {
     assert_eq!(flag(a, "--tools"), Some(""), "{a:?}");
     serde_json::from_str::<Value>(flag(a, "--mcp-config").unwrap()).unwrap();
 }
+
+#[tokio::test]
+async fn automatic_follow_up_with_nothing_new_spawns_no_claude() {
+    // Run 1 waits long enough for a second import to land, then proposes all
+    // five photos, so the follow-up queued by the second EnrichDone has
+    // nothing left to do.
+    let mut s = script(json!([
+        {"tool": "propose", "args": {"run_id": "$RUN", "items": [
+            {"photo_id": 1, "outcome": "album", "reason": "first light"},
+            {"photo_id": 2, "outcome": "archive", "reason": "same pose"},
+            {"photo_id": 3, "outcome": "archive", "reason": "blurred"},
+            {"photo_id": 4, "outcome": "library", "reason": "nice later frame"},
+            {"photo_id": 5, "outcome": "archive", "reason": "duplicate"},
+        ]}},
+        {"tool": "finish_run", "args": {"run_id": "$RUN", "summary": "Five everyday frames."}},
+    ]));
+    s["delay_ms"] = json!(5000);
+    let env = Env::new(s, |_| {}).await;
+    let mut ws = env.ws().await;
+    env.import(&mut ws, THREE, "everyday").await;
+    wait_helper(&mut ws, "running").await;
+    env.import(
+        &mut ws,
+        &[
+            ("DSCF0004.JPG", "2026:10:19 09:00:00"),
+            ("DSCF0005.JPG", "2026:10:19 09:01:00"),
+        ],
+        "everyday",
+    )
+    .await;
+    let done = wait_helper(&mut ws, "done").await;
+    let run1 = done["run_id"].as_i64().unwrap();
+    // Let the worker take and settle the follow-up job.
+    for _ in 0..200 {
+        if env.status().await["helper"]["queue"] == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(env.status().await["helper"]["queue"], 0);
+
+    assert_eq!(
+        env.run_invocations().len(),
+        1,
+        "{:?}",
+        env.run_invocations()
+    );
+    let runs: Vec<(i64, String)> = env
+        .pool
+        .with(|c| {
+            let mut st = c.prepare("SELECT id, status FROM helper_runs ORDER BY id")?;
+            let rows = st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>();
+            rows
+        })
+        .unwrap();
+    assert_eq!(
+        runs,
+        vec![(run1, "done".to_string())],
+        "no dangling run row"
+    );
+    let review = env.get("/api/shoots/1/review").await;
+    assert_eq!(review["helper"]["status"], "done");
+    assert_eq!(review["helper"]["summary"], "Five everyday frames.");
+}
