@@ -6,7 +6,11 @@ use std::collections::BTreeMap;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
-use super::DbPool;
+use super::{
+    helper::{self, YourCallRow},
+    DbPool,
+};
+use crate::outcome::Outcome;
 
 /// Bursts surfaced in the Highlights strip.
 const HIGHLIGHT_COUNT: usize = 8;
@@ -75,6 +79,29 @@ pub struct ReviewPhoto {
     pub face_count: i64,
     pub signal_score: Option<f64>,
     pub has_video: bool,
+    /// The helper's latest proposal; never the outcome itself.
+    pub proposal: Option<ProposalView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProposalView {
+    pub outcome: Outcome,
+    pub blooper: bool,
+    pub reason: String,
+    /// Why the user overrode it, from this proposal's decision row.
+    pub criterion: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HelperView {
+    /// `none` (never run), a run status, or `unavailable`.
+    pub status: String,
+    pub run_id: Option<i64>,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+    /// Proposals by outcome, unreviewed photos only.
+    pub suggested: Counts,
+    pub your_calls: Vec<YourCallRow>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +111,7 @@ pub struct ShootReview {
     pub highlights: Vec<i64>,
     pub moments: Vec<Moment>,
     pub photos: BTreeMap<i64, ReviewPhoto>,
+    pub helper: HelperView,
 }
 
 /// A live photo plus the grouping columns the worker wrote (not serialized).
@@ -179,6 +207,7 @@ pub fn shoot_review(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<Shoot
                         face_count: r.get(7)?,
                         signal_score: r.get(8)?,
                         has_video: r.get(9)?,
+                        proposal: None,
                     },
                     moment_idx: r.get(10)?,
                     burst_idx: r.get(11)?,
@@ -188,13 +217,53 @@ pub fn shoot_review(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<Shoot
         rows
     })?;
     let (moments, highlights) = build_timeline(&rows);
+    let mut proposals = helper::shoot_proposals(pool, shoot_id)?;
+    let photos: BTreeMap<i64, ReviewPhoto> = rows
+        .into_iter()
+        .map(|mut r| {
+            r.photo.proposal = proposals.remove(&r.photo.id).map(|p| ProposalView {
+                outcome: p.outcome,
+                blooper: p.blooper,
+                reason: p.reason,
+                criterion: p.criterion,
+            });
+            (r.photo.id, r.photo)
+        })
+        .collect();
+    let helper = helper_view(pool, shoot_id, &photos)?;
     Ok(Some(ShootReview {
         counts: shoot.counts.clone(),
         shoot,
         highlights,
         moments,
-        photos: rows.into_iter().map(|r| (r.photo.id, r.photo)).collect(),
+        photos,
+        helper,
     }))
+}
+
+/// The status is the latest run's; `HelperService` may override it.
+fn helper_view(
+    pool: &DbPool,
+    shoot_id: i64,
+    photos: &BTreeMap<i64, ReviewPhoto>,
+) -> anyhow::Result<HelperView> {
+    let run = helper::latest_run(pool, shoot_id)?;
+    let mut suggested = Counts::default();
+    for p in photos.values().filter(|p| p.outcome == "unreviewed") {
+        if let Some(prop) = &p.proposal {
+            suggested.add(prop.outcome.as_str(), 1);
+        }
+    }
+    Ok(HelperView {
+        status: run
+            .as_ref()
+            .map_or_else(|| "none".into(), |r| r.status.clone()),
+        run_id: run.as_ref().map(|r| r.id),
+        summary: run.as_ref().and_then(|r| r.summary.clone()),
+        error: run.and_then(|r| r.error),
+        suggested,
+        your_calls: helper::your_calls(pool, shoot_id)?,
+    })
 }
 
 /// `Some` before `None`, higher score first.

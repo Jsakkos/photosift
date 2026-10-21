@@ -107,6 +107,9 @@ async fn call_tool(state: &AppState, params: Value) -> Result<Value, (i64, Strin
     let state = state.clone();
     let result: ToolResult = tokio::task::spawn_blocking(move || (tool.call)(&state, args))
         .await
-        .map_err(|e| (INTERNAL_ERROR, format!("tool panicked: {e}")))?;
+        .map_err(|e| {
+            crate::plog!("mcp", "tool {name} panicked: {e}");
+            (INTERNAL_ERROR, format!("tool panicked: {e}"))
+        })?;
     Ok(result.to_json())
 }

@@ -1,3 +1,4 @@
+pub mod helper;
 pub mod migrations;
 pub mod photos;
 pub mod review;

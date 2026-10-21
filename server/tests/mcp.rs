@@ -177,13 +177,18 @@ async fn initialize_and_list_tools() {
     assert_eq!(
         names,
         [
+            "finish_run",
             "get_faces",
             "get_moment",
             "get_photos",
             "get_shoot_overview",
             "get_taste_profile",
             "list_shoots",
-            "set_outcome"
+            "propose",
+            "propose_your_call",
+            "set_outcome",
+            "set_taste_profile",
+            "start_run"
         ]
     );
     for t in tools {

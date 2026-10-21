@@ -10,11 +10,15 @@ use serde_json::{json, Value};
 use crate::{
     api::AppState,
     db::{
+        helper::{self, NewProposal, RunKind, RunRow, RunStatus, YourCallError, TASTE_MAX},
         photos::{self, FaceRow, PhotoRow},
         review,
     },
+    events::ServerEvent,
+    helper::learning,
     media::{crops, render},
     outcome::{self, ApplyError, Outcome},
+    plog,
 };
 
 const PHOTOS_MAX: usize = 8;
@@ -24,6 +28,9 @@ const FRAMES_DEFAULT: u32 = 3;
 const FRAMES_MAX: u32 = 6;
 const PHOTO_EDGE: u32 = 1024;
 const FACE_EDGE: u32 = 256;
+const PROPOSALS_MAX: usize = 50;
+const REASON_MAX: usize = 140;
+const SUMMARY_MAX: usize = 600;
 
 pub enum Content {
     Text(String),
@@ -154,6 +161,79 @@ pub fn all() -> Vec<Tool> {
             }),
             call: set_outcome,
         },
+        Tool {
+            name: "start_run",
+            description: "Open a helper run for a shoot and get its run_id, which propose, propose_your_call and finish_run need. Call it once before proposing; the app's own runs are opened for you.",
+            schema: json!({
+                "type": "object",
+                "properties": {"shoot_id": {"type": "integer"}},
+                "required": ["shoot_id"],
+            }),
+            call: start_run,
+        },
+        Tool {
+            name: "propose",
+            description: "Propose outcomes (album, library, archive, delete) for up to 50 photos of the run's shoot, each with a concrete reason of at most 140 characters and no names of people. The user decides; a proposal never changes a photo's outcome. A later proposal for the same photo replaces the earlier one. If any item is invalid the whole call is rejected and nothing is written.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "integer"},
+                    "items": {"type": "array", "minItems": 1, "maxItems": PROPOSALS_MAX,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "photo_id": {"type": "integer"},
+                                "outcome": {"type": "string",
+                                    "enum": ["album", "library", "archive", "delete"]},
+                                "reason": {"type": "string", "minLength": 1,
+                                    "maxLength": REASON_MAX},
+                                "blooper": {"type": "boolean"},
+                            },
+                            "required": ["photo_id", "outcome", "reason"],
+                        }},
+                },
+                "required": ["run_id", "items"],
+            }),
+            call: propose,
+        },
+        Tool {
+            name: "propose_your_call",
+            description: "Flag two near-identical photos of the run's shoot where choosing is a coin-flip the user should make, stating the tradeoff in at most 140 characters.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "integer"},
+                    "photo_a": {"type": "integer"},
+                    "photo_b": {"type": "integer"},
+                    "tradeoff": {"type": "string", "minLength": 1, "maxLength": REASON_MAX},
+                },
+                "required": ["run_id", "photo_a", "photo_b", "tradeoff"],
+            }),
+            call: propose_your_call,
+        },
+        Tool {
+            name: "finish_run",
+            description: "Close the run with a summary of the shoot for the user (at most 600 characters). No further proposals are accepted for it.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "integer"},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": SUMMARY_MAX},
+                },
+                "required": ["run_id", "summary"],
+            }),
+            call: finish_run,
+        },
+        Tool {
+            name: "set_taste_profile",
+            description: "Replace the description of what the user keeps and rejects (at most 4000 characters). get_taste_profile returns it.",
+            schema: json!({
+                "type": "object",
+                "properties": {"text": {"type": "string", "maxLength": TASTE_MAX}},
+                "required": ["text"],
+            }),
+            call: set_taste_profile,
+        },
     ]
 }
 
@@ -162,6 +242,7 @@ fn parse_args<T: DeserializeOwned>(args: Value) -> Result<T, ToolResult> {
 }
 
 fn internal(e: impl std::fmt::Display) -> ToolResult {
+    plog!("mcp", "internal error: {e}");
     ToolResult::error(format!("internal error: {e}"))
 }
 
@@ -276,6 +357,12 @@ fn get_shoot_overview(state: &AppState, args: Value) -> ToolResult {
             .join(", "),
         r.moments.len(),
     );
+    let sg = &r.helper.suggested;
+    let _ = writeln!(
+        out,
+        "Proposals for unreviewed photos: album {}, library {}, archive {}, delete {} ({} of {} unreviewed)",
+        sg.album, sg.library, sg.archive, sg.delete, sg.total, r.counts.unreviewed,
+    );
     for m in &r.moments {
         let photos: usize = m.bursts.iter().map(|b| b.photo_ids.len()).sum();
         let _ = writeln!(
@@ -331,13 +418,31 @@ fn get_moment(state: &AppState, args: Value) -> ToolResult {
             burst.photo_ids.len()
         );
         for id in &burst.photo_ids {
-            let (Some(rp), Ok(Some(p))) = (r.photos.get(id), photos::get_photo(&state.db, *id))
-            else {
-                continue;
+            let (rp, p) = match (r.photos.get(id), photos::get_photo(&state.db, *id)) {
+                (Some(rp), Ok(Some(p))) => (rp, p),
+                (_, Err(e)) => {
+                    plog!("mcp", "get_moment: reading photo {id} failed: {e:#}");
+                    let _ = writeln!(head, "id={id} (metadata unavailable: {e})");
+                    continue;
+                }
+                _ => {
+                    let _ = writeln!(head, "id={id} (metadata unavailable: photo not found)");
+                    continue;
+                }
             };
+            let proposal = rp.proposal.as_ref().map_or_else(
+                || "-".to_string(),
+                |pr| {
+                    format!(
+                        "{}{}",
+                        pr.outcome.as_str(),
+                        if pr.blooper { "+blooper" } else { "" }
+                    )
+                },
+            );
             let _ = writeln!(
                 head,
-                "id={id} time={} faces={} face_sharpness={} sharpness={} clip_hi={} clip_lo={} signal_score={} outcome={}",
+                "id={id} time={} faces={} face_sharpness={} sharpness={} clip_hi={} clip_lo={} signal_score={} outcome={} proposal={proposal}",
                 when(rp.capture_time.as_deref()),
                 rp.face_count,
                 opt(p.face_sharpness),
@@ -461,8 +566,11 @@ fn get_faces(state: &AppState, args: Value) -> ToolResult {
     ToolResult::ok(content)
 }
 
-fn get_taste_profile(_state: &AppState, _args: Value) -> ToolResult {
-    ToolResult::text("")
+fn get_taste_profile(state: &AppState, _args: Value) -> ToolResult {
+    match helper::get_taste(&state.db) {
+        Ok(t) => ToolResult::text(t),
+        Err(e) => internal(format!("{e:#}")),
+    }
 }
 
 #[derive(Deserialize)]
@@ -483,6 +591,13 @@ fn set_outcome(state: &AppState, args: Value) -> ToolResult {
     };
     match outcome::set_and_mirror(&state.db, a.photo_id, outcome, a.blooper) {
         Ok((photo, xmp_error)) => {
+            if let Err(e) = learning::record_decision(&state.db, photo.id, photo.outcome) {
+                plog!(
+                    "mcp",
+                    "recording the decision for photo {} failed: {e:#}",
+                    photo.id
+                );
+            }
             let mut msg = format!(
                 "photo {}: outcome {}, blooper {}",
                 photo.id,
@@ -490,6 +605,11 @@ fn set_outcome(state: &AppState, args: Value) -> ToolResult {
                 photo.blooper
             );
             if let Some(e) = xmp_error {
+                plog!(
+                    "mcp",
+                    "set_outcome: sidecar for photo {} not written: {e}",
+                    photo.id
+                );
                 let _ = write!(msg, " (sidecar not written: {e})");
             }
             ToolResult::text(msg)
@@ -497,5 +617,261 @@ fn set_outcome(state: &AppState, args: Value) -> ToolResult {
         Err(ApplyError::NotFound(id)) => ToolResult::error(format!("photo {id} does not exist")),
         Err(e @ ApplyError::Trashed(_)) => ToolResult::error(e.to_string()),
         Err(ApplyError::Other(e)) => internal(format!("{e:#}")),
+    }
+}
+
+// --- helper writes: proposals, pairs, runs, taste. Never `photos.outcome`. ---
+
+/// Trimmed text of 1..=`max` characters, or why not.
+fn bounded(what: &str, s: &str, max: usize) -> Result<String, String> {
+    let t = s.trim();
+    let n = t.chars().count();
+    if n == 0 {
+        Err(format!("{what} is empty"))
+    } else if n > max {
+        Err(format!("{what} is {n} characters; the limit is {max}"))
+    } else {
+        Ok(t.to_string())
+    }
+}
+
+/// Why the photo cannot be named in the run, if it cannot.
+fn photo_problem(state: &AppState, run: &RunRow, id: i64) -> Result<Option<String>, ToolResult> {
+    Ok(match photos::get_photo(&state.db, id).map_err(internal)? {
+        None => Some(format!("photo {id} does not exist")),
+        Some(p) if p.shoot_id != run.shoot_id => Some(format!(
+            "photo {id} belongs to shoot {}, not shoot {} of run {}",
+            p.shoot_id, run.shoot_id, run.id
+        )),
+        Some(p) if p.trashed_at.is_some() => Some(format!("photo {id} is in the Recycle Bin")),
+        Some(_) => None,
+    })
+}
+
+fn running(state: &AppState, run_id: i64) -> Result<RunRow, ToolResult> {
+    helper::active_run(&state.db, run_id).map_err(|e| ToolResult::error(e.to_string()))
+}
+
+fn status_event(state: &AppState, run: &RunRow, status: RunStatus) {
+    state.events.send(ServerEvent::HelperStatus {
+        shoot_id: run.shoot_id,
+        run_id: run.id,
+        status: status.as_str().into(),
+        error: None,
+    });
+}
+
+fn start_run(state: &AppState, args: Value) -> ToolResult {
+    let a: ShootArgs = match parse_args(args) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    match review::get_shoot(&state.db, a.shoot_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return ToolResult::error(format!("shoot {} does not exist", a.shoot_id)),
+        Err(e) => return internal(format!("{e:#}")),
+    }
+    let started = helper::create_run(&state.db, a.shoot_id, RunKind::External, None, None)
+        .and_then(|id| {
+            helper::set_run_status(&state.db, id, RunStatus::Running, None)?;
+            helper::active_run(&state.db, id)
+        });
+    let run = match started {
+        Ok(r) => r,
+        Err(e) => return internal(format!("{e:#}")),
+    };
+    status_event(state, &run, RunStatus::Running);
+    ToolResult::text(format!(
+        "run_id {} for shoot {}. Pass it to propose, propose_your_call and finish_run.",
+        run.id, run.shoot_id
+    ))
+}
+
+#[derive(Deserialize)]
+struct ProposeItem {
+    photo_id: i64,
+    /// A string, not `Outcome`, so a bad value is reported per item.
+    outcome: String,
+    reason: String,
+    blooper: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ProposeArgs {
+    run_id: i64,
+    items: Vec<ProposeItem>,
+}
+
+fn propose(state: &AppState, args: Value) -> ToolResult {
+    let a: ProposeArgs = match parse_args(args) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    let run = match running(state, a.run_id) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if a.items.is_empty() || a.items.len() > PROPOSALS_MAX {
+        return ToolResult::error(format!(
+            "items must hold 1-{PROPOSALS_MAX} proposals, got {}",
+            a.items.len()
+        ));
+    }
+    let mut problems = Vec::new();
+    let mut valid = Vec::with_capacity(a.items.len());
+    let mut seen = std::collections::HashSet::new();
+    for (i, item) in a.items.into_iter().enumerate() {
+        let mut why = Vec::new();
+        match photo_problem(state, &run, item.photo_id) {
+            Ok(Some(p)) => why.push(p),
+            Ok(None) => {}
+            Err(e) => return e,
+        }
+        if !seen.insert(item.photo_id) {
+            why.push(format!("photo {} appears twice", item.photo_id));
+        }
+        let outcome = match item.outcome.parse::<Outcome>() {
+            Ok(Outcome::Unreviewed) | Err(_) => {
+                why.push(format!(
+                    "outcome {:?} is not one of album, library, archive, delete",
+                    item.outcome
+                ));
+                None
+            }
+            Ok(o) => Some(o),
+        };
+        let reason = bounded("reason", &item.reason, REASON_MAX)
+            .map_err(|e| why.push(e))
+            .ok();
+        match (outcome, reason) {
+            (Some(outcome), Some(reason)) if why.is_empty() => valid.push(NewProposal {
+                photo_id: item.photo_id,
+                outcome,
+                blooper: item.blooper.unwrap_or(false),
+                reason,
+            }),
+            _ => problems.push(format!(
+                "item {i} (photo {}): {}",
+                item.photo_id,
+                why.join("; ")
+            )),
+        }
+    }
+    if !problems.is_empty() {
+        return ToolResult::error(format!(
+            "nothing was written; fix these items and resend the call:\n{}",
+            problems.join("\n")
+        ));
+    }
+    if let Err(e) = helper::upsert_proposals(&state.db, run.id, &valid) {
+        return internal(format!("{e:#}"));
+    }
+    state.events.send(ServerEvent::ProposalsChanged {
+        shoot_id: run.shoot_id,
+    });
+    ToolResult::text(format!(
+        "stored {} proposal(s) for run {}",
+        valid.len(),
+        run.id
+    ))
+}
+
+#[derive(Deserialize)]
+struct YourCallArgs {
+    run_id: i64,
+    photo_a: i64,
+    photo_b: i64,
+    tradeoff: String,
+}
+
+fn propose_your_call(state: &AppState, args: Value) -> ToolResult {
+    let a: YourCallArgs = match parse_args(args) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    let run = match running(state, a.run_id) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let mut problems = Vec::new();
+    if a.photo_a == a.photo_b {
+        problems.push(format!(
+            "photo_a and photo_b are both {}; a pair needs two photos",
+            a.photo_a
+        ));
+    }
+    for id in [a.photo_a, a.photo_b] {
+        match photo_problem(state, &run, id) {
+            Ok(Some(p)) => problems.push(p),
+            Ok(None) => {}
+            Err(e) => return e,
+        }
+    }
+    let tradeoff = bounded("tradeoff", &a.tradeoff, REASON_MAX)
+        .map_err(|e| problems.push(e))
+        .ok();
+    let Some(tradeoff) = tradeoff.filter(|_| problems.is_empty()) else {
+        return ToolResult::error(format!("nothing was written: {}", problems.join("; ")));
+    };
+    match helper::add_your_call(&state.db, run.id, a.photo_a, a.photo_b, &tradeoff) {
+        Ok(id) => {
+            state.events.send(ServerEvent::ProposalsChanged {
+                shoot_id: run.shoot_id,
+            });
+            ToolResult::text(format!(
+                "stored your-call pair {id} (photos {} and {})",
+                a.photo_a, a.photo_b
+            ))
+        }
+        Err(e @ YourCallError::Duplicate(..)) => ToolResult::error(e.to_string()),
+        Err(YourCallError::Other(e)) => internal(format!("{e:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct FinishArgs {
+    run_id: i64,
+    summary: String,
+}
+
+fn finish_run(state: &AppState, args: Value) -> ToolResult {
+    let a: FinishArgs = match parse_args(args) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    let run = match running(state, a.run_id) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let summary = match bounded("summary", &a.summary, SUMMARY_MAX) {
+        Ok(s) => s,
+        Err(e) => return ToolResult::error(e),
+    };
+    if let Err(e) = helper::complete_run(&state.db, run.id, &summary) {
+        return internal(format!("{e:#}"));
+    }
+    status_event(state, &run, RunStatus::Done);
+    ToolResult::text(format!("run {} finished", run.id))
+}
+
+#[derive(Deserialize)]
+struct TasteArgs {
+    text: String,
+}
+
+fn set_taste_profile(state: &AppState, args: Value) -> ToolResult {
+    let a: TasteArgs = match parse_args(args) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    let n = a.text.chars().count();
+    if n > TASTE_MAX {
+        return ToolResult::error(format!(
+            "the taste profile is {n} characters; the limit is {TASTE_MAX}"
+        ));
+    }
+    match helper::set_taste(&state.db, &a.text) {
+        Ok(()) => ToolResult::text(format!("taste profile saved ({n} characters)")),
+        Err(e) => internal(format!("{e:#}")),
     }
 }

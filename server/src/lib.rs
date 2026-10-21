@@ -4,6 +4,7 @@ pub mod db;
 pub mod drives;
 pub mod enrich;
 pub mod events;
+pub mod helper;
 pub mod ingest;
 pub mod instance;
 pub mod logging;

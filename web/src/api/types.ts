@@ -131,6 +131,55 @@ export interface ReviewPhoto {
   face_count: number;
   signal_score: number | null;
   has_video: boolean;
+  /** The helper's latest proposal; never the outcome itself. */
+  proposal: Proposal | null;
+}
+
+/** An outcome the helper may propose (never `unreviewed`). */
+export type ProposedOutcome = Exclude<Outcome, "unreviewed">;
+
+/** Why the user overrode a proposal (`POST /api/photos/{id}/decision-note`). */
+export type Criterion =
+  | "expression"
+  | "who"
+  | "moment"
+  | "sharpness"
+  | "duplicate"
+  | "composition"
+  | "other";
+
+export interface Proposal {
+  outcome: ProposedOutcome;
+  blooper: boolean;
+  reason: string;
+  /** From this proposal's decision row, so override chips survive a reload. */
+  criterion: Criterion | null;
+}
+
+export type HelperRunStatus = "queued" | "running" | "done" | "failed" | "interrupted";
+
+export type HelperState = "none" | HelperRunStatus | "unavailable";
+
+export interface YourCall {
+  id: number;
+  a: number;
+  b: number;
+  tradeoff: string;
+}
+
+export interface HelperView {
+  status: HelperState;
+  run_id: number | null;
+  summary: string | null;
+  error: string | null;
+  /** Proposals by outcome, unreviewed photos only. */
+  suggested: Counts;
+  your_calls: YourCall[];
+}
+
+export interface DecisionNoteRequest {
+  criterion: Criterion;
+  note?: string;
 }
 
 export interface ShootReview {
@@ -140,6 +189,7 @@ export interface ShootReview {
   moments: Moment[];
   /** JSON object keys are strings even though they hold photo ids. */
   photos: Record<string, ReviewPhoto>;
+  helper: HelperView;
 }
 
 // --- photos ---------------------------------------------------------------
@@ -241,7 +291,15 @@ export type ServerEvent =
     }
   | { type: "import_failed"; job_id: string; error: string }
   | { type: "enrich_progress"; shoot_id: number; done: number; total: number }
-  | { type: "enrich_done"; shoot_id: number };
+  | { type: "enrich_done"; shoot_id: number }
+  | { type: "proposals_changed"; shoot_id: number }
+  | {
+      type: "helper_status";
+      shoot_id: number;
+      run_id: number;
+      status: HelperRunStatus;
+      error: string | null;
+    };
 
 export type ServerEventType = ServerEvent["type"];
 
@@ -254,4 +312,6 @@ export const SERVER_EVENT_TYPES: readonly ServerEventType[] = [
   "import_failed",
   "enrich_progress",
   "enrich_done",
+  "proposals_changed",
+  "helper_status",
 ];

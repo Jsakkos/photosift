@@ -125,6 +125,7 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/shoots/{id}/review", get(shoots::review))
         .route("/shoots/{id}/trash", post(trash::trash_shoot))
         .route("/photos/{id}/outcome", post(photos::set_outcome))
+        .route("/photos/{id}/decision-note", post(photos::decision_note))
         .fallback(|| async { StatusCode::NOT_FOUND })
         .with_state(state.clone());
     let guard = middleware::from_fn_with_state(state.clone(), guard::check);

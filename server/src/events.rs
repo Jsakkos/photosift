@@ -57,6 +57,19 @@ pub enum ServerEvent {
     EnrichDone {
         shoot_id: i64,
     },
+    /// The helper wrote proposals or your-call pairs for the shoot; one per
+    /// tool call, so a page refetches the review once per batch.
+    ProposalsChanged {
+        shoot_id: i64,
+    },
+    /// A helper run changed status (`queued`, `running`, `done`, `failed`,
+    /// `interrupted`).
+    HelperStatus {
+        shoot_id: i64,
+        run_id: i64,
+        status: String,
+        error: Option<String>,
+    },
 }
 
 /// What a card-detected toast needs; the full `CardScan` is fetched on demand.
@@ -273,6 +286,27 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({"type": "card_scan_failed", "source": "F:\\", "error": "unreadable"})
+        );
+    }
+
+    #[test]
+    fn helper_events_serialise_with_their_wire_names() {
+        let json = serde_json::to_value(ServerEvent::HelperStatus {
+            shoot_id: 2,
+            run_id: 5,
+            status: "done".into(),
+            error: None,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "helper_status", "shoot_id": 2, "run_id": 5,
+                               "status": "done", "error": null})
+        );
+        let json = serde_json::to_value(ServerEvent::ProposalsChanged { shoot_id: 2 }).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "proposals_changed", "shoot_id": 2})
         );
     }
 

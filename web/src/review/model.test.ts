@@ -23,6 +23,7 @@ function photo(id: number, outcome: ReviewPhoto["outcome"] = "unreviewed"): Revi
     face_count: 0,
     signal_score: null,
     has_video: false,
+    proposal: null,
   };
 }
 
