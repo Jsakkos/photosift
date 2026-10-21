@@ -47,7 +47,6 @@ fn v1_db_upgrades_in_place() {
         db::migrations::STEPS.last().unwrap().0,
         "user_version is the highest step"
     );
-    assert_eq!(user_version(&path), 2);
 }
 
 #[test]
@@ -57,5 +56,5 @@ fn migrate_is_idempotent_across_versions() {
     for _ in 0..3 {
         db::open(&path).unwrap();
     }
-    assert_eq!(user_version(&path), 2);
+    assert_eq!(user_version(&path), db::migrations::STEPS.last().unwrap().0);
 }
