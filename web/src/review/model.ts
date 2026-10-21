@@ -1,4 +1,4 @@
-import type { Counts, Outcome, ReviewPhoto, ShootReview } from "../api/types";
+import type { Counts, Outcome, ReviewPhoto, ShootReview, YourCall } from "../api/types";
 
 /** Chip order: `1`-`5` pick these. "Your call" is the unreviewed pile. */
 export const FILTER_ORDER: readonly Outcome[] = [
@@ -27,12 +27,21 @@ export interface ViewBurst {
   rest: number[];
 }
 
+/** Two frames the helper could not choose between, shown together above the bursts. */
+export interface ViewPair {
+  id: number;
+  a: number;
+  b: number;
+  tradeoff: string;
+}
+
 export interface ViewMoment {
   idx: number;
+  pairs: ViewPair[];
   start: string | null;
   end: string | null;
   bursts: ViewBurst[];
-  /** Navigation order inside the moment: every large frame, then the strips. */
+  /** Navigation order inside the moment: the your-call pairs, every large frame, then the strips. */
   order: number[];
   /** Over all the moment's photos, whatever the filter. */
   shots: number;
@@ -77,13 +86,30 @@ export function buildView(
   review: Pick<ShootReview, "moments" | "highlights">,
   photos: PhotoMap,
   filter: Outcome | null,
+  yourCalls: readonly YourCall[] = [],
 ): ReviewView {
   const visible = (id: number): boolean => {
     const photo = photos[String(id)];
     return photo !== undefined && (filter === null || photo.outcome === filter);
   };
   const moments: ViewMoment[] = [];
+  const paired = new Set<number>();
   for (const moment of review.moments) {
+    const inMoment = new Set(moment.bursts.flatMap((b) => b.photo_ids));
+    const pairs: ViewPair[] = [];
+    for (const call of yourCalls) {
+      const usable =
+        inMoment.has(call.a) &&
+        inMoment.has(call.b) &&
+        visible(call.a) &&
+        visible(call.b) &&
+        !paired.has(call.a) &&
+        !paired.has(call.b);
+      if (!usable) continue;
+      paired.add(call.a);
+      paired.add(call.b);
+      pairs.push({ id: call.id, a: call.a, b: call.b, tradeoff: call.tradeoff });
+    }
     const byOutcome = emptyOutcomeCounts();
     let shots = 0;
     let bloopers = 0;
@@ -96,17 +122,22 @@ export function buildView(
         byOutcome[photo.outcome] += 1;
         if (photo.blooper) bloopers += 1;
       }
-      const shown = burst.photo_ids.filter(visible);
+      const shown = burst.photo_ids.filter((id) => visible(id) && !paired.has(id));
       const [top, ...rest] = shown;
       if (top !== undefined) bursts.push({ idx: burst.idx, top, rest });
     }
-    if (bursts.length === 0) continue;
+    if (bursts.length === 0 && pairs.length === 0) continue;
     moments.push({
       idx: moment.idx,
+      pairs,
       start: moment.start,
       end: moment.end,
       bursts,
-      order: [...bursts.map((b) => b.top), ...bursts.flatMap((b) => b.rest)],
+      order: [
+        ...pairs.flatMap((p) => [p.a, p.b]),
+        ...bursts.map((b) => b.top),
+        ...bursts.flatMap((b) => b.rest),
+      ],
       shots,
       byOutcome,
       bloopers,
@@ -144,12 +175,54 @@ export function stepMoment(view: ReviewView, id: number | null, delta: -1 | 1): 
 export function burstOf(view: ReviewView, id: number | null): number[] {
   if (id === null) return [];
   for (const moment of view.moments) {
+    for (const pair of moment.pairs) {
+      if (pair.a === id || pair.b === id) return [pair.a, pair.b];
+    }
     for (const burst of moment.bursts) {
       const frames = [burst.top, ...burst.rest];
       if (frames.includes(id)) return frames;
     }
   }
   return [];
+}
+
+export type AcceptScope = { photoId: number } | { momentIdx: number } | "all";
+
+export interface Acceptance {
+  photoId: number;
+  outcome: Exclude<Outcome, "unreviewed">;
+  blooper: boolean;
+}
+
+/**
+ * The helper's suggestions that are still open: unreviewed photos with a
+ * proposal, in navigation order. A decided photo is never touched.
+ */
+export function acceptable(
+  view: ReviewView,
+  photos: PhotoMap,
+  scope: AcceptScope,
+): Acceptance[] {
+  const ids =
+    scope === "all"
+      ? view.order
+      : "photoId" in scope
+        ? [scope.photoId]
+        : (view.moments.find((m) => m.idx === scope.momentIdx)?.order ?? []);
+  const out: Acceptance[] = [];
+  for (const id of ids) {
+    const photo = photos[String(id)];
+    const proposal = photo?.proposal;
+    if (photo && proposal && photo.outcome === "unreviewed") {
+      out.push({ photoId: id, outcome: proposal.outcome, blooper: proposal.blooper || photo.blooper });
+    }
+  }
+  return out;
+}
+
+/** The moment holding `id`, over the visible photos. */
+export function momentOf(view: ReviewView, id: number | null): ViewMoment | undefined {
+  return id === null ? undefined : view.moments.find((m) => m.order.includes(id));
 }
 
 function clock(time: string | null): string | null {

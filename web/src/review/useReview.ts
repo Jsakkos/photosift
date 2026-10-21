@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { getReview, setOutcome as postOutcome } from "../api/client";
-import type { Outcome, ServerEvent, ShootReview } from "../api/types";
+import {
+  cancelHelper,
+  getReview,
+  runHelper,
+  setDecisionNote,
+  setOutcome as postOutcome,
+} from "../api/client";
+import type { Criterion, Outcome, ServerEvent, ShootReview } from "../api/types";
 import { useServerEvents } from "../api/ws";
 import { MutationClock, mergePhotos, type PhotoMap } from "./model";
 
@@ -26,11 +32,18 @@ export interface ReviewData {
   error: string | null;
   progress: EnrichProgress | null;
   /** Optimistic: the screen changes now, the server answer reconciles it. */
-  setOutcome: (photoId: number, outcome: Outcome, blooper?: boolean) => void;
+  setOutcome: (photoId: number, outcome: Outcome, blooper?: boolean) => Promise<boolean>;
   reload: () => void;
+  /** Starts a helper run; the status line follows the `helper_status` events. */
+  retryHelper: () => void;
+  /** Stops the running helper run; it then shows as failed, "stopped by you". */
+  stopHelper: () => void;
+  /** Why the user chose differently from the proposal; shown at once, saved in the background. */
+  setNote: (photoId: number, criterion: Criterion, note?: string) => void;
 }
 
 const REFETCH_DEBOUNCE_MS = 1500;
+const PROPOSALS_DEBOUNCE_MS = 300;
 
 /** Loads a shoot's review and keeps it live; outcome changes are sent one at a time per photo. */
 export function useReview(shootId: number, notify: (notice: Notice) => void): ReviewData {
@@ -47,6 +60,7 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
   const latest = useRef(0);
   const notifyRef = useRef(notify);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const proposalsTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
     photosRef.current = photos;
     notifyRef.current = notify;
@@ -90,6 +104,8 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
       latest.current += 1;
       clearTimeout(timer.current);
       timer.current = undefined;
+      clearTimeout(proposalsTimer.current);
+      proposalsTimer.current = undefined;
     };
   }, [reload]);
 
@@ -103,8 +119,29 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
     }, REFETCH_DEBOUNCE_MS);
   }, [reload]);
 
+  const scheduleProposalsReload = useCallback(() => {
+    clearTimeout(proposalsTimer.current);
+    proposalsTimer.current = setTimeout(() => {
+      proposalsTimer.current = undefined;
+      reload();
+    }, PROPOSALS_DEBOUNCE_MS);
+  }, [reload]);
+
   useServerEvents((event: ServerEvent) => {
-    if (event.type === "enrich_progress" && event.shoot_id === shootId) {
+    if (event.type === "proposals_changed" && event.shoot_id === shootId) {
+      scheduleProposalsReload();
+    } else if (event.type === "helper_status" && event.shoot_id === shootId) {
+      setReview((r) =>
+        r
+          ? {
+              ...r,
+              helper: { ...r.helper, status: event.status, run_id: event.run_id, error: event.error },
+            }
+          : r,
+      );
+      // The summary and the final counts arrive with the finished run.
+      if (event.status !== "queued" && event.status !== "running") scheduleProposalsReload();
+    } else if (event.type === "enrich_progress" && event.shoot_id === shootId) {
       setProgress({ done: event.done, total: event.total });
       scheduleReload();
     } else if (event.type === "enrich_done" && event.shoot_id === shootId) {
@@ -116,10 +153,10 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
   }, reload);
 
   const setOutcome = useCallback(
-    (photoId: number, outcome: Outcome, blooper?: boolean) => {
+    (photoId: number, outcome: Outcome, blooper?: boolean): Promise<boolean> => {
       const key = String(photoId);
       const before = photosRef.current[key];
-      if (!before) return;
+      if (!before) return Promise.resolve(false);
       if (!confirmed.current.has(photoId)) {
         confirmed.current.set(photoId, { outcome: before.outcome, blooper: before.blooper });
       }
@@ -132,7 +169,7 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
       clock.current.touch(photoId);
       inFlight.current.set(photoId, (inFlight.current.get(photoId) ?? 0) + 1);
 
-      const run = async () => {
+      const run = async (): Promise<boolean> => {
         try {
           const res = await postOutcome(photoId, outcome, blooper);
           const truth = { outcome: res.outcome, blooper: res.blooper };
@@ -145,21 +182,59 @@ export function useReview(shootId: number, notify: (notice: Notice) => void): Re
               text: `Saved, but the Lightroom sidecar could not be written: ${res.xmp_error}`,
             });
           }
+          return true;
         } catch (e) {
           const text = e instanceof Error ? e.message : String(e);
           notifyRef.current({ kind: "error", text: `Could not save that change: ${text}` });
           const truth = confirmed.current.get(photoId);
           if (truth && (inFlight.current.get(photoId) ?? 0) <= 1) apply(truth);
+          return false;
         } finally {
           clock.current.touch(photoId);
           inFlight.current.set(photoId, Math.max(0, (inFlight.current.get(photoId) ?? 1) - 1));
         }
       };
       const previous = chains.current.get(photoId) ?? Promise.resolve();
-      chains.current.set(photoId, previous.then(run));
+      const settled = previous.then(run);
+      chains.current.set(photoId, settled.then(() => undefined));
+      return settled;
     },
     [],
   );
 
-  return { review, photos, error, progress, setOutcome, reload };
+  const retryHelper = useCallback(() => {
+    runHelper(shootId).then(
+      () => {
+        setReview((r) => (r ? { ...r, helper: { ...r.helper, status: "queued", error: null } } : r));
+        reload();
+      },
+      (e: unknown) => {
+        const text = e instanceof Error ? e.message : String(e);
+        notifyRef.current({ kind: "error", text: `Could not start the helper: ${text}` });
+        reload();
+      },
+    );
+  }, [shootId, reload]);
+
+  const stopHelper = useCallback(() => {
+    cancelHelper(shootId).then(reload, (e: unknown) => {
+      const text = e instanceof Error ? e.message : String(e);
+      notifyRef.current({ kind: "error", text: `Could not stop the helper: ${text}` });
+      reload();
+    });
+  }, [shootId, reload]);
+
+  const setNote = useCallback((photoId: number, criterion: Criterion, note?: string) => {
+    const key = String(photoId);
+    setPhotos((p) => {
+      const photo = p[key];
+      return photo?.proposal ? { ...p, [key]: { ...photo, proposal: { ...photo.proposal, criterion } } } : p;
+    });
+    setDecisionNote(photoId, criterion, note).catch((e: unknown) => {
+      const text = e instanceof Error ? e.message : String(e);
+      notifyRef.current({ kind: "error", text: `Could not save that reason: ${text}` });
+    });
+  }, []);
+
+  return { review, photos, error, progress, setOutcome, reload, retryHelper, stopHelper, setNote };
 }

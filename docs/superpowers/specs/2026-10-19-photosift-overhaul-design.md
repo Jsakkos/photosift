@@ -211,6 +211,7 @@ The user's existing library is an answer key: 34 past shoots have an `Export\` f
 - Every change to prompts, signals, or ranking is re-scored before it ships. Results are tracked over time.
 - The harness never writes into the library (no XMP, no exports); it reads originals and writes to its own scratch space.
 - Target numbers are left to the builder to propose after a first baseline; the bar is "good enough that the user trusts the draft".
+- Status: the baseline (signals only, 3 shoots) has been measured; the helper's quality bar is pending the user.
 
 ---
 
@@ -248,7 +249,7 @@ Supporting feature, not the centerpiece.
 
 | Risk | Why it matters | What to do |
 |---|---|---|
-| **Subscription route for the helper** | Third-party reports (not confirmed against Anthropic's docs) say `claude -p` / Agent-SDK usage on subscription plans may draw on a separate monthly credit pool (reported effective 2026-06-15), and that Anthropic's terms restrict using subscription OAuth tokens outside official tools. Running the official `claude` CLI on their own machine is the most defensible route, but usage limits could make a 400-photo run slow or partial. | Check Anthropic's current Claude Code docs/terms before building on it; measure real usage on one full shoot in the first milestone; keep the transport swappable (§8). |
+| **Subscription route for the helper** | **Measured (Plan 2 Task 0).** `claude -p` signed in with a plan draws on the plan's usage limits, not the separate monthly API credit, which applies only when an API key is used. Anthropic's terms bar automated access unless explicitly permitted; the docs are not an explicit green light, the user was informed and chose to proceed with the official unmodified CLI under their own login (never store or proxy tokens, never `--bare`, no sharing of plan access). Measured cost: one 372-photo shoot with sonnet and no crops was $0.57 (client-side estimate, 168 s, 12 album picks); about $1.2 estimated with crops. Isolation flags (empty cwd outside any repo, `--strict-mcp-config`, `--setting-sources local`, `--disable-slash-commands`, `--permission-mode dontAsk`, `--system-prompt-file`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`) cut the fixed per-run context from about 55k to about 1.6k tokens. On Pro the 5-hour session limit stopped a run, and dev sessions share that allowance; budget cap `helper_max_budget_usd` is the effective guard. | Transport stays swappable (`cli`, `cli-api-key`, `off`, §8); re-measure after prompt changes; the user reads the usage meter for the measured run. |
 | **Immich API changes (v3)** | Reports say the old replace-asset endpoint was removed (copy-asset suggested instead) and album responses no longer list assets (use metadata search). Affects "swap in the Lightroom edit". | Confirm the user's Immich version and build against its OpenAPI spec. |
 | **Lightroom XMP field handling** | Which fields Lightroom reads on import (rating, label, hierarchical keywords, `xmpDM:pick`) and precedence when the catalog already has the photo. | Verify with a real import into a test catalog before fixing the mapping. |
 | **Face recall in group shots** | Prototype YuNet setup misses small faces (user memory `project_face_detection_recall_gap.md`). Party photos are full of them. | Test tiling/larger input against the party shoot. |

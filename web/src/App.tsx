@@ -4,6 +4,7 @@ import { CardBanner } from "./components/CardBanner";
 import { ImportPage } from "./pages/ImportPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { ShootsPage } from "./pages/ShootsPage";
+import { TastePage } from "./pages/TastePage";
 
 export function App() {
   // The review screen uses the whole window: photos are the content.
@@ -21,6 +22,7 @@ export function App() {
           <Route path="/" element={<ShootsPage />} />
           <Route path="/import/:scanId" element={<ImportPage />} />
           <Route path="/review/:shootId" element={<ReviewPage />} />
+          <Route path="/taste" element={<TastePage />} />
           <Route path="*" element={<p className="muted">Page not found.</p>} />
         </Routes>
       </main>

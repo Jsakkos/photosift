@@ -16,7 +16,7 @@ use super::faces::Detector;
 use super::identity::Embedder;
 use super::moments;
 use super::quality::{self, gray_of};
-use super::Backend;
+use super::{Backend, FACES_MODEL, FACES_MODEL_DETECTOR_ONLY, FAKE_FACES_MODEL};
 use crate::config::Settings;
 use crate::db::photos::{self, NewFace, PhotoRow, QualityColumns};
 use crate::db::DbPool;
@@ -42,12 +42,46 @@ pub struct Status {
     pub queue: usize,
 }
 
-struct Models {
-    detector: Detector,
-    /// Faces are still detected without it; they just carry no embedding.
-    embedder: Option<Embedder>,
-    /// Effective backend: CUDA only if every loaded model runs on it.
-    backend: Backend,
+enum Models {
+    Onnx {
+        detector: Detector,
+        /// Faces are still detected without it; they just carry no embedding.
+        embedder: Option<Embedder>,
+        /// Effective backend: CUDA only if every loaded model runs on it.
+        backend: Backend,
+    },
+    /// `Overrides::fake_faces`: finds no faces and stamps `FAKE_FACES_MODEL`,
+    /// so tests can exercise the "models present" paths without the models.
+    Fake,
+}
+
+impl Models {
+    fn stamp(&self) -> &'static str {
+        match self {
+            Models::Onnx {
+                embedder: Some(_), ..
+            } => FACES_MODEL,
+            Models::Onnx { embedder: None, .. } => FACES_MODEL_DETECTOR_ONLY,
+            Models::Fake => FAKE_FACES_MODEL,
+        }
+    }
+
+    fn backend(&self) -> Backend {
+        match self {
+            Models::Onnx { backend, .. } => *backend,
+            Models::Fake => Backend::Cpu,
+        }
+    }
+
+    fn embeddings(&self) -> bool {
+        matches!(
+            self,
+            Models::Onnx {
+                embedder: Some(_),
+                ..
+            }
+        )
+    }
 }
 
 #[derive(Default)]
@@ -87,25 +121,43 @@ pub struct EnrichWorker {
     _shutdown: Arc<ShutdownOnDrop>,
 }
 
+/// Called with a shoot's id after a pass that enriched new photos, once the
+/// shoot is grouped. A pass that only re-detected faces does not call it.
+pub type AfterEnriched = Box<dyn Fn(i64) + Send + Sync>;
+
 struct Ctx {
     db: DbPool,
     events: EventHub,
     cache_root: PathBuf,
     models: Option<Models>,
     settings: Settings,
+    after_enriched: AfterEnriched,
 }
 
 impl EnrichWorker {
     /// Loads the models from `<data_root>/models` (their absence is not an
     /// error: photos still get quality signals), starts the thread, and queues
-    /// any shoot left unenriched by an earlier run.
-    pub fn start(db: DbPool, events: EventHub, data_root: &Path, settings: Settings) -> Self {
-        let models = load_models(&data_root.join("models"));
+    /// any shoot left unenriched by an earlier run. `after_enriched` follows
+    /// the `EnrichDone` of a pass that enriched new photos (the helper's queue).
+    pub fn start(
+        db: DbPool,
+        events: EventHub,
+        data_root: &Path,
+        settings: Settings,
+        after_enriched: AfterEnriched,
+        fake_faces: bool,
+    ) -> Self {
+        let models = if fake_faces {
+            Some(Models::Fake)
+        } else {
+            load_models(&data_root.join("models"))
+        };
+        let stamp = models.as_ref().map(Models::stamp);
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
             wake: Condvar::new(),
-            backend: models.as_ref().map(|m| m.backend),
-            embeddings: models.as_ref().is_some_and(|m| m.embedder.is_some()),
+            backend: models.as_ref().map(Models::backend),
+            embeddings: models.as_ref().is_some_and(Models::embeddings),
         });
         let ctx = Ctx {
             db: db.clone(),
@@ -113,6 +165,7 @@ impl EnrichWorker {
             cache_root: data_root.join("cache"),
             models,
             settings,
+            after_enriched,
         };
         let thread_shared = Arc::clone(&shared);
         let spawned = std::thread::Builder::new()
@@ -128,6 +181,13 @@ impl EnrichWorker {
         match photos::shoots_needing_enrichment(&db) {
             Ok(ids) => ids.into_iter().for_each(|id| worker.enqueue(id)),
             Err(e) => crate::plog!("enrich", "could not look for unenriched photos: {e:#}"),
+        }
+        // Photos enriched while no detector (or an older one) was available.
+        if let Some(stamp) = stamp {
+            match photos::shoots_needing_faces(&db, stamp) {
+                Ok(ids) => ids.into_iter().for_each(|id| worker.enqueue(id)),
+                Err(e) => crate::plog!("enrich", "could not look for stale faces: {e:#}"),
+            }
         }
         worker
     }
@@ -175,7 +235,7 @@ fn load_models(dir: &Path) -> Option<Models> {
             (None, detector_backend)
         }
     };
-    Some(Models {
+    Some(Models::Onnx {
         detector,
         embedder,
         backend,
@@ -216,7 +276,17 @@ fn run_shoot(ctx: &Ctx, shoot_id: i64) {
             return;
         }
     };
-    let total = ids.len();
+    let stale = ctx
+        .models
+        .as_ref()
+        .map(|m| photos::stale_faces_photo_ids(&ctx.db, shoot_id, m.stamp()))
+        .transpose()
+        .unwrap_or_else(|e| {
+            crate::plog!("enrich", "listing stale faces of shoot {shoot_id}: {e:#}");
+            None
+        })
+        .unwrap_or_default();
+    let total = ids.len() + stale.len();
     let done = AtomicUsize::new(0);
     let progress = |n: usize| {
         ctx.events.send(ServerEvent::EnrichProgress {
@@ -231,12 +301,26 @@ fn run_shoot(ctx: &Ctx, shoot_id: i64) {
         let analysed = catch_unwind(AssertUnwindSafe(|| enrich_photo(ctx, id)));
         if analysed.is_err() {
             crate::plog!("enrich", "enrichment of photo {id} panicked");
-            save(ctx, id, &QualityColumns::default(), &[]);
+            save(ctx, id, &QualityColumns::default(), &[], None);
+        }
+        progress(done.fetch_add(1, Ordering::SeqCst) + 1);
+    });
+    // Photos enriched above already carry the current stamp, so `stale` only
+    // holds photos from earlier runs.
+    stale.par_iter().for_each(|&id| {
+        if catch_unwind(AssertUnwindSafe(|| redetect_faces(ctx, id))).is_err() {
+            crate::plog!("enrich", "face re-detection of photo {id} panicked");
         }
         progress(done.fetch_add(1, Ordering::SeqCst) + 1);
     });
     after_shoot_enriched(ctx, shoot_id);
     ctx.events.send(ServerEvent::EnrichDone { shoot_id });
+    // Only newly enriched photos warrant a helper run. A pass that merely
+    // re-detected faces (every Plan-1 shoot once models load) must not spend
+    // the user's Claude allowance on a shoot they never asked about.
+    if !ids.is_empty() {
+        (ctx.after_enriched)(shoot_id);
+    }
 }
 
 /// Groups the shoot's photos into moments and bursts once every photo has its
@@ -248,8 +332,16 @@ fn after_shoot_enriched(ctx: &Ctx, shoot_id: i64) {
     }
 }
 
-fn save(ctx: &Ctx, photo_id: i64, quality: &QualityColumns, faces: &[NewFace]) {
-    if let Err(e) = photos::save_enrichment(&ctx.db, photo_id, quality, faces) {
+/// `stamp` is None when no detector ran on this photo, so a later start with
+/// models re-detects it.
+fn save(
+    ctx: &Ctx,
+    photo_id: i64,
+    quality: &QualityColumns,
+    faces: &[NewFace],
+    stamp: Option<&str>,
+) {
+    if let Err(e) = photos::save_enrichment(&ctx.db, photo_id, quality, faces, stamp) {
         // Left unenriched, so the next start retries it.
         crate::plog!("enrich", "saving enrichment of photo {photo_id}: {e:#}");
     }
@@ -269,35 +361,88 @@ fn enrich_photo(ctx: &Ctx, id: i64) {
             "enrich",
             "photo {id}: no usable preview; recording no signals"
         );
-        save(ctx, id, &QualityColumns::default(), &[]);
+        let stamp = ctx
+            .models
+            .as_ref()
+            .map(|m| photos::no_preview_stamp(m.stamp()));
+        save(ctx, id, &QualityColumns::default(), &[], stamp.as_deref());
         return;
     };
     let (faces, quality) = analyse(ctx.models.as_ref(), &img);
-    save(ctx, id, &quality, &faces);
+    save(
+        ctx,
+        id,
+        &quality,
+        &faces,
+        ctx.models.as_ref().map(Models::stamp),
+    );
 }
 
-fn analyse(models: Option<&Models>, img: &RgbImage) -> (Vec<NewFace>, QualityColumns) {
+/// Re-runs only the face stage for an already-enriched photo; the other
+/// quality columns are left alone. A photo with no usable preview gets the
+/// no-preview stamp, so it is not re-queued at every start; a model change
+/// tries it again.
+fn redetect_faces(ctx: &Ctx, id: i64) {
+    let Some(models) = ctx.models.as_ref() else {
+        return;
+    };
+    let row = match photos::get_photo(&ctx.db, id) {
+        Ok(Some(row)) => row,
+        Ok(None) => return,
+        Err(e) => {
+            crate::plog!("enrich", "reading photo {id}: {e:#}");
+            return;
+        }
+    };
+    let Some(img) = load_preview(ctx, &row) else {
+        crate::plog!(
+            "enrich",
+            "photo {id}: no usable preview; faces not re-detected"
+        );
+        let stamp = photos::no_preview_stamp(models.stamp());
+        if let Err(e) = photos::save_faces_only(&ctx.db, id, &[], &stamp) {
+            crate::plog!("enrich", "stamping photo {id}: {e:#}");
+        }
+        return;
+    };
+    let faces = detect_faces(models, &img);
+    if let Err(e) = photos::save_faces_only(&ctx.db, id, &faces, models.stamp()) {
+        crate::plog!("enrich", "saving re-detected faces of photo {id}: {e:#}");
+    }
+}
+
+fn detect_faces(models: &Models, img: &RgbImage) -> Vec<NewFace> {
+    let Models::Onnx {
+        detector, embedder, ..
+    } = models
+    else {
+        return Vec::new();
+    };
     let mut faces = Vec::new();
-    if let Some(models) = models {
-        for f in models.detector.detect(img) {
-            let embedding = models.embedder.as_ref().and_then(|e| {
-                match e.embed(img, &f.landmarks_px(img.w, img.h)) {
+    for f in detector.detect(img) {
+        let embedding =
+            embedder
+                .as_ref()
+                .and_then(|e| match e.embed(img, &f.landmarks_px(img.w, img.h)) {
                     Ok(v) => Some(v.to_vec()),
                     Err(err) => {
                         crate::plog!("enrich", "embedding failed: {err:#}");
                         None
                     }
-                }
-            });
-            faces.push(NewFace {
-                bbox: f.bbox,
-                landmarks: f.landmarks,
-                score: f.score,
-                embedding,
-                sharpness: quality::face_sharpness(img, &f),
-            });
-        }
+                });
+        faces.push(NewFace {
+            bbox: f.bbox,
+            landmarks: f.landmarks,
+            score: f.score,
+            embedding,
+            sharpness: quality::face_sharpness(img, &f),
+        });
     }
+    faces
+}
+
+fn analyse(models: Option<&Models>, img: &RgbImage) -> (Vec<NewFace>, QualityColumns) {
+    let faces = models.map_or_else(Vec::new, |m| detect_faces(m, img));
     let face_sharpness = faces.iter().filter_map(|f| f.sharpness).reduce(f64::max);
 
     let q = match small_gray(img) {

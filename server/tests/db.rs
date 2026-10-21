@@ -52,7 +52,7 @@ fn migrate_is_idempotent() {
     let version: i64 = pool
         .with(|c| c.query_row("PRAGMA user_version", [], |r| r.get(0)))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, db::migrations::STEPS.last().unwrap().0);
 }
 
 #[test]

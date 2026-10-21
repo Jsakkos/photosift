@@ -11,6 +11,18 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 
+/// Stamp stored in `photos.faces_model` for faces produced by the detector and
+/// the identity embedder. A change of either model must change this string so
+/// stale photos are re-detected.
+pub const FACES_MODEL: &str = "yunet-2023mar+sface-2021dec";
+
+/// The stamp when the identity model is missing: faces carry no embedding.
+pub const FACES_MODEL_DETECTOR_ONLY: &str = "yunet-2023mar";
+
+/// The stamp of the test-only face stage (`Overrides::fake_faces`).
+#[doc(hidden)]
+pub const FAKE_FACES_MODEL: &str = "fake-faces";
+
 /// Where inference actually runs; reported by `GET /api/status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {

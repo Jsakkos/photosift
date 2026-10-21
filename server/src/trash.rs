@@ -57,12 +57,17 @@ fn present(path: &Path) -> bool {
 /// Trashes the pending deletes of the shoot that the user approved, i.e. the
 /// ones in `approved` (the exact set the confirm dialog listed). A photo marked
 /// delete after that dialog opened is not in `approved` and stays. See
-/// `trash_photos`.
+/// `trash_photos`. With `read_only` (`Settings::read_only`, the eval
+/// harness) it refuses outright and touches no file.
 pub fn trash_approved_deletes(
     db: &DbPool,
     shoot_id: i64,
     approved: &[i64],
+    read_only: bool,
 ) -> anyhow::Result<TrashReport> {
+    if read_only {
+        anyhow::bail!("read-only: nothing is sent to the Recycle Bin");
+    }
     let wanted: HashSet<i64> = approved.iter().copied().collect();
     let snapshot: Vec<PhotoRow> = photos::pending_deletes(db, shoot_id)?
         .into_iter()

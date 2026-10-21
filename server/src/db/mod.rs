@@ -1,3 +1,5 @@
+pub mod helper;
+pub mod migrations;
 pub mod photos;
 pub mod review;
 
@@ -9,7 +11,7 @@ use std::{
 use anyhow::Context;
 use rusqlite::Connection;
 
-const SCHEMA_V1: &str = include_str!("schema.sql");
+pub const SCHEMA_V1: &str = include_str!("schema.sql");
 
 /// Single shared connection. SQLite serializes writers anyway and this server
 /// is single-user, so a mutex beats a pool's complexity.
@@ -26,6 +28,19 @@ impl DbPool {
         // (open transactions roll back on drop), so recovering from poison is safe.
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         Ok(f(&conn)?)
+    }
+
+    /// Runs `f` in one transaction, committed when it returns `Ok`. Unlike
+    /// `with`, `f` may fail with any error (e.g. a typed domain error).
+    pub fn with_tx<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.unchecked_transaction()?;
+        let value = f(&tx)?;
+        tx.commit()?;
+        Ok(value)
     }
 }
 
@@ -50,6 +65,16 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             "BEGIN;\n{SCHEMA_V1}\nPRAGMA user_version = 1;\nCOMMIT;"
         ))
         .context("applying schema v1")?;
+    }
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    for &(step, sql) in migrations::STEPS.iter().filter(|(n, _)| *n > version) {
+        conn.execute_batch(&format!(
+            "BEGIN;
+{sql}
+PRAGMA user_version = {step};
+COMMIT;"
+        ))
+        .with_context(|| format!("applying migration step {step}"))?;
     }
     Ok(())
 }

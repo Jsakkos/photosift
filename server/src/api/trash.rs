@@ -29,7 +29,12 @@ pub async fn trash_shoot(
         if review::get_shoot(&state.db, id)?.is_none() {
             return Ok(None);
         }
-        let report = trash::trash_approved_deletes(&state.db, id, &body.photo_ids)?;
+        let report = trash::trash_approved_deletes(
+            &state.db,
+            id,
+            &body.photo_ids,
+            state.settings.read_only,
+        )?;
         if report.trashed > 0 {
             // Re-number moments and bursts without the trashed frames.
             if let Err(e) = moments::assign(&state.db, id, &state.settings) {

@@ -1,7 +1,11 @@
 import type {
   CardScan,
+  ChatMessage,
   CardScanSummary,
   ClientSettings,
+  Criterion,
+  DecisionNoteRequest,
+  HelperRunStarted,
   ImportRequest,
   ImportStarted,
   JobStateReply,
@@ -11,6 +15,8 @@ import type {
   ServerStatus,
   ShootReview,
   ShootSummary,
+  TasteDecision,
+  TasteProfile,
   TrashReport,
 } from "./types";
 
@@ -51,7 +57,7 @@ async function errorMessage(res: Response): Promise<string> {
 }
 
 async function request<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PUT",
   path: string,
   body?: unknown,
 ): Promise<T> {
@@ -121,8 +127,56 @@ export const setOutcome = (photoId: number, outcome: Outcome, blooper?: boolean)
 export const trashDeletes = (shootId: number, photoIds: number[]) =>
   request<TrashReport>("POST", `/api/shoots/${shootId}/trash`, { photo_ids: photoIds });
 
+/** Runs the helper on the shoot now: 409 while one is queued or running, 503 when unavailable. */
+export const runHelper = (shootId: number) =>
+  request<HelperRunStarted>("POST", `/api/shoots/${shootId}/helper/run`);
+
+/** Stops the shoot's helper run (it fails "stopped by you"): 204, or 404 when there is none. */
+export const cancelHelper = async (shootId: number): Promise<void> => {
+  const res = await fetch(`/api/shoots/${shootId}/helper/cancel`, { method: "POST" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
+};
+
+/** The shoot's conversation with the helper. */
+export const getChat = (shootId: number) =>
+  request<ChatMessage[]>("GET", `/api/shoots/${shootId}/chat`);
+
+/** 202 once the helper is answering (the answer arrives as `chat_message` events); 409 while it is still on the last message. */
+export const sendChat = async (shootId: number, text: string): Promise<void> => {
+  const res = await fetch(`/api/shoots/${shootId}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
+};
+
+/** Why the user overrode a proposal; `note` goes with `other`. */
+export const setDecisionNote = async (
+  photoId: number,
+  criterion: Criterion,
+  note?: string,
+): Promise<void> => {
+  const body: DecisionNoteRequest = note === undefined ? { criterion } : { criterion, note };
+  const res = await fetch(`/api/photos/${photoId}/decision-note`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
+};
+
 export const previewUrl = (photoId: number) => `/media/preview/${photoId}`;
 /** A thumbnail of a picture still on the card, by scan and item index. */
 export const scanThumbUrl = (scanId: string, idx: number) =>
   `/media/scan/${encodeURIComponent(scanId)}/${idx}`;
 export const thumbUrl = (photoId: number) => `/media/thumb/${photoId}`;
+
+export const getTaste = () => request<TasteProfile>("GET", "/api/taste");
+
+/** 400 over 4000 characters. */
+export const saveTaste = (text: string) => request<TasteProfile>("PUT", "/api/taste", { text });
+
+/** The newest overrides, newest first. */
+export const getTasteDecisions = (limit = 50) =>
+  request<TasteDecision[]>("GET", `/api/taste/decisions?limit=${limit}`);

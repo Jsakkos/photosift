@@ -1,6 +1,8 @@
 //! The import job: copies the chosen events from a scanned card into the
 //! library, verifies and dedupes every file, renders previews and records the
-//! rows. Blocking; the API runs it on its own thread.
+//! rows. Blocking; the API runs it on its own thread. The eval harness runs
+//! the same job in `ImportMode::IndexInPlace`, which records files where they
+//! are instead of copying them.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -99,6 +101,17 @@ pub fn validate(scan: &CardScan, req: &ImportRequest) -> Result<(), String> {
     Ok(())
 }
 
+/// How an import treats the source files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportMode {
+    /// Copy into the library folder of each event (the app's import).
+    Copy,
+    /// The eval harness only: rows point at the source files, the shoot's
+    /// folder is the scanned folder, previews go to the cache. Nothing is
+    /// copied and no folder is created; the source is only read.
+    IndexInPlace,
+}
+
 pub struct JobCtx {
     pub db: DbPool,
     pub events: EventHub,
@@ -122,29 +135,54 @@ struct Summary {
 /// were committed before a failure are still handed to enrichment: their
 /// photos are real and resumable.
 pub fn run(ctx: &JobCtx, job_id: &str, scan: &CardScan, req: &ImportRequest) {
+    // The outcome is reported as an event.
+    let _ = run_with_mode(ctx, job_id, scan, req, ImportMode::Copy);
+}
+
+/// `run` in either mode; also returns the outcome (the new shoots' ids, or
+/// the error the event carried).
+pub fn run_with_mode(
+    ctx: &JobCtx,
+    job_id: &str,
+    scan: &CardScan,
+    req: &ImportRequest,
+    mode: ImportMode,
+) -> Result<Vec<i64>, String> {
     let mut summary = Summary::default();
-    let result = run_events(ctx, job_id, scan, req, &mut summary);
+    let result = run_events(ctx, job_id, scan, req, mode, &mut summary);
     for &shoot_id in summary.shoot_ids.iter().chain(&summary.attached_shoot_ids) {
         ctx.enrich.enqueue(shoot_id);
     }
-    ctx.events.send(match result {
-        Ok(()) => ServerEvent::ImportDone {
-            job_id: job_id.to_string(),
-            shoot_ids: summary.shoot_ids,
-            copied: summary.copied,
-            skipped_duplicates: summary.skipped,
-        },
-        Err(e) => ServerEvent::ImportFailed {
-            job_id: job_id.to_string(),
-            error: format!("{e:#}"),
-        },
-    });
+    let (event, outcome) = match result {
+        Ok(()) => (
+            ServerEvent::ImportDone {
+                job_id: job_id.to_string(),
+                shoot_ids: summary.shoot_ids.clone(),
+                copied: summary.copied,
+                skipped_duplicates: summary.skipped,
+            },
+            Ok(summary.shoot_ids),
+        ),
+        Err(e) => {
+            let error = format!("{e:#}");
+            (
+                ServerEvent::ImportFailed {
+                    job_id: job_id.to_string(),
+                    error: error.clone(),
+                },
+                Err(error),
+            )
+        }
+    };
+    ctx.events.send(event);
+    outcome
 }
 
 /// Shared by the worker threads of one job.
 struct Shared<'a> {
     ctx: &'a JobCtx,
     job_id: &'a str,
+    mode: ImportMode,
     total: usize,
     offsets: &'a HashMap<String, i64>,
     claims: NameClaims,
@@ -189,6 +227,7 @@ fn run_events(
     job_id: &str,
     scan: &CardScan,
     req: &ImportRequest,
+    mode: ImportMode,
     summary: &mut Summary,
 ) -> anyhow::Result<()> {
     for dir in ["preview", "thumb", "tmp"] {
@@ -209,6 +248,7 @@ fn run_events(
     let shared = Shared {
         ctx,
         job_id,
+        mode,
         total: req.events.iter().map(|e| e.item_idxs.len()).sum(),
         offsets: &req.camera_offsets,
         claims: NameClaims::default(),
@@ -225,9 +265,15 @@ fn run_events(
             .collect();
         let first = *times.iter().min().expect("validated non-empty");
         let last = *times.iter().max().expect("validated non-empty");
-        let folder = folder_path(&ctx.library_root, ev.kind, first.date(), &ev.name);
-        // A crash leaves .partial files that no later run would ever name again.
-        sweep_partials(&folder);
+        let folder = match mode {
+            ImportMode::Copy => {
+                let folder = folder_path(&ctx.library_root, ev.kind, first.date(), &ev.name);
+                // A crash leaves .partial files that no later run would ever name again.
+                sweep_partials(&folder);
+                folder
+            }
+            ImportMode::IndexInPlace => scan.source.clone(),
+        };
 
         let results: Vec<anyhow::Result<Outcome>> = pool.install(|| {
             items
@@ -380,9 +426,13 @@ fn process_photo(
     let bytes = fs::read(&item.primary).with_context(|| format!("reading {name}"))?;
     let sha256 = sha256_hex(&bytes);
     if !shared.is_fresh(&sha256)? {
-        // The RAW is already here, but its camera JPEG may be new (RAWs
-        // imported first, RAW+JPEG card later) and must not be lost.
-        return process_orphan_sibling(shared, item, folder, &sha256);
+        return match shared.mode {
+            // The RAW is already here, but its camera JPEG may be new (RAWs
+            // imported first, RAW+JPEG card later) and must not be lost.
+            ImportMode::Copy => process_orphan_sibling(shared, item, folder, &sha256),
+            // A second copy of a frame inside the indexed folder.
+            ImportMode::IndexInPlace => Ok(Outcome::Skipped),
+        };
     }
     copy_photo(shared, item, name, folder, &bytes, &sha256)
 }
@@ -444,7 +494,19 @@ fn process_orphan_sibling(
     copy_photo(shared, &jpeg_item, &name, folder, &jpeg, &hash)
 }
 
-/// Copies a photo whose primary hash `sha256` was just accepted as new.
+/// Where a photo's files are, and their `files` rows.
+struct Placed {
+    main_path: String,
+    main_sha256: String,
+    jpeg_path: Option<String>,
+    files: Vec<NewFile>,
+}
+
+/// A sibling JPEG accepted as new: its source path, bytes and hash.
+type FreshSibling<'a> = Option<(&'a Path, Vec<u8>, String)>;
+
+/// Copies a photo whose primary hash `sha256` was just accepted as new (in
+/// `IndexInPlace`, records it where it is).
 fn copy_photo(
     shared: &Shared,
     item: &ScanItem,
@@ -455,47 +517,19 @@ fn copy_photo(
 ) -> anyhow::Result<Outcome> {
     // A sibling whose content is already in the library is not copied again;
     // files.sha256 is unique, so registering it twice would fail the event.
-    let sibling = match &item.sibling_jpeg {
+    let sibling: FreshSibling = match &item.sibling_jpeg {
         Some(path) => {
             let jpeg = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
             let hash = sha256_hex(&jpeg);
             let fresh = shared.is_fresh(&hash)?;
-            fresh.then(|| (file_name_string(path), jpeg, hash))
+            fresh.then_some((path.as_path(), jpeg, hash))
         }
         None => None,
     };
-
-    fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
-    let mut members = vec![Member::of(name, sha256)];
-    if let Some((file_name, _, hash)) = &sibling {
-        members.push(Member::of(file_name, hash));
-    }
-    let n = shared.claims.claim(folder, &members);
-    // Always pass the claimed stem, even for n == 0: left to itself the writer
-    // would re-pick a name for that one file without the pair's context and
-    // could split the pair (e.g. a stray .xmp pushing only the JPEG to _1).
-    let stem_for = |file_name: &str| suffixed_stem(file_name, n);
-
-    let main = write_verified(bytes, name, folder, Some(&stem_for(name)))
-        .with_context(|| format!("copying {name}"))?;
-    let mut files = vec![NewFile {
-        sha256: main.sha256.clone(),
-        path: main.dest.to_string_lossy().into_owned(),
-        name: name.to_string(),
-        size: bytes.len() as i64,
-    }];
-    let mut jpeg_path = None;
-    if let Some((file_name, jpeg, _)) = &sibling {
-        let copied = write_verified(jpeg, file_name, folder, Some(&stem_for(file_name)))
-            .with_context(|| format!("copying {file_name}"))?;
-        files.push(NewFile {
-            sha256: copied.sha256,
-            path: copied.dest.to_string_lossy().into_owned(),
-            name: file_name.clone(),
-            size: jpeg.len() as i64,
-        });
-        jpeg_path = Some(copied.dest.to_string_lossy().into_owned());
-    }
+    let placed = match shared.mode {
+        ImportMode::Copy => write_copies(shared, name, folder, bytes, sha256, &sibling)?,
+        ImportMode::IndexInPlace => in_place(item, name, bytes, sha256, &sibling),
+    };
 
     let ext = item
         .primary
@@ -503,11 +537,10 @@ fn copy_photo(
         .map(|e| e.to_string_lossy().into_owned())
         .unwrap_or_default();
     let is_jpeg_item = matches!(ext.to_ascii_lowercase().as_str(), "jpg" | "jpeg");
-    let main_path = main.dest.to_string_lossy().into_owned();
     let (raw_path, jpeg_path) = if is_jpeg_item {
-        (None, Some(main_path))
+        (None, Some(placed.main_path))
     } else {
-        (Some(main_path), jpeg_path)
+        (Some(placed.main_path), placed.jpeg_path)
     };
 
     let rendered = render_previews(shared, item, bytes, &ext);
@@ -535,7 +568,7 @@ fn copy_photo(
                 raw_path,
                 jpeg_path,
                 video_path: None,
-                sha256: main.sha256,
+                sha256: placed.main_sha256,
                 camera: Some(item.camera.clone()),
                 capture_time_orig: Some(item.capture_time),
                 capture_time: Some(item.capture_time + offset),
@@ -545,10 +578,95 @@ fn copy_photo(
                 height,
                 phash: phash_value,
             },
-            files,
+            files: placed.files,
         },
         previews,
     })))
+}
+
+/// The source files themselves; nothing is written.
+fn in_place(
+    item: &ScanItem,
+    name: &str,
+    bytes: &[u8],
+    sha256: &str,
+    sibling: &FreshSibling,
+) -> Placed {
+    let main_path = item.primary.to_string_lossy().into_owned();
+    let mut files = vec![NewFile {
+        sha256: sha256.to_string(),
+        path: main_path.clone(),
+        name: name.to_string(),
+        size: bytes.len() as i64,
+    }];
+    let jpeg_path = sibling.as_ref().map(|(path, jpeg, hash)| {
+        let path_str = path.to_string_lossy().into_owned();
+        files.push(NewFile {
+            sha256: hash.clone(),
+            path: path_str.clone(),
+            name: file_name_string(path),
+            size: jpeg.len() as i64,
+        });
+        path_str
+    });
+    Placed {
+        main_path,
+        main_sha256: sha256.to_string(),
+        jpeg_path,
+        files,
+    }
+}
+
+/// Copies the primary and its fresh sibling into `folder`, verified.
+fn write_copies(
+    shared: &Shared,
+    name: &str,
+    folder: &Path,
+    bytes: &[u8],
+    sha256: &str,
+    sibling: &FreshSibling,
+) -> anyhow::Result<Placed> {
+    let sibling = sibling
+        .as_ref()
+        .map(|(path, jpeg, hash)| (file_name_string(path), jpeg, hash));
+    fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
+    let mut members = vec![Member::of(name, sha256)];
+    if let Some((file_name, _, hash)) = &sibling {
+        members.push(Member::of(file_name, hash));
+    }
+    let n = shared.claims.claim(folder, &members);
+    // Always pass the claimed stem, even for n == 0: left to itself the writer
+    // would re-pick a name for that one file without the pair's context and
+    // could split the pair (e.g. a stray .xmp pushing only the JPEG to _1).
+    let stem_for = |file_name: &str| suffixed_stem(file_name, n);
+
+    let main = write_verified(bytes, name, folder, Some(&stem_for(name)))
+        .with_context(|| format!("copying {name}"))?;
+    let main_path = main.dest.to_string_lossy().into_owned();
+    let mut files = vec![NewFile {
+        sha256: main.sha256.clone(),
+        path: main_path.clone(),
+        name: name.to_string(),
+        size: bytes.len() as i64,
+    }];
+    let mut jpeg_path = None;
+    if let Some((file_name, jpeg, _)) = &sibling {
+        let copied = write_verified(jpeg, file_name, folder, Some(&stem_for(file_name)))
+            .with_context(|| format!("copying {file_name}"))?;
+        files.push(NewFile {
+            sha256: copied.sha256,
+            path: copied.dest.to_string_lossy().into_owned(),
+            name: file_name.clone(),
+            size: jpeg.len() as i64,
+        });
+        jpeg_path = Some(copied.dest.to_string_lossy().into_owned());
+    }
+    Ok(Placed {
+        main_path,
+        main_sha256: main.sha256,
+        jpeg_path,
+        files,
+    })
 }
 
 struct RenderedItem {
@@ -600,20 +718,34 @@ fn process_video(
     if !shared.is_fresh(&sha256)? {
         return Ok(Outcome::Skipped);
     }
+    if shared.mode == ImportMode::IndexInPlace {
+        let path = item.primary.to_string_lossy().into_owned();
+        return Ok(video_outcome(shared, item, name, path, sha256));
+    }
     fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
     let n = shared.claims.claim(folder, &[Member::of(name, &sha256)]);
     let stem = suffixed_stem(name, n);
     let copied = copy_verified_expecting(&item.primary, folder, Some(&stem), Some(&sha256))
         .with_context(|| format!("copying {name}"))?;
     let dest = copied.dest.to_string_lossy().into_owned();
-    Ok(Outcome::New(Box::new(Processed {
+    Ok(video_outcome(shared, item, name, dest, copied.sha256))
+}
+
+fn video_outcome(
+    shared: &Shared,
+    item: &ScanItem,
+    name: &str,
+    dest: String,
+    sha256: String,
+) -> Outcome {
+    Outcome::New(Box::new(Processed {
         bundle: PhotoBundle {
             photo: NewPhoto {
                 shoot_id: 0,
                 raw_path: None,
                 jpeg_path: None,
                 video_path: Some(dest.clone()),
-                sha256: copied.sha256.clone(),
+                sha256: sha256.clone(),
                 camera: Some(item.camera.clone()),
                 capture_time_orig: Some(item.capture_time),
                 capture_time: Some(item.capture_time + offset_for(shared, item)),
@@ -624,12 +756,12 @@ fn process_video(
                 phash: None,
             },
             files: vec![NewFile {
-                sha256: copied.sha256,
+                sha256,
                 path: dest,
                 name: name.to_string(),
                 size: size_of(&item.primary),
             }],
         },
         previews: None,
-    })))
+    }))
 }

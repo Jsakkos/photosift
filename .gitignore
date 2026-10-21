@@ -43,3 +43,10 @@ web/playwright-report/
 
 # Local MCP config (public repo; may hold tokens)
 .mcp.json
+
+# Helper spike output and eval data (may contain photos)
+.photosift-eval/
+spikes/helper-usage/out/
+
+# Eval shoot list (real library paths)
+tests/eval/shoots.txt
