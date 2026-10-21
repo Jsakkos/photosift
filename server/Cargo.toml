@@ -37,7 +37,7 @@ zune-jpeg = "0.4"
 
 [dev-dependencies]
 futures-util = "0.3"
-tokio-tungstenite = "0.26"
+tokio-tungstenite = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tempfile = "3"
 
