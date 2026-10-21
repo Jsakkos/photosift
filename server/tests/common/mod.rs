@@ -76,6 +76,8 @@ pub async fn respawn_server(old: TestServer) -> TestServer {
 pub struct HelperSetup {
     pub claude_bin: PathBuf,
     pub env: Vec<(String, String)>,
+    /// `Overrides::fake_faces`: photos are stamped as if face models loaded.
+    pub fake_faces: bool,
 }
 
 /// Like `spawn_server_with_library`, with `edit` applied to the settings and
@@ -99,6 +101,7 @@ pub async fn spawn_server_with_helper(
     let overrides = photosift::Overrides {
         claude_bin: Some(setup.claude_bin),
         claude_env: setup.env,
+        fake_faces: setup.fake_faces,
         ..Default::default()
     };
     serve_with(data_root, None, overrides).await
@@ -112,6 +115,7 @@ pub async fn restart_server_with_helper(old: TestServer, setup: HelperSetup) -> 
     let overrides = photosift::Overrides {
         claude_bin: Some(setup.claude_bin),
         claude_env: setup.env,
+        fake_faces: setup.fake_faces,
         ..Default::default()
     };
     serve_with(old.data_root, None, overrides).await

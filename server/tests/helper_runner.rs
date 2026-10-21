@@ -125,6 +125,21 @@ impl Env {
         script: Value,
         edit: impl FnOnce(&mut photosift::config::Settings),
     ) -> Env {
+        Self::build(bin, script, edit, false).await
+    }
+
+    /// Like `new`, with the test face stage: photos get a face-model stamp as
+    /// if the models were installed.
+    async fn with_fake_faces(script: Value) -> Env {
+        Self::build(None, script, |_| {}, true).await
+    }
+
+    async fn build(
+        bin: Option<PathBuf>,
+        script: Value,
+        edit: impl FnOnce(&mut photosift::config::Settings),
+        fake_faces: bool,
+    ) -> Env {
         let library = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let script_path = scratch.path().join("script.json");
@@ -142,6 +157,7 @@ impl Env {
                     args_log.to_string_lossy().into_owned(),
                 ),
             ],
+            fake_faces,
         };
         let server = spawn_server_with_helper(library.path(), edit, setup.clone()).await;
         let pool = open(&server.data_root.path().join("photosift.db")).unwrap();
@@ -1087,6 +1103,90 @@ async fn startup_does_not_sweep_old_shoots() {
         env.run_invocations()
     );
     assert!(env.run_rows().is_empty());
+}
+
+/// Polls until `photo`'s `faces_model` is set, and returns it.
+async fn wait_faces_model(env: &Env, photo: i64) -> String {
+    for _ in 0..200 {
+        let stamp: Option<String> = env
+            .pool
+            .with(|c| {
+                c.query_row(
+                    "SELECT faces_model FROM photos WHERE id = ?1",
+                    [photo],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        if let Some(stamp) = stamp {
+            return stamp;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("photo {photo} was never stamped");
+}
+
+#[tokio::test]
+async fn redetect_only_pass_starts_no_helper_run() {
+    let env = Env::with_fake_faces(finish_only(0)).await;
+    env.settle().await;
+    // A Plan-1 photo after the faces_model migration: enriched, never stamped,
+    // with a usable preview.
+    let (shoot, photo) = env.add_shoot_with_photo("Old Party");
+    let preview = env.server.data_root.path().join("cache").join("preview");
+    std::fs::create_dir_all(&preview).unwrap();
+    std::fs::write(
+        preview.join(format!("{photo}.jpg")),
+        common::synthetic_jpeg_with_exif(
+            640,
+            480,
+            common::Pattern::Stripes,
+            &common::ExifSpec::default(),
+        ),
+    )
+    .unwrap();
+
+    let env = env.restart().await;
+    assert_eq!(
+        wait_faces_model(&env, photo).await,
+        photosift::enrich::FAKE_FACES_MODEL
+    );
+    env.settle().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        env.run_invocations().is_empty(),
+        "a re-detect-only pass spent a run: {:?}",
+        env.run_invocations()
+    );
+    assert!(env.run_rows().is_empty(), "{:?}", env.run_rows());
+    assert_eq!(env.runs_for(shoot), 0);
+    let pending: i64 = env
+        .pool
+        .with(|c| c.query_row("SELECT COUNT(*) FROM helper_pending", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(pending, 0);
+}
+
+#[tokio::test]
+async fn no_preview_photo_is_not_requeued() {
+    let env = Env::with_fake_faces(finish_only(0)).await;
+    env.settle().await;
+    // No preview and no library file: faces cannot be re-detected.
+    let (_, photo) = env.add_shoot_with_photo("Lost Files");
+    let env = env.restart().await;
+    let stamp = wait_faces_model(&env, photo).await;
+    assert_eq!(
+        stamp,
+        format!("{}:no-preview", photosift::enrich::FAKE_FACES_MODEL)
+    );
+    // The next start has nothing to re-detect.
+    assert!(
+        photos::shoots_needing_faces(&env.pool, photosift::enrich::FAKE_FACES_MODEL)
+            .unwrap()
+            .is_empty()
+    );
+    env.settle().await;
+    assert!(env.run_invocations().is_empty());
 }
 
 // ---------------------------------------------------------------- chat

@@ -19,6 +19,10 @@ pub const FACES_MODEL: &str = "yunet-2023mar+sface-2021dec";
 /// The stamp when the identity model is missing: faces carry no embedding.
 pub const FACES_MODEL_DETECTOR_ONLY: &str = "yunet-2023mar";
 
+/// The stamp of the test-only face stage (`Overrides::fake_faces`).
+#[doc(hidden)]
+pub const FAKE_FACES_MODEL: &str = "fake-faces";
+
 /// Where inference actually runs; reported by `GET /api/status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {

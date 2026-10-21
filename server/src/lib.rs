@@ -32,6 +32,10 @@ pub struct Overrides {
     pub claude_env: Vec<(String, String)>,
     /// Sets `Settings::read_only` (the eval harness).
     pub read_only: bool,
+    /// Tests: a face stage that finds nothing but stamps photos as if models
+    /// were loaded, so the re-detect paths run without the ONNX files.
+    #[doc(hidden)]
+    pub fake_faces: bool,
 }
 
 /// Opens the database, starts the enrich worker and assembles shared state.
@@ -48,6 +52,7 @@ pub fn build_state_with(
 ) -> anyhow::Result<AppState> {
     let mut settings = config::load(data_root)?;
     settings.read_only = overrides.read_only;
+    let fake_faces = overrides.fake_faces;
     let settings = Arc::new(settings);
     let db = db::open(&data_root.join("photosift.db"))?;
     // Card thumbnails belong to scans, which live only in memory.
@@ -70,6 +75,7 @@ pub fn build_state_with(
         data_root,
         (*settings).clone(),
         Box::new(after_enriched),
+        fake_faces,
     );
     Ok(AppState {
         settings,

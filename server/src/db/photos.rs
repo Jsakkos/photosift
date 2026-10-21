@@ -545,14 +545,27 @@ pub fn shoots_needing_enrichment(pool: &DbPool) -> anyhow::Result<Vec<i64>> {
     })
 }
 
+/// Appended to a face-model stamp when the photo had no usable preview, so
+/// the detector could not look at it.
+const NO_PREVIEW_SUFFIX: &str = ":no-preview";
+
+/// The stamp for a photo `stamp`'s models could not look at (no preview):
+/// it is not stale under `stamp`, only under a later model.
+pub fn no_preview_stamp(stamp: &str) -> String {
+    format!("{stamp}{NO_PREVIEW_SUFFIX}")
+}
+
 /// Shoots with a live photo that was enriched with a different face-model
-/// stamp than `stamp` (NULL: enriched before a detector was available).
+/// stamp than `stamp` (NULL: enriched before a detector was available). A
+/// photo `stamp`'s models already found unreadable is not stale.
 pub fn shoots_needing_faces(pool: &DbPool, stamp: &str) -> anyhow::Result<Vec<i64>> {
     pool.with(|c| {
         let mut stmt = c.prepare(
-            "SELECT DISTINCT shoot_id FROM photos WHERE trashed_at IS NULL              AND enriched_at IS NOT NULL AND (faces_model IS NULL OR faces_model != ?1)              ORDER BY shoot_id",
+            "SELECT DISTINCT shoot_id FROM photos WHERE trashed_at IS NULL              AND enriched_at IS NOT NULL AND (faces_model IS NULL              OR (faces_model != ?1 AND faces_model != ?1 || ?2)) ORDER BY shoot_id",
         )?;
-        let ids = stmt.query_map([stamp], |r| r.get(0))?.collect();
+        let ids = stmt
+            .query_map(params![stamp, NO_PREVIEW_SUFFIX], |r| r.get(0))?
+            .collect();
         ids
     })
 }
@@ -565,9 +578,11 @@ pub fn stale_faces_photo_ids(
 ) -> anyhow::Result<Vec<i64>> {
     pool.with(|c| {
         let mut stmt = c.prepare(
-            "SELECT id FROM photos WHERE shoot_id = ?1 AND trashed_at IS NULL              AND enriched_at IS NOT NULL AND (faces_model IS NULL OR faces_model != ?2)              ORDER BY id",
+            "SELECT id FROM photos WHERE shoot_id = ?1 AND trashed_at IS NULL              AND enriched_at IS NOT NULL AND (faces_model IS NULL              OR (faces_model != ?2 AND faces_model != ?2 || ?3)) ORDER BY id",
         )?;
-        let ids = stmt.query_map(params![shoot_id, stamp], |r| r.get(0))?.collect();
+        let ids = stmt
+            .query_map(params![shoot_id, stamp, NO_PREVIEW_SUFFIX], |r| r.get(0))?
+            .collect();
         ids
     })
 }

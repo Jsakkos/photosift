@@ -91,4 +91,17 @@ pub const STEPS: &[(i64, &str)] = &[
         5,
         "ALTER TABLE taste ADD COLUMN updated_by TEXT NOT NULL DEFAULT 'user'          CHECK(updated_by IN ('user','helper'));",
     ),
+    // Plan-1 photos with faces were detected by the same YuNet and SFace files
+    // (`enrich::FACES_MODEL`; detector-only when no face has an embedding), so
+    // they are not re-detected. A photo with no faces may have been enriched
+    // without models: it stays NULL and is re-detected once.
+    (
+        6,
+        "UPDATE photos SET faces_model = CASE
+            WHEN EXISTS (SELECT 1 FROM faces f WHERE f.photo_id = photos.id
+                         AND f.embedding IS NOT NULL)
+            THEN 'yunet-2023mar+sface-2021dec' ELSE 'yunet-2023mar' END
+         WHERE faces_model IS NULL
+           AND EXISTS (SELECT 1 FROM faces f WHERE f.photo_id = photos.id);",
+    ),
 ];
