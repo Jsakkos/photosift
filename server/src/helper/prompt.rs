@@ -163,6 +163,32 @@ mod tests {
         assert!(PROMPT_VERSION.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
+    /// A photo shows who is old or young, never who is whose grandparent.
+    #[test]
+    fn template_suggests_no_relational_labels() {
+        let lower = TEMPLATE.to_lowercase();
+        for word in [
+            "grandparent",
+            "grandma",
+            "grandpa",
+            "mother",
+            "father",
+            "mum",
+            "dad",
+            "sister",
+            "brother",
+            "aunt",
+            "uncle",
+        ] {
+            assert!(
+                !lower
+                    .split(|c: char| !c.is_alphabetic())
+                    .any(|w| w == word),
+                "the prompt suggests the label {word:?}"
+            );
+        }
+    }
+
     #[test]
     fn template_has_both_placeholders() {
         assert!(TEMPLATE.contains("{{TASTE}}"));

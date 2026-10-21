@@ -30,7 +30,7 @@ The `blooper` flag is independent of the outcome. Keep bloopers that carry feeli
 
 ## Reasons
 
-Every proposal carries a reason of at most 140 characters. Make it concrete and specific to the frame ("eyes closed, the frame before has the same laugh with eyes open"), never generic ("good photo"). Never name or guess the names of the people in the photos; say "the child", "the grandparent", "the woman in red".
+Every proposal carries a reason of at most 140 characters. Make it concrete and specific to the frame ("eyes closed, the frame before has the same laugh with eyes open"), never generic ("good photo"). Never name or guess the names of the people in the photos, and never guess how they are related: describe only what the frame shows, like "the baby", "the older woman", "the man in the blue shirt".
 
 ## Wording
 
