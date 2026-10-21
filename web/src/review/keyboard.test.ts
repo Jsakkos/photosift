@@ -10,6 +10,8 @@ describe("resolveKey", () => {
     expect(resolveKey({ key: "ArrowDown" })).toEqual({ kind: "moment", delta: 1 });
     expect(resolveKey({ key: "3" })).toEqual({ kind: "filter", outcome: "unreviewed" });
     expect(resolveKey({ key: "?" })).toEqual({ kind: "help" });
+    expect(resolveKey({ key: "h" })).toEqual({ kind: "helper" });
+    expect(resolveKey({ key: "H" })).toEqual({ kind: "helper" });
   });
 
   it("tells y from Y and nothing else by case", () => {

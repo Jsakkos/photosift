@@ -5,6 +5,7 @@ import { getStatus, trashDeletes } from "../api/client";
 import type { Outcome } from "../api/types";
 import { Compare } from "../review/Compare";
 import { AcceptDialog, DeleteDialog, HelpOverlay, Toasts } from "../review/Dialogs";
+import { HelperPanel } from "../review/HelperPanel";
 import { Highlights } from "../review/Highlights";
 import { isTypingTarget, resolveKey, type Action } from "../review/keyboard";
 import { Loupe } from "../review/Loupe";
@@ -70,6 +71,7 @@ export function ReviewPage() {
   const [filter, setFilter] = useState<Outcome | null>(null);
   const [mode, setMode] = useState<Mode>("grid");
   const [help, setHelp] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [confirm, setConfirm] = useState<"closed" | "open" | "busy">("closed");
   // Exactly the photos the dialog counts; what is sent is what was shown.
   const [approved, setApproved] = useState<number[]>([]);
@@ -135,6 +137,7 @@ export function ReviewPage() {
     setMode("grid");
     setFilter(null);
     setAccepting(null);
+    setChatOpen(false);
   }, [shootId]);
 
   // Pick the focus once the photos are known: the remembered one, else the
@@ -243,6 +246,11 @@ export function ReviewPage() {
       if (action.kind === "back" && confirm === "open") setConfirm("closed");
       return;
     }
+    // The drawer is the top layer: Esc closes it before anything under it.
+    if (action.kind === "back" && chatOpen) {
+      setChatOpen(false);
+      return;
+    }
     const frames = mode === "compare" ? burstOf(view, focusId) : view.order;
     switch (action.kind) {
       case "photo":
@@ -295,6 +303,9 @@ export function ReviewPage() {
       case "filter":
         if (!repeat) setFilter((f) => (f === action.outcome ? null : action.outcome));
         break;
+      case "helper":
+        if (!repeat) setChatOpen((o) => !o);
+        break;
       case "help":
         if (!repeat) setHelp(true);
         break;
@@ -339,7 +350,7 @@ export function ReviewPage() {
 
   const focused = focusId === null ? undefined : photos[String(focusId)];
   return (
-    <div className="review">
+    <div className={chatOpen ? "review with-helper" : "review"}>
       <Summary
         shoot={review.shoot}
         counts={counts}
@@ -354,6 +365,8 @@ export function ReviewPage() {
         onAcceptAll={openAccept}
         onFilter={(o) => setFilter((f) => (f === o ? null : o))}
         onHelp={() => setHelp(true)}
+        onChat={() => setChatOpen((o) => !o)}
+        chatOpen={chatOpen}
       />
       {counts.total === 0 && <p className="muted">This shoot has no photos left.</p>}
       {counts.total > 0 && view.order.length === 0 && (
@@ -408,6 +421,7 @@ export function ReviewPage() {
       {mode === "compare" && (
         <Compare ids={burstOf(view, focusId)} photos={photos} focusId={focusId} onSelect={select} />
       )}
+      <HelperPanel shootId={shootId} open={chatOpen} onClose={() => setChatOpen(false)} />
       {help && <HelpOverlay onClose={() => setHelp(false)} />}
       {confirm !== "closed" && (
         <DeleteDialog

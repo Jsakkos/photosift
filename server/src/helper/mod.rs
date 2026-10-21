@@ -5,12 +5,13 @@
 //! list keeps it away from `set_outcome`: nothing it does touches an outcome,
 //! a sidecar or the Recycle Bin.
 
+mod chat;
 pub mod learning;
 pub mod prompt;
 pub mod stream;
 pub mod transport;
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -37,6 +38,10 @@ pub const BACKGROUND_DENY: &[&str] = &[
     "mcp__photosift__start_run",
 ];
 
+/// Tools a chat turn may not call. `set_taste_profile` is allowed: the user
+/// asked for the change in their own words.
+pub const CHAT_DENY: &[&str] = &["mcp__photosift__set_outcome", "mcp__photosift__start_run"];
+
 /// Run directories (the system prompt each run saw) are kept this long.
 const RUN_DIR_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 /// Longest error text stored on a run.
@@ -62,6 +67,10 @@ pub enum EnqueueError {
     Conflict(i64),
     #[error("no shoot {0}")]
     NotFound(i64),
+    #[error("the helper is still answering the last chat message for shoot {0}")]
+    ChatBusy(i64),
+    #[error("{0}")]
+    Invalid(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -98,6 +107,8 @@ struct Shared {
     wake: Condvar,
     /// Serialises the "is one open?" check with creating the run.
     enqueue: Mutex<()>,
+    /// Shoots with a chat turn in flight (chat turns run on their own threads).
+    chatting: Mutex<HashSet<i64>>,
 }
 
 impl Shared {
@@ -201,6 +212,7 @@ impl HelperService {
             state: Mutex::new(state),
             wake: Condvar::new(),
             enqueue: Mutex::new(()),
+            chatting: Mutex::new(HashSet::new()),
         });
         let ctx = Arc::new(Ctx {
             db,
@@ -331,6 +343,35 @@ impl HelperService {
         });
         self.shared.wake.notify_one();
         Ok(run_id)
+    }
+}
+
+impl HelperService {
+    /// A chat message from the user: stored now, answered on a thread of its
+    /// own so it never waits behind a background run. One turn per shoot at
+    /// a time. Not gated by `helper_enabled`.
+    pub fn chat(&self, shoot_id: i64, text: &str) -> Result<(), EnqueueError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(EnqueueError::Invalid("the message is empty".into()));
+        }
+        if text.chars().count() > chat::MESSAGE_MAX {
+            return Err(EnqueueError::Invalid(format!(
+                "the message is longer than {} characters",
+                chat::MESSAGE_MAX
+            )));
+        }
+        if let Some(reason) = self.unavailable_reason() {
+            return Err(EnqueueError::Unavailable(reason));
+        }
+        if review::get_shoot(&self.ctx.db, shoot_id)?.is_none() {
+            return Err(EnqueueError::NotFound(shoot_id));
+        }
+        let turn =
+            chat::Turn::begin(&self.shared, shoot_id).ok_or(EnqueueError::ChatBusy(shoot_id))?;
+        helper::add_chat_message(&self.ctx.db, shoot_id, "user", text)?;
+        chat::spawn(Arc::clone(&self.ctx), turn, text.to_string());
+        Ok(())
     }
 }
 

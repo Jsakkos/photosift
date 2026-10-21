@@ -264,6 +264,16 @@ export interface ServerStatus {
   helper: HelperStatusInfo;
 }
 
+export type ChatRole = "user" | "helper";
+
+/** `GET /api/shoots/{id}/chat`, oldest first. */
+export interface ChatMessage {
+  id: number;
+  role: ChatRole;
+  text: string;
+  at: string;
+}
+
 /** `POST /api/shoots/{id}/helper/run` (202). */
 export interface HelperRunStarted {
   run_id: number;
@@ -317,7 +327,9 @@ export type ServerEvent =
       run_id: number;
       status: HelperRunStatus;
       error: string | null;
-    };
+    }
+  /** One text block of the helper's chat answer; the user's own messages are not announced. */
+  | { type: "chat_message"; shoot_id: number; role: ChatRole; text: string };
 
 export type ServerEventType = ServerEvent["type"];
 
@@ -332,4 +344,5 @@ export const SERVER_EVENT_TYPES: readonly ServerEventType[] = [
   "enrich_done",
   "proposals_changed",
   "helper_status",
+  "chat_message",
 ];

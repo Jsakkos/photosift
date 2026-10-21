@@ -547,3 +547,95 @@ kbd {
     transition: none;
   }
 }
+
+/* --- helper chat drawer ---------------------------------------------------- */
+
+.helper-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(24rem, 100vw);
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.4);
+}
+
+.helper-panel[hidden] {
+  display: none;
+}
+
+.helper-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.helper-panel-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.helper-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.chat-message {
+  margin: 0;
+  max-width: 90%;
+  padding: 0.45rem 0.7rem;
+  border-radius: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-user {
+  align-self: flex-end;
+  background: rgba(106, 166, 255, 0.18);
+}
+
+.chat-helper {
+  align-self: flex-start;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.helper-problem-line {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.helper-input {
+  resize: none;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.helper-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+/* Room beside the photos while the drawer is open, where the screen is wide enough. */
+@media (min-width: 900px) {
+  .review.with-helper {
+    margin-right: 24rem;
+  }
+}

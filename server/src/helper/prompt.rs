@@ -42,15 +42,21 @@ pub fn example_line(e: &Example) -> String {
     line
 }
 
-/// `(system, user)`. `new_photo_ids`: None reviews the whole shoot; Some
-/// means an earlier run already proposed for the rest of it.
-pub fn build(
-    pool: &DbPool,
-    shoot_id: i64,
-    run_id: i64,
-    new_photo_ids: Option<&[i64]>,
-    frames_per_burst: u32,
-) -> anyhow::Result<(String, String)> {
+/// Appended to the system prompt of a chat turn.
+pub const CHAT_SECTION: &str = "\n## Chat\n\n\
+The user is talking with you about this shoot; this is not a review run. Answer what they ask, \
+briefly. The Workflow section applies only if they ask you to review photos, and you need not \
+call `finish_run`.\n\n\
+- To change a suggestion, call `propose` (one item per photo, with a reason) or, for a coin-flip \
+pair, `propose_your_call`, passing the run_id the user's message names. Say which photos you \
+changed.\n\
+- Call `set_taste_profile` only when the user asks you to remember or change what they like; \
+keep the existing notes you still agree with.\n\
+- You cannot set outcomes, and never claim to have set, kept, rejected or deleted a photo. \
+Proposals are suggestions: the user decides every photo.\n";
+
+/// `prompt.md` with the taste profile and recent decisions filled in.
+fn system_prompt(pool: &DbPool) -> anyhow::Result<String> {
     let taste = helper::get_taste(pool)?;
     let taste = if taste.trim().is_empty() {
         "No notes yet.".to_string()
@@ -67,9 +73,39 @@ pub fn build(
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let system = TEMPLATE
+    Ok(TEMPLATE
         .replace("{{TASTE}}", taste.trim())
-        .replace("{{EXAMPLES}}", &examples);
+        .replace("{{EXAMPLES}}", &examples))
+}
+
+/// `(system, user)` of a chat turn: the same system prompt plus the chat
+/// section. The user text is flattened to one line (it travels as a
+/// command-line argument).
+pub fn build_chat(
+    pool: &DbPool,
+    shoot_id: i64,
+    run_id: i64,
+    text: &str,
+) -> anyhow::Result<(String, String)> {
+    let system = system_prompt(pool)? + CHAT_SECTION;
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let user = format!(
+        "Chat about shoot {shoot_id} in run_id {run_id}: pass run_id {run_id} to propose and \
+         propose_your_call. The user says: {flat}"
+    );
+    Ok((system, user))
+}
+
+/// `(system, user)`. `new_photo_ids`: None reviews the whole shoot; Some
+/// means an earlier run already proposed for the rest of it.
+pub fn build(
+    pool: &DbPool,
+    shoot_id: i64,
+    run_id: i64,
+    new_photo_ids: Option<&[i64]>,
+    frames_per_burst: u32,
+) -> anyhow::Result<(String, String)> {
+    let system = system_prompt(pool)?;
 
     // One line: it travels as a command-line argument.
     let mut user = format!(

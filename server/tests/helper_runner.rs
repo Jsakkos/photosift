@@ -1088,3 +1088,242 @@ async fn startup_does_not_sweep_old_shoots() {
     );
     assert!(env.run_rows().is_empty());
 }
+
+// ---------------------------------------------------------------- chat
+
+fn chat_script(reply: &str) -> Value {
+    let mut s = script(json!([]));
+    s["reply"] = json!(reply);
+    s
+}
+
+async fn send_chat(env: &Env, shoot: i64, text: &str) -> reqwest::Response {
+    env.http
+        .post(env.url(&format!("/api/shoots/{shoot}/chat")))
+        .json(&json!({ "text": text }))
+        .send()
+        .await
+        .unwrap()
+}
+
+/// Waits for the next `chat_message` event and returns it.
+async fn wait_chat(ws: &mut Ws) -> Value {
+    let mut found = Value::Null;
+    next_events(ws, |v| {
+        if v["type"] == "chat_message" {
+            found = v.clone();
+            return true;
+        }
+        false
+    })
+    .await;
+    found
+}
+
+/// Waits until no chat turn is queued or running: the reply event comes just
+/// before the turn ends, and a message sent in between is refused.
+async fn chat_idle(env: &Env) {
+    for _ in 0..200 {
+        let open: i64 = env
+            .pool
+            .with(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM helper_runs WHERE kind = 'chat'                      AND status IN ('queued', 'running')",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        if open == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the chat turn never ended");
+}
+
+fn chat_invocations(env: &Env) -> Vec<Vec<String>> {
+    env.run_invocations()
+        .into_iter()
+        .filter(|a| prompt_of(a).starts_with("Chat about shoot"))
+        .collect()
+}
+
+#[tokio::test]
+async fn chat_resumes_same_session() {
+    let env = Env::new(chat_script("Photo 3 looks like the best smile."), |s| {
+        s.helper_enabled = false
+    })
+    .await;
+    let mut ws = env.ws().await;
+    let shoots = env.import(&mut ws, THREE, "named").await;
+    let shoot = shoots[0];
+
+    let first = send_chat(&env, shoot, "which one smiles best?").await;
+    assert_eq!(first.status(), 202);
+    let reply = wait_chat(&mut ws).await;
+    assert_eq!(reply["shoot_id"], shoot);
+    assert_eq!(reply["role"], "helper");
+    assert_eq!(reply["text"], "Photo 3 looks like the best smile.");
+    chat_idle(&env).await;
+
+    let second = send_chat(&env, shoot, "and the second best?").await;
+    assert_eq!(second.status(), 202);
+    wait_chat(&mut ws).await;
+
+    let calls = chat_invocations(&env);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let id = flag(&calls[0], "--session-id").expect("first turn creates a session");
+    assert_eq!(id.len(), 36);
+    assert_eq!(flag(&calls[1], "--resume"), Some(id), "{calls:?}");
+    assert!(flag(&calls[1], "--session-id").is_none(), "{calls:?}");
+    assert!(prompt_of(&calls[0]).contains("which one smiles best?"));
+
+    let msgs = env.get(&format!("/api/shoots/{shoot}/chat")).await;
+    let msgs = msgs.as_array().unwrap();
+    let got: Vec<(&str, &str)> = msgs
+        .iter()
+        .map(|m| (m["role"].as_str().unwrap(), m["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("user", "which one smiles best?"),
+            ("helper", "Photo 3 looks like the best smile."),
+            ("user", "and the second best?"),
+            ("helper", "Photo 3 looks like the best smile."),
+        ]
+    );
+    assert!(msgs.iter().all(|m| m["id"].is_i64() && m["at"].is_string()));
+
+    // Each turn is a chat run; none of them is the shoot's helper status.
+    let kinds: Vec<String> = env
+        .pool
+        .with(|c| {
+            let mut st = c.prepare("SELECT kind FROM helper_runs ORDER BY id")?;
+            let rows = st
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>();
+            rows
+        })
+        .unwrap();
+    assert_eq!(kinds, vec!["chat", "chat"]);
+    let review = env.get(&format!("/api/shoots/{shoot}/review")).await;
+    assert_eq!(review["helper"]["status"], "none", "{}", review["helper"]);
+    // A chat reply never touches an outcome.
+    assert_eq!(review["photos"]["1"]["outcome"], "unreviewed");
+}
+
+#[tokio::test]
+async fn chat_conflicts_while_a_turn_runs_and_validates() {
+    let mut s = chat_script("Slow answer.");
+    s["delay_ms"] = json!(1500);
+    let env = Env::new(s, |s| s.helper_enabled = false).await;
+    let mut ws = env.ws().await;
+    let shoots = env.import(&mut ws, THREE, "named").await;
+    let shoot = shoots[0];
+
+    assert_eq!(send_chat(&env, shoot, "first").await.status(), 202);
+    assert_eq!(send_chat(&env, shoot, "second").await.status(), 409);
+    assert_eq!(send_chat(&env, 9999, "hello").await.status(), 404);
+    assert_eq!(send_chat(&env, shoot, "   ").await.status(), 400);
+    wait_chat(&mut ws).await;
+    assert_eq!(chat_invocations(&env).len(), 1);
+    // The rejected messages were not stored.
+    let msgs = env.get(&format!("/api/shoots/{shoot}/chat")).await;
+    assert_eq!(msgs.as_array().unwrap().len(), 2, "{msgs}");
+}
+
+#[tokio::test]
+async fn chat_can_update_taste_background_cannot() {
+    let env = Env::new(chat_script("Noted."), |s| s.helper_enabled = false).await;
+    let mut ws = env.ws().await;
+    let shoots = env.import(&mut ws, THREE, "named").await;
+    let shoot = shoots[0];
+
+    let run = env
+        .http
+        .post(env.url(&format!("/api/shoots/{shoot}/helper/run")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(run.status(), 202);
+    // The fake never calls finish_run here, so the run fails; only its argv matters.
+    wait_helper(&mut ws, "failed").await;
+    let sent = send_chat(&env, shoot, "remember I like candids").await;
+    assert_eq!(sent.status(), 202);
+    wait_chat(&mut ws).await;
+
+    let background = env
+        .run_invocations()
+        .into_iter()
+        .find(|a| prompt_of(a).starts_with("Review shoot"))
+        .expect("a background run");
+    let denied = flag(&background, "--disallowedTools").unwrap();
+    assert!(
+        denied.contains("mcp__photosift__set_taste_profile"),
+        "{denied}"
+    );
+
+    let chat = &chat_invocations(&env)[0];
+    let denied = flag(chat, "--disallowedTools").unwrap();
+    assert!(!denied.contains("set_taste_profile"), "{denied}");
+    for tool in ["mcp__photosift__set_outcome", "mcp__photosift__start_run"] {
+        assert!(denied.contains(tool), "{tool} not denied: {denied}");
+    }
+    assert_eq!(flag(chat, "--allowedTools"), Some("mcp__photosift__*"));
+    let system = std::fs::read_to_string(flag(chat, "--system-prompt-file").unwrap()).unwrap();
+    assert!(system.contains("never claim"), "{system}");
+    assert!(!system.contains("{{"), "{system}");
+}
+
+#[tokio::test]
+async fn chat_proposal_changes_a_suggestion_not_an_outcome() {
+    let mut s = chat_script("Moved photo 3 to album.");
+    s["calls"] = json!([
+        {"tool": "propose", "args": {"run_id": "$RUN", "items": [
+            {"photo_id": 3, "outcome": "album", "reason": "you asked for this one"},
+        ]}},
+    ]);
+    let env = Env::new(s, |s| s.helper_enabled = false).await;
+    let mut ws = env.ws().await;
+    let shoots = env.import(&mut ws, THREE, "named").await;
+    let shoot = shoots[0];
+    let sent = send_chat(&env, shoot, "make the third one album").await;
+    assert_eq!(sent.status(), 202);
+    wait_chat(&mut ws).await;
+
+    let review = env.get(&format!("/api/shoots/{shoot}/review")).await;
+    assert_eq!(review["photos"]["3"]["proposal"]["outcome"], "album");
+    assert_eq!(review["photos"]["3"]["outcome"], "unreviewed");
+}
+
+#[tokio::test]
+async fn failed_chat_turn_says_so_and_does_not_block_the_next() {
+    let mut s = chat_script("unused");
+    s["result"] = json!({"is_error": true, "subtype": "error_during_execution", "result": "boom"});
+    let env = Env::new(s, |s| s.helper_enabled = false).await;
+    let mut ws = env.ws().await;
+    let shoots = env.import(&mut ws, THREE, "named").await;
+    let shoot = shoots[0];
+    assert_eq!(send_chat(&env, shoot, "hello").await.status(), 202);
+    let mut texts = Vec::new();
+    next_events(&mut ws, |v| {
+        if v["type"] == "chat_message" {
+            let t = v["text"].as_str().unwrap().to_string();
+            let failed = t.starts_with("Couldn't reach Claude");
+            texts.push(t);
+            return failed;
+        }
+        false
+    })
+    .await;
+    assert!(texts.last().unwrap().contains("boom"), "{texts:?}");
+
+    // The failed first turn left no session to resume: the next one starts fresh.
+    env.set_script(chat_script("Back."));
+    assert_eq!(send_chat(&env, shoot, "again").await.status(), 202);
+    assert_eq!(wait_chat(&mut ws).await["text"], "Back.");
+    let calls = chat_invocations(&env);
+    assert!(flag(&calls[1], "--session-id").is_some(), "{calls:?}");
+}

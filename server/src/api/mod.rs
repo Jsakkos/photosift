@@ -130,6 +130,10 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/shoots/{id}/review", get(shoots::review))
         .route("/shoots/{id}/trash", post(trash::trash_shoot))
         .route("/shoots/{id}/helper/run", post(helper::run))
+        .route(
+            "/shoots/{id}/chat",
+            get(helper::chat_history).post(helper::chat),
+        )
         .route("/photos/{id}/outcome", post(photos::set_outcome))
         .route("/photos/{id}/decision-note", post(photos::decision_note))
         .fallback(|| async { StatusCode::NOT_FOUND })

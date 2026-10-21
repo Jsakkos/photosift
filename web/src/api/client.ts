@@ -1,5 +1,6 @@
 import type {
   CardScan,
+  ChatMessage,
   CardScanSummary,
   ClientSettings,
   Criterion,
@@ -127,6 +128,20 @@ export const trashDeletes = (shootId: number, photoIds: number[]) =>
 /** Runs the helper on the shoot now: 409 while one is queued or running, 503 when unavailable. */
 export const runHelper = (shootId: number) =>
   request<HelperRunStarted>("POST", `/api/shoots/${shootId}/helper/run`);
+
+/** The shoot's conversation with the helper. */
+export const getChat = (shootId: number) =>
+  request<ChatMessage[]>("GET", `/api/shoots/${shootId}/chat`);
+
+/** 202 once the helper is answering (the answer arrives as `chat_message` events); 409 while it is still on the last message. */
+export const sendChat = async (shootId: number, text: string): Promise<void> => {
+  const res = await fetch(`/api/shoots/${shootId}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
+};
 
 /** Why the user overrode a proposal; `note` goes with `other`. */
 export const setDecisionNote = async (

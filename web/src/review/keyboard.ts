@@ -11,6 +11,7 @@ export type Action =
   | { kind: "back" }
   | { kind: "filter"; outcome: Outcome }
   | { kind: "accept"; scope: "one" | "moment" }
+  | { kind: "helper" }
   | { kind: "help" };
 
 export interface Binding {
@@ -69,6 +70,7 @@ export const BINDINGS: readonly Binding[] = [
     description: "Accept every suggestion in this moment",
     action: { kind: "accept", scope: "moment" },
   },
+  { keys: ["h"], label: "H", description: "Talk to the helper", action: { kind: "helper" } },
   { keys: ["?"], label: "?", description: "This list", action: { kind: "help" } },
 ];
 

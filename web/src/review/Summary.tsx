@@ -16,6 +16,9 @@ interface Props {
   openSuggestions: number;
   onFilter: (outcome: Outcome) => void;
   onHelp: () => void;
+  /** Opens or closes the helper chat drawer (key H). */
+  onChat: () => void;
+  chatOpen: boolean;
   onRetry: () => void;
   onAcceptAll: () => void;
 }
@@ -91,6 +94,8 @@ export function Summary({
   openSuggestions,
   onFilter,
   onHelp,
+  onChat,
+  chatOpen,
   onRetry,
   onAcceptAll,
 }: Props) {
@@ -120,6 +125,17 @@ export function Summary({
               Suggested: {suggested}
             </span>
           )}
+          <button
+            type="button"
+            aria-pressed={chatOpen}
+            title="Talk to the helper (H)"
+            onClick={(e) => {
+              onChat();
+              e.currentTarget.blur();
+            }}
+          >
+            Helper
+          </button>
           {openSuggestions > 0 && (
             <button
               type="button"

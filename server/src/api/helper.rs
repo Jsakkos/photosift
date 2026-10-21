@@ -1,15 +1,16 @@
-//! `POST /api/shoots/{id}/helper/run`: run the helper on a shoot now.
+//! The helper's routes: run it on a shoot now, and chat with it.
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     Json,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{ApiError, AppState};
 use crate::{
-    db::helper::RunKind,
+    db::helper::{self, ChatMessageRow, RunKind},
     helper::{transport::Availability, EnqueueError},
 };
 
@@ -36,6 +37,57 @@ pub async fn run(
         Err(e @ EnqueueError::Unavailable(_)) => Err(ApiError::unavailable(e.to_string())),
         Err(e @ EnqueueError::Conflict(_)) => Err(ApiError::conflict(e.to_string())),
         Err(e @ EnqueueError::NotFound(_)) => Err(ApiError::not_found(e.to_string())),
-        Err(EnqueueError::Other(e)) => Err(ApiError::internal(format!("{e:#}"))),
+        Err(e) => Err(enqueue_error(e)),
     }
+}
+
+fn enqueue_error(e: EnqueueError) -> ApiError {
+    match e {
+        EnqueueError::Unavailable(_) => ApiError::unavailable(e.to_string()),
+        EnqueueError::Conflict(_) | EnqueueError::ChatBusy(_) => ApiError::conflict(e.to_string()),
+        EnqueueError::NotFound(_) => ApiError::not_found(e.to_string()),
+        EnqueueError::Invalid(_) => ApiError::bad_request(e.to_string()),
+        EnqueueError::Other(e) => ApiError::internal(format!("{e:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ChatBody {
+    text: String,
+}
+
+/// 202 once the message is stored and the helper is answering (the answer
+/// arrives as `chat_message` events); 409 while the previous turn for the
+/// shoot is still running; 503 with the reason when the helper cannot run.
+pub async fn chat(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<ChatBody>,
+) -> Result<StatusCode, ApiError> {
+    let helper = state.helper.clone();
+    tokio::task::spawn_blocking(move || {
+        if helper.unavailable_reason().is_some() {
+            if let Availability::Unavailable { reason } = helper.refresh_availability() {
+                return Err(EnqueueError::Unavailable(reason));
+            }
+        }
+        helper.chat(id, &body.text)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(enqueue_error)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// The shoot's conversation with the helper, oldest first.
+pub async fn chat_history(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<ChatMessageRow>>, ApiError> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || helper::chat_messages(&db, id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map(Json)
+        .map_err(|e| ApiError::internal(format!("{e:#}")))
 }

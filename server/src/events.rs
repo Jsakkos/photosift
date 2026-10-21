@@ -70,6 +70,13 @@ pub enum ServerEvent {
         status: String,
         error: Option<String>,
     },
+    /// One chat message from the helper (`role` is `helper`), one per
+    /// assistant text block. The user's own messages are not announced.
+    ChatMessage {
+        shoot_id: i64,
+        role: String,
+        text: String,
+    },
 }
 
 /// What a card-detected toast needs; the full `CardScan` is fetched on demand.
@@ -302,6 +309,17 @@ mod tests {
             json,
             serde_json::json!({"type": "helper_status", "shoot_id": 2, "run_id": 5,
                                "status": "done", "error": null})
+        );
+        let json = serde_json::to_value(ServerEvent::ChatMessage {
+            shoot_id: 2,
+            role: "helper".into(),
+            text: "Hi".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"type": "chat_message", "shoot_id": 2, "role": "helper",
+                               "text": "Hi"})
         );
         let json = serde_json::to_value(ServerEvent::ProposalsChanged { shoot_id: 2 }).unwrap();
         assert_eq!(

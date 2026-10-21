@@ -331,13 +331,14 @@ pub fn interrupt_open_runs(pool: &DbPool) -> anyhow::Result<Vec<RunRow>> {
     })
 }
 
-/// The shoot's newest `queued` or `running` run.
+/// The shoot's newest `queued` or `running` run that is not a chat turn (chat
+/// has its own one-at-a-time rule and never blocks a review).
 pub fn open_run(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<RunRow>> {
     pool.with(|c| {
         c.query_row(
             &format!(
                 "SELECT {RUN_COLUMNS} FROM helper_runs \
-                 WHERE shoot_id = ?1 AND status IN ('queued', 'running') ORDER BY id DESC LIMIT 1"
+                 WHERE shoot_id = ?1 AND kind != 'chat' AND status IN ('queued', 'running')                  ORDER BY id DESC LIMIT 1"
             ),
             [shoot_id],
             run_row,
@@ -459,11 +460,12 @@ pub fn active_run(pool: &DbPool, run_id: i64) -> anyhow::Result<RunRow> {
     Ok(run)
 }
 
+/// The shoot's newest review run; chat turns are not part of its helper status.
 pub fn latest_run(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<RunRow>> {
     pool.with(|c| {
         c.query_row(
             &format!(
-                "SELECT {RUN_COLUMNS} FROM helper_runs WHERE shoot_id = ?1 ORDER BY id DESC LIMIT 1"
+                "SELECT {RUN_COLUMNS} FROM helper_runs WHERE shoot_id = ?1 AND kind != 'chat'                  ORDER BY id DESC LIMIT 1"
             ),
             [shoot_id],
             run_row,
@@ -630,6 +632,80 @@ pub fn your_calls(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<YourCallRo
                 a: r.get(1)?,
                 b: r.get(2)?,
                 tradeoff: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    })
+}
+
+/// Records the claude session a run uses, before it starts, so the next chat
+/// turn can resume it.
+pub fn set_run_session(pool: &DbPool, run_id: i64, session_id: &str) -> anyhow::Result<()> {
+    pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET session_id = ?2 WHERE id = ?1",
+            params![run_id, session_id],
+        )
+    })?;
+    Ok(())
+}
+
+/// The session of the shoot's latest chat turn that finished. A turn that
+/// failed may never have created its session, so it is not resumed.
+pub fn chat_session(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<String>> {
+    pool.with(|c| {
+        c.query_row(
+            "SELECT session_id FROM helper_runs WHERE shoot_id = ?1 AND kind = 'chat'              AND status = 'done' AND session_id IS NOT NULL AND session_id != ''              ORDER BY id DESC LIMIT 1",
+            [shoot_id],
+            |r| r.get(0),
+        )
+        .optional()
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessageRow {
+    pub id: i64,
+    pub role: String,
+    pub text: String,
+    pub at: String,
+}
+
+/// `role`: `user` or `helper`.
+pub fn add_chat_message(
+    pool: &DbPool,
+    shoot_id: i64,
+    role: &str,
+    text: &str,
+) -> anyhow::Result<ChatMessageRow> {
+    let at = now();
+    let id = pool.with(|c| {
+        c.execute(
+            "INSERT INTO chat_messages (shoot_id, role, text, at) VALUES (?1, ?2, ?3, ?4)",
+            params![shoot_id, role, text, at],
+        )?;
+        Ok(c.last_insert_rowid())
+    })?;
+    Ok(ChatMessageRow {
+        id,
+        role: role.into(),
+        text: text.into(),
+        at,
+    })
+}
+
+/// The shoot's conversation, oldest first.
+pub fn chat_messages(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<ChatMessageRow>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, role, text, at FROM chat_messages WHERE shoot_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([shoot_id], |r| {
+            Ok(ChatMessageRow {
+                id: r.get(0)?,
+                role: r.get(1)?,
+                text: r.get(2)?,
+                at: r.get(3)?,
             })
         })?;
         rows.collect()

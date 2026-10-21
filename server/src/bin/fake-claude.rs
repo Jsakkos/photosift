@@ -5,8 +5,10 @@
 //!
 //! `FAKE_CLAUDE_SCRIPT` names a JSON file:
 //! `{ "auth": "claude.ai"|"none", "version"?: "2.1.240 (Claude Code)",
-//!    "calls": [{"tool", "args"}], "retry_error"?: "rate_limit",
+//!    "calls": [{"tool", "args"}], "reply"?: "text", "retry_error"?: "rate_limit",
 //!    "result": {"is_error", "subtype", "result"}, "exit": i32, "delay_ms": u64 }`.
+//! `reply` is a chat answer: it is printed as an assistant text block after the
+//! calls, and the calls then print no "Calling x." narration.
 //! A string `"$RUN"` anywhere in `args` becomes the `run_id <n>` named in the
 //! prompt. `FAKE_CLAUDE_ARGS_LOG`, when set, gets one JSON line per invocation
 //! with its argv (program name excluded).
@@ -25,6 +27,7 @@ struct Script {
     auth: String,
     version: Option<String>,
     calls: Vec<Call>,
+    reply: Option<String>,
     retry_error: Option<String>,
     result: Option<ScriptResult>,
     exit: i32,
@@ -117,13 +120,13 @@ fn run(args: &[String]) -> anyhow::Result<i32> {
             substitute_run(&mut args, run);
         }
         let id = format!("toolu_{i}");
-        emit(
-            json!({"type": "assistant", "message": {"role": "assistant", "content": [
-                {"type": "text", "text": format!("Calling {}.", call.tool)},
-                {"type": "tool_use", "id": id, "name": format!("mcp__photosift__{}", call.tool),
-                 "input": args},
-            ]}}),
-        );
+        let mut content = Vec::new();
+        if script.reply.is_none() {
+            content.push(json!({"type": "text", "text": format!("Calling {}.", call.tool)}));
+        }
+        content.push(json!({"type": "tool_use", "id": id,
+                            "name": format!("mcp__photosift__{}", call.tool), "input": args}));
+        emit(json!({"type": "assistant", "message": {"role": "assistant", "content": content}}));
         let (is_error, text) = match mcp_call(&url, &call.tool, &args) {
             Ok(r) => (
                 r["isError"].as_bool().unwrap_or(false),
@@ -134,6 +137,13 @@ fn run(args: &[String]) -> anyhow::Result<i32> {
         emit(
             json!({"type": "user", "message": {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": id, "is_error": is_error, "content": text},
+            ]}}),
+        );
+    }
+    if let Some(reply) = &script.reply {
+        emit(
+            json!({"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": reply},
             ]}}),
         );
     }
