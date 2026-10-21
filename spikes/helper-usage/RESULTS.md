@@ -1,6 +1,6 @@
 # Plan 2 Task 0: `claude -p` subscription route and usage spike
 
-Date: 2026-10-20. Status: **INCOMPLETE, gate not decided.** Steps 1, 3 and part of 4 are done. Steps 2 (auth), 5 (measurement) and 6 (gate) are blocked: the installed CLI's login has expired and logging in is a user action.
+Date: 2026-10-20. Status: **complete, gate PROVISIONAL (plan usage meter reading still pending from the user).** Measured on CLI 2.1.240, Claude Pro plan.
 
 ## Step 1: docs and terms (read 2026-10-20)
 
@@ -15,30 +15,53 @@ Answers:
 - (b) A local app that spawns the unmodified official CLI under the user's own login, never touching tokens, is consistent with the above and with Anthropic's own docs for `-p`. It is a judgment call, not an explicit green light: consumer-terms item 7 allows automation only where Anthropic explicitly permits it, and the support article is the closest explicit statement. Do not store or proxy credentials, do not modify the binary, and do not pass plan access on to other people.
 - (c) Exhaustion: plan limits give a rate-limit error from the CLI (not verified here); on the credit route requests stop until the next grant.
 
-## Step 2: auth (blocked)
+## Step 2: auth
 
-`claude --version` = 2.1.240 (brief wants >= 2.1.259; not updated by instruction). `claude auth status`: `loggedIn: false`, `authMethod: none`, text form says "Login: Expired". Every `claude -p` call returns `is_error: true`, `terminal_reason: api_error`, zero tokens. The user must run `claude auth login`.
+`claude --version` = 2.1.240 (brief wants >= 2.1.259; not updated by instruction). `claude auth status`: loggedIn true, `authMethod: claude.ai`, subscription type Pro. The CLI login had expired earlier and the user re-ran `claude auth login`.
 
-## Step 4: flags on 2.1.240
+Finding: a measurement run failed with 0 tokens because the account's 5-hour session limit had been reached. On Pro, interactive dev sessions and helper runs share the same 5-hour allowance, so a helper run can be starved by (or starve) normal Claude use.
 
-Checked by invoking each flag from an empty cwd (argument parsing happens before the auth failure).
-- Accepted: `--strict-mcp-config`, `--tools`, `--setting-sources`, `--disable-slash-commands`, `--permission-mode dontAsk`, `--system-prompt-file`, `--max-turns`, `--max-budget-usd`, `--session-id`, `--resume` (needs a real session), `--add-dir`, `--json-schema`, `--allowedTools`.
-- **Unsupported on 2.1.240:** `--permission-prompts` ("unknown option"; needs 2.1.259+). The runner adds it only on CLI >= 2.1.259.
-- Not yet verified (needs auth): contents of the `system/init` event (plugins, MCP servers, tool list), whether `--setting-sources local` suppresses user hooks and `~/.claude/CLAUDE.md`, and whether `--max-turns` works with `--json-schema`. Run `run.ps1 -Probe` once logged in; it saves the init event to `out/init.json`.
+## Step 4: flags and isolation (10-photo probe, stream-json)
 
-Candidate final flag list (to confirm): `-p --model <alias> --strict-mcp-config --tools Read --add-dir <out> --setting-sources local --disable-slash-commands --permission-mode dontAsk --allowedTools Read --system-prompt-file <file> --max-turns N --max-budget-usd N --session-id <uuid> --json-schema <schema> --output-format json` (+ `--permission-prompts none` on >= 2.1.259). Never `--bare`. Pass `--resume <id>` (without `--session-id`) for the crops pass. On Windows PowerShell 5.1, embedded quotes in the `--json-schema` argument must be escaped as `\"`.
+- Accepted on 2.1.240: `--strict-mcp-config`, `--tools`, `--setting-sources`, `--disable-slash-commands`, `--permission-mode dontAsk`, `--system-prompt-file`, `--max-turns`, `--max-budget-usd`, `--session-id`, `--resume`, `--add-dir`, `--json-schema`, `--allowedTools`.
+- **Unsupported on 2.1.240:** `--permission-prompts` (unknown option, needs 2.1.259+). The runner adds it only on newer CLIs; `dontAsk` already denies unlisted tools.
+- `system/init` with the flags below: `plugins: []`, `mcp_servers: []`, `skills: []`, `slash_commands: []`, tools = `Read` plus the internal `StructuredOutput`, `permissionMode: dontAsk`, `apiKeySource: none` (subscription login works without `--bare`). The five built-in agents (general-purpose, Explore, Plan, statusline-setup, claude) are still listed.
+- `--setting-sources local` suppressed the user-level enabled plugins (several are enabled in user settings, none loaded). The test machine has no user-level hooks and no user `CLAUDE.md`, so hook suppression and CLAUDE.md leakage are untested.
+- **Leak found:** the user's auto-memory index still reached the child (it answered YES and quoted the first entry title). Setting `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in the child's environment fixed it (answered NO). run.ps1 now sets it. The runner should too.
+- `--max-turns 40` was passed but the 372-photo run reported `num_turns: 137` and completed, so `num_turns` evidently does not equal the `--max-turns` unit, or the cap was not enforced under `--json-schema`. Treat `helper_max_turns` as unreliable on 2.1.240 and rely on `--max-budget-usd` as the real cap.
 
-## Step 5: measurement (not run)
+Final flag list (verified on 2.1.240, run from an empty cwd): `claude -p --model <alias> --strict-mcp-config --tools Read --add-dir <out> --setting-sources local --disable-slash-commands --permission-mode dontAsk --allowedTools Read --system-prompt-file <file> --max-turns N --max-budget-usd N --session-id <uuid> --json-schema <schema> --output-format json`, env `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, plus `--permission-prompts none` on CLI >= 2.1.259. Use `--resume <id>` (without `--session-id`) for a second pass. Never `--bare` (needs an API key). Windows PowerShell 5.1 needs embedded quotes in `--json-schema` escaped as `\"`.
 
-Run each of: sonnet, opus x without/with `-Crops`, e.g. `.\run.ps1 -Source <folder of camera JPGs> -Model sonnet -Crops`. `out/runs.jsonl` gets one line per run. Meter delta (claude.ai Settings > Usage): pending, user to read.
+### Baseline context cost (trivial prompt "say ok", sonnet)
 
-| run | tokens in/out/cache | total_cost_usd | wall | turns | meter delta |
+| config | cache-creation tokens | cost |
+|---|---|---|
+| default flags | 55,331 | $0.221 |
+| isolated, `--tools Read` | 1,592 | $0.007 |
+| isolated, `--tools ""` | about 0 (334 uncached input) | $0.001 |
+
+Isolation flags cut the fixed per-run context from about 55k tokens to about 1.6k (a 97% reduction). Most of the saving is `--system-prompt-file` plus the default tool set, memory and plugin context.
+
+## Step 5: measurement (one 372-photo shoot, sonnet, no crops)
+
+Per the controller's ruling to protect the Pro allowance, only one measurement was run. Opus (both variants) and the real sonnet `-Crops` run were **skipped** for that reason, so there is no sonnet-vs-opus output comparison.
+
+| run | tokens in / out / cache-write / cache-read | total_cost_usd | wall | turns | meter delta |
 |---|---|---|---|---|---|
-| sonnet, no crops | not run | | | | pending |
-| sonnet, crops | not run | | | | pending |
-| opus, no crops | not run | | | | pending |
-| opus, crops | not run | | | | pending |
+| probe, 10 photos | 6 / 2,058 / 8,197 / 11,942 | 0.057 | 21 s | 12 | n/a |
+| sonnet, no crops, 372 photos in 7 moments | 22 / 19,730 / 65,577 / 439,887 | 0.566 | 168 s | 137 | pending: user to read before/after |
+| sonnet, crops | skipped, estimated below | about 1.4 (est.) | about 4-5 min (est.) | about 150 (est.) | pending |
+| opus, no crops | skipped (protect Pro allowance) | | | | |
+| opus, crops | skipped (protect Pro allowance) | | | | |
 
-## Step 6: gate
+Output of the measured run: 12 album picks, 7 your-call pairs, 30 shortlisted ids, `terminal_reason: completed`.
 
-Not decided. If the user's meter shows <= 10% of allowance for the crops run, `transport = cli-subscription`. Defaults per the brief: `helper_max_budget_usd` = 2x measured cost rounded up to $0.50, `helper_max_turns` = 2x measured turns, `helper_model` = cheaper model unless its picks were clearly worse.
+Crops estimate: source JPGs are 7728 x 5152. A 1024 px crop is 1024 x 683, about 932 image tokens (w*h/750), so 30 crops add about 28k tokens, versus about 53k for the 372 thumbnails (400 x 267, about 142 tokens each; matches the 65k cache-write seen). The second pass re-reads the whole conversation (about 95k tokens) every turn, so I estimate +$0.6 to +$1.2 over the no-crops run, point estimate $0.8, giving about $1.4 total. This is an extrapolation, not a measurement.
+
+## Step 6: gate (PROVISIONAL, pending user meter reading)
+
+- `transport = cli-subscription`, provisionally. The cost is small ($0.57 measured; about $1.4 estimated with crops, client-side estimates), but the pass criterion (<= 10% of the allowance) cannot be confirmed until the user supplies the usage-meter delta for the measured run. Pro limits are small and shared with dev sessions (see the 5-hour limit finding), so the user may prefer `cli-api-key` if the delta is large.
+- `helper_model = sonnet` (cheaper). Not compared against opus (skipped), so no evidence yet on pick quality.
+- `helper_max_budget_usd = 3.00` (2x the estimated with-crops cost of $1.4 = $2.80, rounded up to $0.50).
+- `helper_max_turns = 300` (2x the estimated 150 turns for a crops run; see the `--max-turns` caveat above, the budget cap is the effective guard).
+- Terms: acceptable for personal use per Step 1, with the caveats listed there.

@@ -89,6 +89,7 @@ $flags = @('-p', '--model', $Model, '--strict-mcp-config', '--tools', 'Read', '-
 if ($ver -ge [version]'2.1.259') { $flags += @('--permission-prompts', 'none') }   # unknown option before 2.1.259
 $fmt = if ($Probe) { @('--output-format', 'stream-json', '--verbose') } else { @('--output-format', 'json') }
 
+$env:CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1'   # else the user's auto-memory index leaks into the child's context
 function Invoke-Claude($p, $extra) {
   $flags = $script:flags
   if ($extra -contains '--resume') {   # --session-id is for the first call only
