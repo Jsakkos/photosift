@@ -331,13 +331,15 @@ fn helper_run(state: &AppState, shoot_id: i64, timeout: Duration) -> anyhow::Res
         [RunStatus::Done, RunStatus::Failed, RunStatus::Interrupted].map(RunStatus::as_str);
     loop {
         let run = helper_db::get_run(&state.db, run_id)?.context("the run row vanished")?;
-        if finals.contains(&run.status.as_str()) {
-            return Ok(run);
+        // `finish_run` makes the run done before the runner records its
+        // usage; the worker is idle only once that is written too.
+        if finals.contains(&run.status.as_str()) && state.helper.status().queue == 0 {
+            return helper_db::get_run(&state.db, run_id)?.context("the run row vanished");
         }
         if started.elapsed() > timeout {
             bail!("helper run {run_id} did not finish in {timeout:?}");
         }
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 

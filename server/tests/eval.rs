@@ -411,3 +411,64 @@ async fn raw_subfolder_found() {
     assert_eq!(rows[0].truth, 1);
     assert!(rows[0].unmatched.is_empty(), "{:?}", rows[0].unmatched);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn helper_mode_scores_the_runs_proposals() {
+    let shoot = TempDir::new().unwrap();
+    let eval_dir = TempDir::new().unwrap();
+    shoot_with_originals(shoot.path(), 4);
+    for i in [1, 3] {
+        write(
+            &shoot.path().join("Export").join(format!("DSCF{i:04}.jpg")),
+            &export_of(pattern(i), i * 2),
+        );
+    }
+    let before = snapshot(shoot.path());
+    // The fake `claude`: album 1, library 2, archive 3, delete 4, then done.
+    let script = eval_dir.path().join("script.json");
+    let item = |id: i64, outcome: &str| serde_json::json!({"photo_id": id, "outcome": outcome, "reason": "synthetic"});
+    let calls = serde_json::json!([
+        {"tool": "propose", "args": {"run_id": "$RUN", "items": [
+            item(1, "album"), item(2, "library"), item(3, "archive"), item(4, "delete"),
+        ]}},
+        {"tool": "finish_run", "args": {"run_id": "$RUN", "summary": "Four frames."}},
+    ]);
+    std::fs::write(
+        &script,
+        serde_json::json!({
+            "auth": "claude.ai",
+            "calls": calls,
+            "result": {"is_error": false, "subtype": "success", "result": "All proposed."},
+            "exit": 0,
+            "delay_ms": 0,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut opts = options(eval_dir.path(), vec![shoot.path().into()]);
+    opts.helper = true;
+    opts.overrides = photosift::Overrides {
+        claude_bin: Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude"))),
+        claude_env: vec![(
+            "FAKE_CLAUDE_SCRIPT".into(),
+            script.to_string_lossy().into_owned(),
+        )],
+        ..Default::default()
+    };
+
+    let rows = eval::run(&opts).await.unwrap();
+
+    let r = &rows[0];
+    assert_eq!(r.mode, "helper");
+    assert_eq!(r.run_status.as_deref(), Some("done"), "{:?}", r.run_error);
+    assert!(r.prompt_version.is_some() && r.model.is_some(), "{r:?}");
+    // Keep = album + library = {1, 2}; truth = {1, 3}.
+    assert_eq!(r.keep, 2);
+    assert_eq!((r.score.exact, r.score.missed), (1, 1));
+    let album = r.album.as_ref().expect("album-only score");
+    assert_eq!((album.exact, album.false_picks), (1, 0));
+    // Usage lands just after finish_run made the run done.
+    assert_eq!(r.output_tokens, 300);
+    assert!((r.cost_usd - 0.0123).abs() < 1e-9, "{r:?}");
+    assert_eq!(snapshot(shoot.path()), before, "the library folder changed");
+}
