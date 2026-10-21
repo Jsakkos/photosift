@@ -639,3 +639,9 @@ kbd {
     margin-right: 24rem;
   }
 }
+
+.chat-system {
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-align: center;
+}

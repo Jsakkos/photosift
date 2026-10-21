@@ -15,6 +15,8 @@ import type {
   ServerStatus,
   ShootReview,
   ShootSummary,
+  TasteDecision,
+  TasteProfile,
   TrashReport,
 } from "./types";
 
@@ -55,7 +57,7 @@ async function errorMessage(res: Response): Promise<string> {
 }
 
 async function request<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PUT",
   path: string,
   body?: unknown,
 ): Promise<T> {
@@ -163,3 +165,12 @@ export const previewUrl = (photoId: number) => `/media/preview/${photoId}`;
 export const scanThumbUrl = (scanId: string, idx: number) =>
   `/media/scan/${encodeURIComponent(scanId)}/${idx}`;
 export const thumbUrl = (photoId: number) => `/media/thumb/${photoId}`;
+
+export const getTaste = () => request<TasteProfile>("GET", "/api/taste");
+
+/** 400 over 4000 characters. */
+export const saveTaste = (text: string) => request<TasteProfile>("PUT", "/api/taste", { text });
+
+/** The newest overrides, newest first. */
+export const getTasteDecisions = (limit = 50) =>
+  request<TasteDecision[]>("GET", `/api/taste/decisions?limit=${limit}`);

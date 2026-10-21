@@ -1,7 +1,7 @@
 //! The helper's routes: run it on a shoot now, and chat with it.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use super::{ApiError, AppState};
 use crate::{
-    db::helper::{self, ChatMessageRow, RunKind},
+    db::helper::{self, ChatMessageRow, DecisionRow, RunKind, TasteAuthor, TasteRow, TASTE_MAX},
     helper::{transport::Availability, EnqueueError},
 };
 
@@ -86,6 +86,61 @@ pub async fn chat_history(
 ) -> Result<Json<Vec<ChatMessageRow>>, ApiError> {
     let db = state.db.clone();
     tokio::task::spawn_blocking(move || helper::chat_messages(&db, id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map(Json)
+        .map_err(|e| ApiError::internal(format!("{e:#}")))
+}
+
+pub async fn get_taste(State(state): State<AppState>) -> Result<Json<TasteRow>, ApiError> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || helper::get_taste_row(&db))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map(Json)
+        .map_err(|e| ApiError::internal(format!("{e:#}")))
+}
+
+#[derive(Deserialize)]
+pub struct TasteBody {
+    text: String,
+}
+
+/// The user's own save: marks the profile as written by the user.
+pub async fn put_taste(
+    State(state): State<AppState>,
+    Json(body): Json<TasteBody>,
+) -> Result<Json<TasteRow>, ApiError> {
+    let n = body.text.chars().count();
+    if n > TASTE_MAX {
+        return Err(ApiError::bad_request(format!(
+            "the taste profile is {n} characters; the limit is {TASTE_MAX}"
+        )));
+    }
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        helper::set_taste(&db, &body.text, TasteAuthor::User)?;
+        helper::get_taste_row(&db)
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map(Json)
+    .map_err(|e| ApiError::internal(format!("{e:#}")))
+}
+
+#[derive(Deserialize)]
+pub struct DecisionsQuery {
+    limit: Option<usize>,
+}
+
+/// The newest overrides, newest first; `limit` defaults to 50 (at most 200).
+pub async fn taste_decisions(
+    State(state): State<AppState>,
+    Query(q): Query<DecisionsQuery>,
+) -> Result<Json<Vec<DecisionRow>>, ApiError> {
+    let limit = q.limit.unwrap_or(50).min(200);
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || helper::recent_overrides(&db, limit))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map(Json)

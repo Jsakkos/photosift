@@ -85,4 +85,10 @@ pub const STEPS: &[(i64, &str)] = &[
         );
         ALTER TABLE helper_runs ADD COLUMN retry INTEGER NOT NULL DEFAULT 0;",
     ),
+    // Who last wrote the taste profile: the helper can rewrite it from chat,
+    // and the Taste page flags that until the user saves.
+    (
+        5,
+        "ALTER TABLE taste ADD COLUMN updated_by TEXT NOT NULL DEFAULT 'user'          CHECK(updated_by IN ('user','helper'));",
+    ),
 ];

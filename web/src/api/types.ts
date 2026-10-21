@@ -274,6 +274,26 @@ export interface ChatMessage {
   at: string;
 }
 
+/** `GET`/`PUT /api/taste`. `updated_at` is empty until a profile has been written. */
+export interface TasteProfile {
+  text: string;
+  updated_at: string;
+  /** `helper` after the helper rewrote it, until the user saves. */
+  updated_by: "user" | "helper";
+}
+
+/** `GET /api/taste/decisions`: one override, newest first. */
+export interface TasteDecision {
+  photo_id: number;
+  shoot_id: number;
+  proposed: ProposedOutcome;
+  proposed_reason: string;
+  chosen: Outcome;
+  criterion: Criterion | null;
+  note: string | null;
+  decided_at: string;
+}
+
 /** `POST /api/shoots/{id}/helper/run` (202). */
 export interface HelperRunStarted {
   run_id: number;
@@ -329,7 +349,9 @@ export type ServerEvent =
       error: string | null;
     }
   /** One text block of the helper's chat answer; the user's own messages are not announced. */
-  | { type: "chat_message"; shoot_id: number; role: ChatRole; text: string };
+  | { type: "chat_message"; shoot_id: number; role: ChatRole; text: string }
+  /** The helper rewrote the taste profile. */
+  | { type: "taste_changed" };
 
 export type ServerEventType = ServerEvent["type"];
 
@@ -345,4 +367,5 @@ export const SERVER_EVENT_TYPES: readonly ServerEventType[] = [
   "proposals_changed",
   "helper_status",
   "chat_message",
+  "taste_changed",
 ];

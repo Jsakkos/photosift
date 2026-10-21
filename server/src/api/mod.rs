@@ -134,6 +134,8 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
             "/shoots/{id}/chat",
             get(helper::chat_history).post(helper::chat),
         )
+        .route("/taste", get(helper::get_taste).put(helper::put_taste))
+        .route("/taste/decisions", get(helper::taste_decisions))
         .route("/photos/{id}/outcome", post(photos::set_outcome))
         .route("/photos/{id}/decision-note", post(photos::decision_note))
         .fallback(|| async { StatusCode::NOT_FOUND })

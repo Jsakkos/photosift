@@ -570,15 +570,57 @@ pub fn add_your_call(
 
 /// Empty until one has been written.
 pub fn get_taste(pool: &DbPool) -> anyhow::Result<String> {
-    Ok(pool
-        .with(|c| {
-            c.query_row("SELECT text FROM taste WHERE id = 1", [], |r| r.get(0))
-                .optional()
-        })?
-        .unwrap_or_default())
+    Ok(get_taste_row(pool)?.text)
 }
 
-pub fn set_taste(pool: &DbPool, text: &str) -> anyhow::Result<()> {
+/// Who wrote the taste profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TasteAuthor {
+    User,
+    Helper,
+}
+
+impl TasteAuthor {
+    fn as_str(self) -> &'static str {
+        match self {
+            TasteAuthor::User => "user",
+            TasteAuthor::Helper => "helper",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TasteRow {
+    pub text: String,
+    /// Empty until a profile has been written.
+    pub updated_at: String,
+    pub updated_by: String,
+}
+
+pub fn get_taste_row(pool: &DbPool) -> anyhow::Result<TasteRow> {
+    Ok(pool
+        .with(|c| {
+            c.query_row(
+                "SELECT text, updated_at, updated_by FROM taste WHERE id = 1",
+                [],
+                |r| {
+                    Ok(TasteRow {
+                        text: r.get(0)?,
+                        updated_at: r.get(1)?,
+                        updated_by: r.get(2)?,
+                    })
+                },
+            )
+            .optional()
+        })?
+        .unwrap_or(TasteRow {
+            text: String::new(),
+            updated_at: String::new(),
+            updated_by: "user".into(),
+        }))
+}
+
+pub fn set_taste(pool: &DbPool, text: &str, by: TasteAuthor) -> anyhow::Result<()> {
     let len = text.chars().count();
     if len > TASTE_MAX {
         bail!("the taste profile is {len} characters; the limit is {TASTE_MAX}");
@@ -586,12 +628,46 @@ pub fn set_taste(pool: &DbPool, text: &str) -> anyhow::Result<()> {
     let now = now();
     pool.with(|c| {
         c.execute(
-            "INSERT INTO taste (id, text, updated_at) VALUES (1, ?1, ?2) \
-             ON CONFLICT(id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at",
-            params![text, now],
+            "INSERT INTO taste (id, text, updated_at, updated_by) VALUES (1, ?1, ?2, ?3)              ON CONFLICT(id) DO UPDATE SET text = excluded.text,              updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            params![text, now, by.as_str()],
         )
     })?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DecisionRow {
+    pub photo_id: i64,
+    pub shoot_id: i64,
+    pub proposed: String,
+    pub proposed_reason: String,
+    pub chosen: String,
+    pub criterion: Option<String>,
+    pub note: Option<String>,
+    pub decided_at: String,
+}
+
+/// The newest overrides (the user chose something other than the suggestion),
+/// newest first.
+pub fn recent_overrides(pool: &DbPool, limit: usize) -> anyhow::Result<Vec<DecisionRow>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT d.photo_id, p.shoot_id, d.proposed, d.proposed_reason, d.chosen,              d.criterion, d.note, d.decided_at              FROM decisions d JOIN photos p ON p.id = d.photo_id              WHERE d.chosen != d.proposed              ORDER BY d.decided_at DESC, d.rowid DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], |r| {
+            Ok(DecisionRow {
+                photo_id: r.get(0)?,
+                shoot_id: r.get(1)?,
+                proposed: r.get(2)?,
+                proposed_reason: r.get(3)?,
+                chosen: r.get(4)?,
+                criterion: r.get(5)?,
+                note: r.get(6)?,
+                decided_at: r.get(7)?,
+            })
+        })?;
+        rows.collect()
+    })
 }
 
 /// Proposals for the shoot's photos (trashed ones included), keyed by photo.

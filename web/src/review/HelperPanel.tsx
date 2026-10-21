@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 
 import { ApiError, getChat, sendChat } from "../api/client";
 import type { ChatMessage, ServerEvent } from "../api/types";
@@ -30,6 +31,7 @@ export function HelperPanel({ shootId, open, onClose }: Props) {
   const [sending, setSending] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [tasteChanged, setTasteChanged] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const log = useRef<HTMLDivElement>(null);
   const localId = useRef(0);
@@ -42,11 +44,16 @@ export function HelperPanel({ shootId, open, onClose }: Props) {
     setMessages([]);
     setWaiting(false);
     setProblem(null);
+    setTasteChanged(false);
     load();
   }, [load]);
 
   // The socket's open handler also covers a reconnect: answers sent while it was down are fetched.
   useServerEvents((event: ServerEvent) => {
+    if (event.type === "taste_changed") {
+      setTasteChanged(true);
+      return;
+    }
     if (event.type !== "chat_message" || event.shoot_id !== shootId) return;
     localId.current += 1;
     const id = -localId.current;
@@ -65,7 +72,7 @@ export function HelperPanel({ shootId, open, onClose }: Props) {
   useEffect(() => {
     const el = log.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, waiting, open]);
+  }, [messages, waiting, open, tasteChanged]);
 
   const send = async () => {
     const text = draft.trim();
@@ -121,6 +128,11 @@ export function HelperPanel({ shootId, open, onClose }: Props) {
             {m.text}
           </p>
         ))}
+        {tasteChanged && (
+          <p className="chat-message chat-system" data-role="system" role="status">
+            Updated your taste notes &mdash; review them on the <Link to="/taste">Taste page</Link>
+          </p>
+        )}
         {waiting && (
           <p className="muted" role="status">
             Claude is thinking…

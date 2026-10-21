@@ -322,3 +322,70 @@ button:focus-visible {
 .app-main-wide {
   max-width: none;
 }
+
+.page-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.taste-notice {
+  margin: 0.75rem 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.taste-label {
+  display: block;
+  margin: 1rem 0 0.4rem;
+  font-weight: 600;
+}
+
+.taste-notes {
+  width: 100%;
+  resize: vertical;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.taste-status {
+  min-height: 1.5em;
+  margin: 0.25rem 0 1rem;
+}
+
+.taste-count {
+  float: right;
+}
+
+.taste-decisions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.taste-decision {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.taste-decision img {
+  display: block;
+  height: 72px;
+  width: auto;
+  max-width: 140px;
+  border-radius: 4px;
+}
+
+.taste-decision p {
+  margin: 0 0 0.2rem;
+}

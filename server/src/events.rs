@@ -77,6 +77,8 @@ pub enum ServerEvent {
         role: String,
         text: String,
     },
+    /// The helper rewrote the taste profile (through the MCP tool).
+    TasteChanged,
 }
 
 /// What a card-detected toast needs; the full `CardScan` is fetched on demand.

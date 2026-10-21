@@ -559,3 +559,130 @@ async fn decision_note_targets_current_proposal() {
         "the old run's decision is untouched"
     );
 }
+
+impl Env {
+    async fn taste(&self) -> Value {
+        let resp = self
+            .http
+            .get(format!("{}/api/taste", self.server.base_url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        resp.json().await.unwrap()
+    }
+
+    async fn put_taste(&self, text: &str) -> reqwest::Response {
+        self.http
+            .put(format!("{}/api/taste", self.server.base_url))
+            .json(&json!({ "text": text }))
+            .send()
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn taste_http_round_trip() {
+    let env = Env::new().await;
+    let empty = env.taste().await;
+    assert_eq!(empty["text"], "");
+
+    let resp = env.put_taste("prefers candid over posed").await;
+    assert_eq!(resp.status(), 200);
+    let put: Value = resp.json().await.unwrap();
+    assert_eq!(put["text"], "prefers candid over posed");
+    assert!(!put["updated_at"].as_str().unwrap().is_empty());
+
+    assert_eq!(env.taste().await["text"], "prefers candid over posed");
+    assert_eq!(env.put_taste(&"x".repeat(4000)).await.status(), 200);
+    let resp = env.put_taste(&"x".repeat(4001)).await;
+    assert_eq!(resp.status(), 400);
+    // The rejected save left the stored profile alone.
+    assert_eq!(env.taste().await["text"], "x".repeat(4000));
+}
+
+#[tokio::test]
+async fn helper_taste_write_marked() {
+    let env = Env::new().await;
+    assert_eq!(env.taste().await["updated_by"], "user");
+
+    let r = env
+        .call("set_taste_profile", json!({"text": "likes dusk"}))
+        .await;
+    assert_eq!(r["isError"], false, "{r}");
+    let t = env.taste().await;
+    assert_eq!(t["text"], "likes dusk");
+    assert_eq!(t["updated_by"], "helper");
+
+    env.put_taste("likes dusk and dawn").await;
+    assert_eq!(env.taste().await["updated_by"], "user");
+}
+
+#[tokio::test]
+async fn decisions_listing_newest_first() {
+    let mut env = Env::new().await;
+    let a = env.add_photo();
+    let b = env.add_photo();
+    let c = env.add_photo();
+    let run = env.start_run(env.shoot).await;
+    env.propose(
+        run,
+        json!([
+            item(a, "album", "big laugh"),
+            item(b, "album", "sharp"),
+            item(c, "album", "kept"),
+        ]),
+    )
+    .await;
+    env.set_outcome(a, "library").await;
+    env.set_outcome(b, "archive").await;
+    // An accept is not a disagreement.
+    env.set_outcome(c, "album").await;
+    env.http
+        .post(format!(
+            "{}/api/photos/{b}/decision-note",
+            env.server.base_url
+        ))
+        .json(&json!({"criterion": "sharpness"}))
+        .send()
+        .await
+        .unwrap();
+
+    let rows: Value = env
+        .http
+        .get(format!(
+            "{}/api/taste/decisions?limit=50",
+            env.server.base_url
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rows = rows.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0]["photo_id"], b);
+    assert_eq!(rows[0]["shoot_id"], env.shoot);
+    assert_eq!(rows[0]["proposed"], "album");
+    assert_eq!(rows[0]["proposed_reason"], "sharp");
+    assert_eq!(rows[0]["chosen"], "archive");
+    assert_eq!(rows[0]["criterion"], "sharpness");
+    assert_eq!(rows[1]["photo_id"], a);
+    assert!(rows[1]["criterion"].is_null());
+
+    let one: Value = env
+        .http
+        .get(format!(
+            "{}/api/taste/decisions?limit=1",
+            env.server.base_url
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(one.as_array().unwrap().len(), 1);
+}

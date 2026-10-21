@@ -884,8 +884,11 @@ fn set_taste_profile(state: &AppState, args: Value) -> ToolResult {
             "the taste profile is {n} characters; the limit is {TASTE_MAX}"
         ));
     }
-    match helper::set_taste(&state.db, &a.text) {
-        Ok(()) => ToolResult::text(format!("taste profile saved ({n} characters)")),
+    match helper::set_taste(&state.db, &a.text, helper::TasteAuthor::Helper) {
+        Ok(()) => {
+            state.events.send(ServerEvent::TasteChanged);
+            ToolResult::text(format!("taste profile saved ({n} characters)"))
+        }
         Err(e) => internal(format!("{e:#}")),
     }
 }
