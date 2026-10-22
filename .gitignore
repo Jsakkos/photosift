@@ -49,4 +49,5 @@ web/playwright-report/
 spikes/helper-usage/out/
 
 # Eval shoot list (real library paths)
-tests/eval/shoots.txt
+tests/eval/shoots*.txt
+!tests/eval/shoots.example.txt

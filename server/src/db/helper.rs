@@ -693,6 +693,23 @@ pub fn shoot_proposals(pool: &DbPool, shoot_id: i64) -> anyhow::Result<HashMap<i
     })
 }
 
+/// Drops every proposal and your-call pair of a shoot. Only the eval harness
+/// calls this: its runs must be independent, and the read tools show the
+/// helper earlier proposals, which it would otherwise anchor on.
+pub fn clear_shoot_proposals(pool: &DbPool, shoot_id: i64) -> anyhow::Result<()> {
+    pool.with(|c| {
+        c.execute(
+            "DELETE FROM proposals WHERE photo_id IN (SELECT id FROM photos WHERE shoot_id = ?1)",
+            [shoot_id],
+        )?;
+        c.execute(
+            "DELETE FROM your_call_pairs WHERE shoot_id = ?1",
+            [shoot_id],
+        )?;
+        Ok(())
+    })
+}
+
 /// The shoot's pairs whose photos are both still live, oldest first.
 pub fn your_calls(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<YourCallRow>> {
     pool.with(|c| {

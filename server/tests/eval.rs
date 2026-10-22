@@ -473,6 +473,67 @@ async fn helper_mode_scores_the_runs_proposals() {
     assert_eq!(snapshot(shoot.path()), before, "the library folder changed");
 }
 
+/// A second eval run must not see the first run's proposals: `get_moment` and
+/// `get_shoot_overview` show them, and the helper anchors on what it sees.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper_run_starts_without_earlier_proposals() {
+    let shoot = TempDir::new().unwrap();
+    let eval_dir = TempDir::new().unwrap();
+    shoot_with_originals(shoot.path(), 4);
+    write(
+        &shoot.path().join("Export").join("DSCF0001.jpg"),
+        &export_of(pattern(1), 2),
+    );
+    let item = |id: i64, outcome: &str| serde_json::json!({"photo_id": id, "outcome": outcome, "reason": "synthetic"});
+    let script = eval_dir.path().join("script.json");
+    let write_script = |items: Vec<serde_json::Value>| {
+        std::fs::write(
+            &script,
+            serde_json::json!({
+                "auth": "claude.ai",
+                "calls": [
+                    {"tool": "propose", "args": {"run_id": "$RUN", "items": items}},
+                    {"tool": "finish_run", "args": {"run_id": "$RUN", "summary": "Done."}},
+                ],
+                "result": {"is_error": false, "subtype": "success", "result": "ok"},
+                "exit": 0,
+                "delay_ms": 0,
+            })
+            .to_string(),
+        )
+        .unwrap();
+    };
+    let mut opts = options(eval_dir.path(), vec![shoot.path().into()]);
+    opts.helper = true;
+    opts.overrides = photosift::Overrides {
+        claude_bin: Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude"))),
+        claude_env: vec![(
+            "FAKE_CLAUDE_SCRIPT".into(),
+            script.to_string_lossy().into_owned(),
+        )],
+        ..Default::default()
+    };
+
+    write_script(vec![
+        item(1, "album"),
+        item(2, "library"),
+        item(3, "library"),
+        item(4, "archive"),
+    ]);
+    eval::run(&opts).await.unwrap();
+    write_script(vec![item(1, "album")]);
+    let rows = eval::run(&opts).await.unwrap();
+
+    assert_eq!(rows[0].keep, 1, "{:?}", rows[0]);
+    let db = photosift::db::open(&eval_dir.path().join("root").join("photosift.db")).unwrap();
+    let left = photosift::db::helper::shoot_proposals(&db, rows[0].shoot_id).unwrap();
+    assert_eq!(
+        left.keys().copied().collect::<Vec<_>>(),
+        vec![1],
+        "{left:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn nested_export_dirs_matched() {
     let shoot = TempDir::new().unwrap();
