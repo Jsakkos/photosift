@@ -364,6 +364,7 @@ fn match_all_exports(export_dirs: &[PathBuf], keys: &[PhotoKey]) -> exports::Exp
 
 /// Queues one eval run through the real helper and waits for it to end.
 fn helper_run(state: &AppState, shoot_id: i64, timeout: Duration) -> anyhow::Result<RunRow> {
+    helper_db::clear_shoot_proposals(&state.db, shoot_id)?;
     let run_id = state
         .helper
         .enqueue_kind(shoot_id, RunKind::Eval)
