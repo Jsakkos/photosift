@@ -3,6 +3,7 @@ name = "photosift"
 version = "0.1.0"
 edition = "2021"
 description = "PhotoSift localhost server"
+default-run = "photosift"
 
 [lib]
 name = "photosift"
