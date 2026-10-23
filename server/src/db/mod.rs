@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::Context;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 pub const SCHEMA_V1: &str = include_str!("schema.sql");
 
@@ -45,6 +45,7 @@ impl DbPool {
 }
 
 pub fn open(path: &Path) -> anyhow::Result<DbPool> {
+    refuse_foreign(path)?;
     let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
     // journal_mode returns a row, so it cannot go through execute_batch/pragma_update.
     conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))
@@ -54,6 +55,42 @@ pub fn open(path: &Path) -> anyhow::Result<DbPool> {
     Ok(DbPool {
         conn: Arc::new(Mutex::new(conn)),
     })
+}
+
+/// Tables every PhotoSift schema since v1 has. The removed Tauri prototype
+/// kept its own `photosift.db` in the same data roots with none of them.
+const V1_TABLES: &[&str] = &["shoots", "photos", "files", "camera_offsets"];
+
+/// Refuses a database that has tables but not PhotoSift's own. `user_version`
+/// alone cannot tell: the prototype's numbers overlap this schema's steps, so
+/// `migrate` would skip steps and fail partway. Runs on a read-only connection
+/// before `open` switches to WAL, which would rewrite the file header.
+fn refuse_foreign(path: &Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening {} read-only", path.display()))?;
+    let tables: Vec<String> = conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()
+        .with_context(|| format!("reading the tables of {}", path.display()))?;
+    let has_v1 = V1_TABLES.iter().all(|t| tables.iter().any(|n| n == t));
+    if tables.is_empty() || has_v1 {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} is a database from the old PhotoSift prototype (or another program), not one this \
+         version can use. Nothing was changed. Move it aside (for example, rename it to \
+         photosift-prototype.db) and start PhotoSift again; it will create a new database.",
+        path.display()
+    )
 }
 
 fn migrate(conn: &Connection) -> anyhow::Result<()> {

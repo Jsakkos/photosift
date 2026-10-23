@@ -103,3 +103,88 @@ fn migrate_is_idempotent_across_versions() {
     }
     assert_eq!(user_version(&path), db::migrations::STEPS.last().unwrap().0);
 }
+
+/// A database left by the removed Tauri prototype: its own tables and a
+/// `user_version` that collides with this schema's step numbers.
+fn write_prototype_db(path: &std::path::Path, version: i64) {
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(&format!(
+        "CREATE TABLE groups (id INTEGER PRIMARY KEY, name TEXT);
+         CREATE TABLE triage_judgments (id INTEGER PRIMARY KEY, group_id INT);
+         INSERT INTO groups (name) VALUES ('g');
+         PRAGMA user_version = {version};"
+    ))
+    .unwrap();
+}
+
+fn assert_refused_untouched(path: &std::path::Path) {
+    let before = std::fs::read(path).unwrap();
+    let mtime = std::fs::metadata(path).unwrap().modified().unwrap();
+
+    let err = match db::open(path) {
+        Ok(_) => panic!("a prototype database must not open"),
+        Err(e) => format!("{e:#}"),
+    };
+    assert!(err.contains("old PhotoSift prototype"), "{err}");
+    assert!(err.contains(&path.display().to_string()), "{err}");
+    assert!(err.contains("Nothing was changed"), "{err}");
+
+    assert_eq!(std::fs::read(path).unwrap(), before, "bytes unchanged");
+    assert_eq!(
+        std::fs::metadata(path).unwrap().modified().unwrap(),
+        mtime,
+        "mtime unchanged"
+    );
+    let sidecar = |suffix: &str| {
+        let mut p = path.as_os_str().to_owned();
+        p.push(suffix);
+        std::path::PathBuf::from(p)
+    };
+    assert!(!sidecar("-wal").exists(), "no WAL file created");
+    assert!(!sidecar("-shm").exists(), "no shared-memory file created");
+}
+
+#[test]
+fn prototype_db_is_refused_and_left_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("photosift.db");
+    write_prototype_db(&path, 4);
+    assert_refused_untouched(&path);
+}
+
+#[test]
+fn foreign_db_at_version_zero_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("photosift.db");
+    write_prototype_db(&path, 0);
+    assert_refused_untouched(&path);
+}
+
+#[test]
+fn every_photosift_version_still_opens() {
+    let last = db::migrations::STEPS.last().unwrap().0;
+    for version in 1..=last {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photosift.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(&format!(
+                "BEGIN;\n{SCHEMA_V1}\nPRAGMA user_version = 1;\nCOMMIT;"
+            ))
+            .unwrap();
+            for &(step, sql) in db::migrations::STEPS.iter().filter(|(n, _)| *n <= version) {
+                conn.execute_batch(&format!(
+                    "BEGIN;\n{sql}\nPRAGMA user_version = {step};\nCOMMIT;"
+                ))
+                .unwrap();
+            }
+        }
+        assert_eq!(user_version(&path), version);
+        db::open(&path).unwrap_or_else(|e| panic!("v{version}: {e:#}"));
+        assert_eq!(
+            user_version(&path),
+            last,
+            "v{version} upgrades to the last step"
+        );
+    }
+}

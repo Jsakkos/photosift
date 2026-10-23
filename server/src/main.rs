@@ -5,6 +5,8 @@
 use std::{
     net::SocketAddr,
     panic::{catch_unwind, AssertUnwindSafe},
+    path::Path,
+    process::ExitCode,
     sync::Arc,
     time::Duration,
 };
@@ -21,14 +23,30 @@ const HEALTH_PATIENCE: Duration = Duration::from_secs(3);
 const CARD_POLL: Duration = Duration::from_secs(2);
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> ExitCode {
     let data_root = config::data_root();
     let detached = instance::redirect_stdio_if_detached(&data_root);
+    match run(&data_root, detached).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            let message = format!("{e:#}");
+            photosift::plog!("main", "PhotoSift cannot start: {message}");
+            // A detached release has no console, so the log alone would leave
+            // the user with a launch that silently did nothing.
+            if detached {
+                instance::show_error_dialog("PhotoSift cannot start", &message);
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run(data_root: &Path, detached: bool) -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
     let (open, no_browser) = (flag("--open"), flag("--no-browser"));
 
-    let port = config::load(&data_root)?.port;
+    let port = config::load(data_root)?.port;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let url = format!("http://{addr}/");
     let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -53,9 +71,9 @@ async fn main() -> anyhow::Result<()> {
     };
     // Only the instance that owns the port may rotate the shared log.
     if detached {
-        instance::rotate_detached_log(&data_root);
+        instance::rotate_detached_log(data_root);
     }
-    let state = photosift::build_state(&data_root, listener.local_addr()?.port())?;
+    let state = photosift::build_state(data_root, listener.local_addr()?.port())?;
     spawn_card_watcher(&state);
     let app = api::router(state, config::web_dist());
     photosift::plog!(
