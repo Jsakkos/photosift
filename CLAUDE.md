@@ -4,7 +4,7 @@
 
 PhotoSift is a local-first photo pipeline: a Rust server on `127.0.0.1` plus a React UI in a normal browser tab. It ingests an SD card or folder (copy + SHA-256 verify, embedded previews, pHash), enriches on-device (faces, sharpness, bursts, moments), and lets the user cull each shoot with one outcome per photo. Outcomes are written to XMP sidecars for Lightroom Classic; deletes go to the Recycle Bin only after explicit approval.
 
-**Status: Plans 1 (foundation) and 2 (Claude helper, MCP endpoint, taste profile, evaluation harness) are built; the helper's quality bar is pending the user.** Plans 3-4 (albums + Immich, people) are not built yet; nothing in the code references them.
+**Status: Plans 1 (foundation) and 2 (Claude helper, MCP endpoint, taste profile, evaluation harness) are built; the helper meets its agreed quality bar (design doc §9).** Plans 3-4 (albums + Immich, people) are not built yet; nothing in the code references them.
 
 **The helper proposes, never decides.** Claude (via the user's own `claude` CLI login) proposes an outcome and a short reason per photo; proposals are suggestions the user accepts or overrides. A helper run the app spawns cannot set an outcome: besides its CLI deny list, its MCP URL carries a per-process token and the server refuses `set_outcome` and `start_run` to it (and `set_taste_profile` to background and eval runs). Nothing the helper does touches a photo's file or XMP. External MCP clients (plain `/mcp`, e.g. Claude Desktop) may call `set_outcome`, like the HTTP API; nothing deletes without the in-app approval.
 
