@@ -220,10 +220,12 @@ test.describe("helper suggestions", () => {
     }
 
     // Arrows move between the two, and A on one sends the other to archive.
-    await expect(pair.locator('.tile[data-focused="true"]')).toHaveCount(1);
+    // Focus is clicked in rather than asserted on load: the page may load
+    // before the helper run lands the pair, and initial focus is picked once.
     await pair.locator(".tile").first().locator(".frame").click();
     const left = Number(await pair.locator(".tile").first().getAttribute("data-photo-id"));
     const right = Number(await pair.locator(".tile").nth(1).getAttribute("data-photo-id"));
+    await expect(tile(page, left)).toHaveAttribute("data-focused", "true");
     await page.keyboard.press("ArrowRight");
     await expect(tile(page, right)).toHaveAttribute("data-focused", "true");
     await page.keyboard.press("ArrowLeft");
