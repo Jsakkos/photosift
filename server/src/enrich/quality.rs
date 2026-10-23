@@ -28,7 +28,9 @@ pub struct Quality {
 /// Rec. 601 luma, 0-255.
 pub fn gray_of(img: &RgbImage) -> Vec<f32> {
     img.px
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| 0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]))
         .collect()
 }
@@ -81,7 +83,10 @@ pub fn face_sharpness(img: &RgbImage, face: &Face) -> Option<f64> {
     let (x0, y0, x1, y1) = face_rect(face, w, h)?;
     let mut g = Vec::with_capacity((x1 - x0) * (y1 - y0));
     for y in y0..y1 {
-        for p in img.px[(y * w + x0) * 3..(y * w + x1) * 3].chunks_exact(3) {
+        for p in img.px[(y * w + x0) * 3..(y * w + x1) * 3]
+            .as_chunks::<3>()
+            .0
+        {
             g.push(0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]));
         }
     }

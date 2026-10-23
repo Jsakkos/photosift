@@ -51,7 +51,9 @@ pub fn compute(thumb_rgb: &[u8], w: u32, h: u32) -> i64 {
 
     let gray: Vec<f64> = small
         .buffer()
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|p| 0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2]))
         .collect();
 

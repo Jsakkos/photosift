@@ -385,10 +385,8 @@ fn scan(doc: &str) -> Result<Scan, String> {
                                 };
                             }
                         }
-                        3 => {
-                            if cur.is_some() && !empty && name == format!("{rdf_prefix}:li") {
-                                li_open = Some((before, String::new()));
-                            }
+                        3 if cur.is_some() && !empty && name == format!("{rdf_prefix}:li") => {
+                            li_open = Some((before, String::new()));
                         }
                         _ => {}
                     }

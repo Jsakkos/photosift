@@ -721,8 +721,10 @@ pub fn list_faces(pool: &DbPool, photo_id: i64) -> anyhow::Result<Vec<FaceRow>> 
                 .map(|l| l.map(|[x, y]| (x, y)));
             let embedding: Option<Vec<u8>> = r.get(8)?;
             let embedding = embedding.map(|b| {
-                b.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                b.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&c| f32::from_le_bytes(c))
                     .collect()
             });
             Ok(FaceRow {
