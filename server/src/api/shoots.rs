@@ -20,10 +20,16 @@ pub async fn review(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<ShootReview>, ApiError> {
-    tokio::task::spawn_blocking(move || review::shoot_review(&state.db, id))
+    let unavailable = state.helper.unavailable_reason().is_some();
+    let mut r = tokio::task::spawn_blocking(move || review::shoot_review(&state.db, id))
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(format!("{e:#}")))?
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found(format!("no shoot {id}")))
+        .ok_or_else(|| ApiError::not_found(format!("no shoot {id}")))?;
+    // A done run's proposals and summary still show; with nothing to show,
+    // the helper's state is that it cannot run.
+    if unavailable && matches!(r.helper.status.as_str(), "none" | "failed" | "interrupted") {
+        r.helper.status = "unavailable".into();
+    }
+    Ok(Json(r))
 }

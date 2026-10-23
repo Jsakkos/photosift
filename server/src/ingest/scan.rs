@@ -74,9 +74,26 @@ pub struct CardScan {
     pub warnings: Vec<String>,
 }
 
+/// What a scan leaves out.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScanOptions {
+    /// Directory names skipped at any depth, compared case-insensitively
+    /// (the eval harness skips `Export`, which holds edits, not originals).
+    pub exclude_dirs: &'static [&'static str],
+}
+
 /// Blocking: call from `spawn_blocking` inside async handlers.
 pub fn scan(source: &Path, db: &DbPool, settings: &Settings) -> anyhow::Result<CardScan> {
-    scan_with(source, db, settings, &|p| fs::metadata(p))
+    scan_with_options(source, db, settings, &ScanOptions::default())
+}
+
+pub fn scan_with_options(
+    source: &Path,
+    db: &DbPool,
+    settings: &Settings,
+    options: &ScanOptions,
+) -> anyhow::Result<CardScan> {
+    scan_with(source, db, settings, options, &|p| fs::metadata(p))
 }
 
 /// `stat` is injectable because a file that lists but cannot be stat'ed is
@@ -85,9 +102,10 @@ fn scan_with(
     source: &Path,
     db: &DbPool,
     settings: &Settings,
+    options: &ScanOptions,
     stat: &dyn Fn(&Path) -> std::io::Result<Metadata>,
 ) -> anyhow::Result<CardScan> {
-    let (files, mut warnings) = walk(source)?;
+    let (files, mut warnings) = walk(source, options.exclude_dirs)?;
 
     // One unreadable file must not hide the rest of the card: it is skipped
     // and reported instead of failing the whole scan.
@@ -190,7 +208,7 @@ fn has_ext(path: &Path, set: &[&str]) -> bool {
         .is_some_and(|e| set.iter().any(|s| e.eq_ignore_ascii_case(s)))
 }
 
-fn is_hidden(name: &std::ffi::OsStr, meta: &Metadata) -> bool {
+pub(crate) fn is_hidden(name: &std::ffi::OsStr, meta: &Metadata) -> bool {
     // Dot-files cover macOS "._" resource forks; the attribute check covers
     // "System Volume Information" and "$RECYCLE.BIN" on a FAT/exFAT card.
     if name.to_string_lossy().starts_with('.') {
@@ -211,15 +229,17 @@ fn is_hidden(name: &std::ffi::OsStr, meta: &Metadata) -> bool {
 
 /// Every supported file under `root`, sorted so pairing and ordering are
 /// deterministic, plus a warning for each directory or entry that could not be
-/// read. An unreadable root is an error.
-fn walk(root: &Path) -> anyhow::Result<(Vec<PathBuf>, Vec<String>)> {
-    walk_with(root, &|p| fs::read_dir(p))
+/// read. An unreadable root is an error. Directories named in `exclude`
+/// (case-insensitive) are skipped below the root.
+fn walk(root: &Path, exclude: &[&str]) -> anyhow::Result<(Vec<PathBuf>, Vec<String>)> {
+    walk_with(root, exclude, &|p| fs::read_dir(p))
 }
 
 /// `list` is injectable because a permission-denied directory is awkward to
 /// stage portably in tests.
 fn walk_with(
     root: &Path,
+    exclude: &[&str],
     list: &dyn Fn(&Path) -> std::io::Result<fs::ReadDir>,
 ) -> anyhow::Result<(Vec<PathBuf>, Vec<String>)> {
     let mut found = Vec::new();
@@ -257,7 +277,11 @@ fn walk_with(
             }
             let path = entry.path();
             if meta.is_dir() {
-                pending.push(path);
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if !exclude.iter().any(|x| name.eq_ignore_ascii_case(x)) {
+                    pending.push(path);
+                }
             } else if meta.is_file()
                 && (has_ext(&path, RAW_EXTS)
                     || has_ext(&path, JPEG_EXTS)
@@ -446,7 +470,7 @@ mod tests {
                 fs::read_dir(p)
             }
         };
-        let (files, warnings) = walk_with(dir.path(), &list).unwrap();
+        let (files, warnings) = walk_with(dir.path(), &[], &list).unwrap();
 
         assert_eq!(files.len(), 1);
         assert_eq!(warnings.len(), 1);
@@ -472,8 +496,14 @@ mod tests {
                 fs::metadata(p)
             }
         };
-        let scan = scan_with(dir.path(), &pool, &Settings::default(), &stat)
-            .expect("one bad file must not abort the scan");
+        let scan = scan_with(
+            dir.path(),
+            &pool,
+            &Settings::default(),
+            &ScanOptions::default(),
+            &stat,
+        )
+        .expect("one bad file must not abort the scan");
 
         assert_eq!(scan.items.len(), 1);
         assert!(scan.items[0].primary.ends_with("OK0001.JPG"));
@@ -490,6 +520,6 @@ mod tests {
     fn unreadable_root_is_still_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let list = |_: &Path| Err(std::io::Error::other("gone"));
-        assert!(walk_with(dir.path(), &list).is_err());
+        assert!(walk_with(dir.path(), &[], &list).is_err());
     }
 }

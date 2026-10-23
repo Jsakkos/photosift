@@ -123,19 +123,25 @@ async fn plain_gets_ignore_origin() {
 async fn ws_connect(
     server: &TestServer,
     origin: Option<&str>,
-) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+) -> Result<(), Box<tokio_tungstenite::tungstenite::Error>> {
     let url = format!("{}/ws", server.base_url).replacen("http://", "ws://", 1);
     let mut req = url.into_client_request().unwrap();
     if let Some(o) = origin {
         req.headers_mut().insert(ORIGIN, o.parse().unwrap());
     }
-    tokio_tungstenite::connect_async(req).await.map(|_| ())
+    tokio_tungstenite::connect_async(req)
+        .await
+        .map(|_| ())
+        .map_err(Box::new)
 }
 
 #[tokio::test]
 async fn websocket_upgrade_from_a_foreign_origin_is_refused() {
     let server = spawn_server().await;
-    match ws_connect(&server, Some("http://evil.example")).await {
+    match ws_connect(&server, Some("http://evil.example"))
+        .await
+        .map_err(|e| *e)
+    {
         Err(WsError::Http(resp)) => assert_eq!(resp.status(), 403),
         other => panic!("expected a 403 handshake rejection, got {other:?}"),
     }

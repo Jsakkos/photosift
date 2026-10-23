@@ -131,6 +131,55 @@ export interface ReviewPhoto {
   face_count: number;
   signal_score: number | null;
   has_video: boolean;
+  /** The helper's latest proposal; never the outcome itself. */
+  proposal: Proposal | null;
+}
+
+/** An outcome the helper may propose (never `unreviewed`). */
+export type ProposedOutcome = Exclude<Outcome, "unreviewed">;
+
+/** Why the user overrode a proposal (`POST /api/photos/{id}/decision-note`). */
+export type Criterion =
+  | "expression"
+  | "who"
+  | "moment"
+  | "sharpness"
+  | "duplicate"
+  | "composition"
+  | "other";
+
+export interface Proposal {
+  outcome: ProposedOutcome;
+  blooper: boolean;
+  reason: string;
+  /** From this proposal's decision row, so override chips survive a reload. */
+  criterion: Criterion | null;
+}
+
+export type HelperRunStatus = "queued" | "running" | "done" | "failed" | "interrupted";
+
+export type HelperState = "none" | HelperRunStatus | "unavailable";
+
+export interface YourCall {
+  id: number;
+  a: number;
+  b: number;
+  tradeoff: string;
+}
+
+export interface HelperView {
+  status: HelperState;
+  run_id: number | null;
+  summary: string | null;
+  error: string | null;
+  /** Proposals by outcome, unreviewed photos only. */
+  suggested: Counts;
+  your_calls: YourCall[];
+}
+
+export interface DecisionNoteRequest {
+  criterion: Criterion;
+  note?: string;
 }
 
 export interface ShootReview {
@@ -140,6 +189,7 @@ export interface ShootReview {
   moments: Moment[];
   /** JSON object keys are strings even though they hold photo ids. */
   photos: Record<string, ReviewPhoto>;
+  helper: HelperView;
 }
 
 // --- photos ---------------------------------------------------------------
@@ -195,10 +245,58 @@ export interface ClientSettings {
 
 export type AiBackend = "cuda" | "cpu" | "unavailable";
 
+/** `helper_transport` in settings.toml (`cli`, `cli-api-key` or `off`). */
+export type HelperTransport = string;
+
+export interface HelperStatusInfo {
+  available: boolean;
+  /** Why the helper cannot run, or that the first check is still going. */
+  reason: string | null;
+  transport: HelperTransport;
+  /** Runs waiting or running. */
+  queue: number;
+}
+
 export interface ServerStatus {
   ai_backend: AiBackend;
   embeddings: boolean;
   queue: number;
+  helper: HelperStatusInfo;
+}
+
+export type ChatRole = "user" | "helper";
+
+/** `GET /api/shoots/{id}/chat`, oldest first. */
+export interface ChatMessage {
+  id: number;
+  role: ChatRole;
+  text: string;
+  at: string;
+}
+
+/** `GET`/`PUT /api/taste`. `updated_at` is empty until a profile has been written. */
+export interface TasteProfile {
+  text: string;
+  updated_at: string;
+  /** `helper` after the helper rewrote it, until the user saves. */
+  updated_by: "user" | "helper";
+}
+
+/** `GET /api/taste/decisions`: one override, newest first. */
+export interface TasteDecision {
+  photo_id: number;
+  shoot_id: number;
+  proposed: ProposedOutcome;
+  proposed_reason: string;
+  chosen: Outcome;
+  criterion: Criterion | null;
+  note: string | null;
+  decided_at: string;
+}
+
+/** `POST /api/shoots/{id}/helper/run` (202). */
+export interface HelperRunStarted {
+  run_id: number;
 }
 
 export interface EventSummary {
@@ -241,7 +339,19 @@ export type ServerEvent =
     }
   | { type: "import_failed"; job_id: string; error: string }
   | { type: "enrich_progress"; shoot_id: number; done: number; total: number }
-  | { type: "enrich_done"; shoot_id: number };
+  | { type: "enrich_done"; shoot_id: number }
+  | { type: "proposals_changed"; shoot_id: number }
+  | {
+      type: "helper_status";
+      shoot_id: number;
+      run_id: number;
+      status: HelperRunStatus;
+      error: string | null;
+    }
+  /** One text block of the helper's chat answer; the user's own messages are not announced. */
+  | { type: "chat_message"; shoot_id: number; role: ChatRole; text: string }
+  /** The helper rewrote the taste profile. */
+  | { type: "taste_changed" };
 
 export type ServerEventType = ServerEvent["type"];
 
@@ -254,4 +364,8 @@ export const SERVER_EVENT_TYPES: readonly ServerEventType[] = [
   "import_failed",
   "enrich_progress",
   "enrich_done",
+  "proposals_changed",
+  "helper_status",
+  "chat_message",
+  "taste_changed",
 ];

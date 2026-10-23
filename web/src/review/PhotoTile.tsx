@@ -1,7 +1,10 @@
-import type { ReviewPhoto } from "../api/types";
+import type { Criterion, ReviewPhoto } from "../api/types";
 import { OUTCOME_LABEL } from "./model";
+import { OverrideWhy } from "./OverrideWhy";
 
-export type TileKind = "large" | "strip" | "highlight" | "compare";
+export type TileKind = "large" | "strip" | "highlight" | "compare" | "pair";
+
+export type NoteHandler = (photoId: number, criterion: Criterion, note?: string) => void;
 
 interface Props {
   photo: ReviewPhoto;
@@ -15,6 +18,7 @@ interface Props {
   burstSize?: number;
   onSelect: (id: number) => void;
   onOpen?: (id: number) => void;
+  onNote?: NoteHandler;
 }
 
 /** One photo, shown whole in a box of exactly its own aspect ratio. */
@@ -29,6 +33,7 @@ export function PhotoTile({
   burstSize,
   onSelect,
   onOpen,
+  onNote,
 }: Props) {
   const attrs =
     kind === "highlight"
@@ -37,6 +42,10 @@ export function PhotoTile({
         ? { "data-compare-id": photo.id }
         : { "data-photo-id": photo.id };
   const className = kind === "highlight" ? "hl" : kind === "compare" ? "compare-frame" : "tile";
+  const proposal = photo.proposal;
+  const suggesting = proposal !== null && photo.outcome === "unreviewed";
+  const overridden = proposal !== null && photo.outcome !== "unreviewed" && photo.outcome !== proposal.outcome;
+  const showsReason = kind === "large" || kind === "highlight" || kind === "pair";
   return (
     <div
       className={`${className} kind-${kind}`}
@@ -46,6 +55,8 @@ export function PhotoTile({
       data-focused={focused}
       data-large={kind === "large"}
       data-burst-size={burstSize}
+      // Strips stay compact: the reason is a tooltip there.
+      title={kind === "strip" && proposal ? proposal.reason : undefined}
       style={{ width }}
     >
       <div
@@ -67,10 +78,23 @@ export function PhotoTile({
         {photo.outcome !== "unreviewed" && (
           <span className={`badge badge-${photo.outcome}`}>{OUTCOME_LABEL[photo.outcome]}</span>
         )}
+        {suggesting && (
+          <span className="badge badge-suggest" data-suggested={proposal.outcome}>
+            suggest: {OUTCOME_LABEL[proposal.outcome]}
+            {proposal.blooper ? " + blooper" : ""}
+          </span>
+        )}
         {photo.blooper && <span className="badge badge-blooper">blooper</span>}
         {photo.has_video && <span className="badge badge-video">video</span>}
       </div>
-      {kind === "large" && <div className="why" data-slot="reason" />}
+      {showsReason && (
+        <div className="why" data-slot="reason" data-overridden={overridden || undefined}>
+          {proposal && (overridden ? <s>{proposal.reason}</s> : proposal.reason)}
+        </div>
+      )}
+      {showsReason && overridden && onNote && (
+        <OverrideWhy photoId={photo.id} chosen={proposal.criterion} onNote={onNote} />
+      )}
     </div>
   );
 }

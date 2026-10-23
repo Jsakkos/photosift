@@ -28,6 +28,11 @@ fn run_second_instance(port: u16, args: &[&str]) -> (Output, Duration) {
         .args(args)
         .env("PHOTOSIFT_HOME", home.path())
         .env_remove("PHOTOSIFT_WEB_DIST")
+        // Never probe or run the real `claude` from a test.
+        .env(
+            "PHOTOSIFT_CLAUDE_BIN",
+            home.path().join("no-claude-in-tests.exe"),
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

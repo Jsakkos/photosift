@@ -47,6 +47,9 @@ pub enum XmpError {
     },
     #[error("malformed XMP sidecar {}: {reason}", path.display())]
     Malformed { path: PathBuf, reason: String },
+    /// `Settings::read_only` (the eval harness): nothing was read or written.
+    #[error("read-only")]
+    ReadOnly,
 }
 
 /// `<stem>.xmp` beside the image.
@@ -56,7 +59,11 @@ pub fn sidecar_path(image_path: &Path) -> PathBuf {
 
 /// Applies `fields` to the sidecar of `image_path`, creating it if there is
 /// something to write. The file is only rewritten when its content changes.
-pub fn apply(image_path: &Path, fields: &XmpFields) -> Result<(), XmpError> {
+/// `read_only` (`Settings::read_only`) refuses before touching anything.
+pub fn apply(image_path: &Path, fields: &XmpFields, read_only: bool) -> Result<(), XmpError> {
+    if read_only {
+        return Err(XmpError::ReadOnly);
+    }
     let path = sidecar_path(image_path);
     let io_err = |source| XmpError::Io {
         path: path.clone(),
@@ -378,10 +385,8 @@ fn scan(doc: &str) -> Result<Scan, String> {
                                 };
                             }
                         }
-                        3 => {
-                            if cur.is_some() && !empty && name == format!("{rdf_prefix}:li") {
-                                li_open = Some((before, String::new()));
-                            }
+                        3 if cur.is_some() && !empty && name == format!("{rdf_prefix}:li") => {
+                            li_open = Some((before, String::new()));
                         }
                         _ => {}
                     }

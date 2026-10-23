@@ -1,0 +1,806 @@
+//! The Claude helper's tables: runs, proposals, your-call pairs and the taste
+//! profile. Nothing here touches `photos.outcome` or a sidecar.
+
+use std::collections::HashMap;
+
+use anyhow::{anyhow, bail};
+use rusqlite::{params, OptionalExtension, Row};
+use serde::Serialize;
+
+use super::DbPool;
+use crate::outcome::Outcome;
+
+/// Longest taste profile the helper may store.
+pub const TASTE_MAX: usize = 4000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunKind {
+    Background,
+    Chat,
+    External,
+    Eval,
+}
+
+impl RunKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunKind::Background => "background",
+            RunKind::Chat => "chat",
+            RunKind::External => "external",
+            RunKind::Eval => "eval",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunStatus {
+    Queued,
+    Running,
+    Done,
+    Failed,
+    Interrupted,
+}
+
+impl RunStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunStatus::Queued => "queued",
+            RunStatus::Running => "running",
+            RunStatus::Done => "done",
+            RunStatus::Failed => "failed",
+            RunStatus::Interrupted => "interrupted",
+        }
+    }
+
+    fn is_final(self) -> bool {
+        matches!(
+            self,
+            RunStatus::Done | RunStatus::Failed | RunStatus::Interrupted
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RunRow {
+    pub id: i64,
+    pub shoot_id: i64,
+    pub kind: String,
+    pub status: String,
+    pub session_id: Option<String>,
+    pub model: Option<String>,
+    pub prompt_version: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub num_turns: Option<i64>,
+    /// Re-run after a restart interrupted the shoot's previous run.
+    pub retry: bool,
+}
+
+const RUN_COLUMNS: &str = "id, shoot_id, kind, status, session_id, model, prompt_version, \
+     started_at, finished_at, summary, error, cost_usd, input_tokens, output_tokens, \
+     cache_read_tokens, num_turns, retry";
+
+fn run_row(r: &Row) -> rusqlite::Result<RunRow> {
+    Ok(RunRow {
+        id: r.get(0)?,
+        shoot_id: r.get(1)?,
+        kind: r.get(2)?,
+        status: r.get(3)?,
+        session_id: r.get(4)?,
+        model: r.get(5)?,
+        prompt_version: r.get(6)?,
+        started_at: r.get(7)?,
+        finished_at: r.get(8)?,
+        summary: r.get(9)?,
+        error: r.get(10)?,
+        cost_usd: r.get(11)?,
+        input_tokens: r.get(12)?,
+        output_tokens: r.get(13)?,
+        cache_read_tokens: r.get(14)?,
+        num_turns: r.get(15)?,
+        retry: r.get::<_, i64>(16)? != 0,
+    })
+}
+
+/// A helper write to a run that is not `running`: finished, failed,
+/// interrupted by a restart, or never started.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("run {run_id} is not running (it is {status})")]
+pub struct NotRunning {
+    pub run_id: i64,
+    pub status: String,
+}
+
+/// Fails unless the run is `running`. Called on the transaction the caller
+/// writes with, so a run the runner has just failed cannot still write.
+fn ensure_running(c: &rusqlite::Connection, run_id: i64) -> anyhow::Result<()> {
+    let status: Option<String> = c
+        .query_row(
+            "SELECT status FROM helper_runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match status {
+        Some(s) if s == RunStatus::Running.as_str() => Ok(()),
+        Some(status) => Err(NotRunning { run_id, status }.into()),
+        None => bail!("run {run_id} does not exist"),
+    }
+}
+
+/// What `claude -p` reported for a run. `input_tokens` includes cache writes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RunUsage {
+    pub cost_usd: f64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub num_turns: i64,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewProposal {
+    pub photo_id: i64,
+    pub outcome: Outcome,
+    pub blooper: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProposalRow {
+    pub photo_id: i64,
+    pub run_id: i64,
+    pub outcome: Outcome,
+    pub blooper: bool,
+    pub reason: String,
+    /// From this proposal's decision row, when the user has given one.
+    pub criterion: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct YourCallRow {
+    pub id: i64,
+    pub a: i64,
+    pub b: i64,
+    pub tradeoff: String,
+}
+
+pub(crate) fn now() -> String {
+    chrono::Local::now()
+        .naive_local()
+        .format("%Y-%m-%dT%H:%M:%S")
+        .to_string()
+}
+
+fn outcome_col(r: &Row, idx: usize) -> rusqlite::Result<Outcome> {
+    let s: String = r.get(idx)?;
+    s.parse().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, Box::new(e))
+    })
+}
+
+/// A new run in `queued`.
+pub fn create_run(
+    pool: &DbPool,
+    shoot_id: i64,
+    kind: RunKind,
+    model: Option<&str>,
+    prompt_version: Option<&str>,
+) -> anyhow::Result<i64> {
+    pool.with(|c| {
+        c.execute(
+            "INSERT INTO helper_runs (shoot_id, kind, status, model, prompt_version) \
+             VALUES (?1, ?2, 'queued', ?3, ?4)",
+            params![shoot_id, kind.as_str(), model, prompt_version],
+        )?;
+        Ok(c.last_insert_rowid())
+    })
+}
+
+/// Moves a run to `status`. Entering `running` stamps `started_at`; a final
+/// status stamps `finished_at`. `error` replaces the stored error.
+pub fn set_run_status(
+    pool: &DbPool,
+    run_id: i64,
+    status: RunStatus,
+    error: Option<&str>,
+) -> anyhow::Result<()> {
+    let now = now();
+    let n = pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET status = ?2, error = ?3, \
+             started_at = CASE WHEN ?2 = 'running' THEN COALESCE(started_at, ?4) ELSE started_at END, \
+             finished_at = CASE WHEN ?5 THEN ?4 ELSE finished_at END \
+             WHERE id = ?1",
+            params![run_id, status.as_str(), error, now, status.is_final()],
+        )
+    })?;
+    if n == 0 {
+        bail!("run {run_id} does not exist");
+    }
+    Ok(())
+}
+
+/// Records what `claude -p` reported. The status is the caller's business.
+pub fn finish_run(pool: &DbPool, run_id: i64, usage: &RunUsage) -> anyhow::Result<()> {
+    pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET cost_usd = ?2, input_tokens = ?3, output_tokens = ?4, \
+             cache_read_tokens = ?5, num_turns = ?6, session_id = ?7 WHERE id = ?1",
+            params![
+                run_id,
+                usage.cost_usd,
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_tokens,
+                usage.num_turns,
+                usage.session_id,
+            ],
+        )
+    })?;
+    Ok(())
+}
+
+/// The helper's `finish_run` tool: the summary, and status `done`. Only a
+/// `running` run can finish; check and write are one statement, so a run the
+/// runner has just failed stays failed.
+pub fn complete_run(pool: &DbPool, run_id: i64, summary: &str) -> anyhow::Result<()> {
+    let now = now();
+    let n = pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET summary = ?2, status = 'done', error = NULL, finished_at = ?3 \
+             WHERE id = ?1 AND status = 'running'",
+            params![run_id, summary, now],
+        )
+    })?;
+    if n == 0 {
+        let status = get_run(pool, run_id)?
+            .ok_or_else(|| anyhow!("run {run_id} does not exist"))?
+            .status;
+        return Err(NotRunning { run_id, status }.into());
+    }
+    Ok(())
+}
+
+/// `queued` -> `running`. False when the run is no longer queued.
+pub fn start_queued_run(pool: &DbPool, run_id: i64) -> anyhow::Result<bool> {
+    let now = now();
+    let n = pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET status = 'running', started_at = ?2 \
+             WHERE id = ?1 AND status = 'queued'",
+            params![run_id, now],
+        )
+    })?;
+    Ok(n > 0)
+}
+
+/// Moves a `queued` or `running` run to the final `status`. False when it had
+/// already ended (e.g. `finish_run` made it `done`); that run is left alone.
+pub fn end_open_run(
+    pool: &DbPool,
+    run_id: i64,
+    status: RunStatus,
+    error: Option<&str>,
+) -> anyhow::Result<bool> {
+    if !status.is_final() {
+        bail!("{} is not a final status", status.as_str());
+    }
+    let now = now();
+    let n = pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET status = ?2, error = ?3, finished_at = ?4 \
+             WHERE id = ?1 AND status IN ('queued', 'running')",
+            params![run_id, status.as_str(), error, now],
+        )
+    })?;
+    Ok(n > 0)
+}
+
+/// Marks every `queued` or `running` run `interrupted` and returns them as
+/// they were. Run at startup: no `claude` from before a restart may write.
+pub fn interrupt_open_runs(pool: &DbPool) -> anyhow::Result<Vec<RunRow>> {
+    let now = now();
+    pool.with(|c| {
+        let tx = c.unchecked_transaction()?;
+        let rows = {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {RUN_COLUMNS} FROM helper_runs WHERE status IN ('queued', 'running') \
+                 ORDER BY id"
+            ))?;
+            let rows = stmt
+                .query_map([], run_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        tx.execute(
+            "UPDATE helper_runs SET status = 'interrupted', \
+             error = 'PhotoSift restarted before the run finished', finished_at = ?1 \
+             WHERE status IN ('queued', 'running')",
+            [&now],
+        )?;
+        tx.commit()?;
+        Ok(rows)
+    })
+}
+
+/// The shoot's newest `queued` or `running` run that is not a chat turn (chat
+/// has its own one-at-a-time rule and never blocks a review).
+pub fn open_run(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<RunRow>> {
+    pool.with(|c| {
+        c.query_row(
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM helper_runs \
+                 WHERE shoot_id = ?1 AND kind != 'chat' AND status IN ('queued', 'running')                  ORDER BY id DESC LIMIT 1"
+            ),
+            [shoot_id],
+            run_row,
+        )
+        .optional()
+    })
+}
+
+/// Live, unreviewed photos without a current proposal: none at all, or one
+/// from a run that is not `done` or finished before the photo was enriched.
+const UNPROPOSED: &str = "SELECT p.id FROM photos p \
+     WHERE p.shoot_id = ?1 AND p.trashed_at IS NULL AND p.outcome = 'unreviewed' \
+     AND NOT EXISTS (SELECT 1 FROM proposals pr JOIN helper_runs r ON r.id = pr.run_id \
+        WHERE pr.photo_id = p.id AND r.status = 'done' AND r.finished_at >= p.enriched_at) \
+     ORDER BY p.id";
+
+fn unproposed(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<i64>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(UNPROPOSED)?;
+        let ids = stmt.query_map([shoot_id], |r| r.get(0))?.collect();
+        ids
+    })
+}
+
+/// What an automatic run should look at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunScope {
+    /// No photo of the shoot has a proposal yet.
+    WholeShoot,
+    /// Earlier runs proposed for the rest; these live, unreviewed photos
+    /// still have no current proposal.
+    NewPhotos(Vec<i64>),
+    /// Every live, unreviewed photo has a proposal from a `done` run newer
+    /// than its enrichment (or the user has decided them all).
+    Nothing,
+}
+
+pub fn automatic_scope(pool: &DbPool, shoot_id: i64) -> anyhow::Result<RunScope> {
+    let ids = unproposed(pool, shoot_id)?;
+    if ids.is_empty() {
+        return Ok(RunScope::Nothing);
+    }
+    let any: bool = pool.with(|c| {
+        c.query_row(
+            "SELECT EXISTS (SELECT 1 FROM proposals pr JOIN photos p ON p.id = pr.photo_id \
+             WHERE p.shoot_id = ?1)",
+            [shoot_id],
+            |r| r.get(0),
+        )
+    })?;
+    Ok(if any {
+        RunScope::NewPhotos(ids)
+    } else {
+        RunScope::WholeShoot
+    })
+}
+
+/// Notes that the shoot waits for an automatic run. `retry` is kept once set.
+pub fn add_pending(pool: &DbPool, shoot_id: i64, retry: bool) -> anyhow::Result<()> {
+    let now = now();
+    pool.with(|c| {
+        c.execute(
+            "INSERT INTO helper_pending (shoot_id, queued_at, retry) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(shoot_id) DO UPDATE SET retry = MAX(retry, excluded.retry)",
+            params![shoot_id, now, retry],
+        )
+    })?;
+    Ok(())
+}
+
+/// Removes the shoot's pending row; its `retry` flag, if there was one.
+pub fn take_pending(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<bool>> {
+    pool.with(|c| {
+        c.query_row(
+            "DELETE FROM helper_pending WHERE shoot_id = ?1 RETURNING retry",
+            [shoot_id],
+            |r| Ok(r.get::<_, i64>(0)? != 0),
+        )
+        .optional()
+    })
+}
+
+/// Every pending shoot with its `retry` flag, oldest first.
+pub fn pending_shoots(pool: &DbPool) -> anyhow::Result<Vec<(i64, bool)>> {
+    pool.with(|c| {
+        let mut stmt =
+            c.prepare("SELECT shoot_id, retry FROM helper_pending ORDER BY queued_at, shoot_id")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)))?
+            .collect();
+        rows
+    })
+}
+
+pub fn mark_retry(pool: &DbPool, run_id: i64) -> anyhow::Result<()> {
+    pool.with(|c| c.execute("UPDATE helper_runs SET retry = 1 WHERE id = ?1", [run_id]))?;
+    Ok(())
+}
+
+pub fn get_run(pool: &DbPool, run_id: i64) -> anyhow::Result<Option<RunRow>> {
+    pool.with(|c| {
+        c.query_row(
+            &format!("SELECT {RUN_COLUMNS} FROM helper_runs WHERE id = ?1"),
+            [run_id],
+            run_row,
+        )
+        .optional()
+    })
+}
+
+/// The run, if it is `running`. Every helper write checks this first, so an
+/// orphaned `claude` from before a restart (its run now `interrupted`) or a
+/// finished run cannot write.
+pub fn active_run(pool: &DbPool, run_id: i64) -> anyhow::Result<RunRow> {
+    let run = get_run(pool, run_id)?.ok_or_else(|| anyhow!("run {run_id} does not exist"))?;
+    if run.status != RunStatus::Running.as_str() {
+        bail!("run {run_id} is not running (it is {})", run.status);
+    }
+    Ok(run)
+}
+
+/// The shoot's newest review run; chat turns are not part of its helper status.
+pub fn latest_run(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<RunRow>> {
+    pool.with(|c| {
+        c.query_row(
+            &format!(
+                "SELECT {RUN_COLUMNS} FROM helper_runs WHERE shoot_id = ?1 AND kind != 'chat'                  ORDER BY id DESC LIMIT 1"
+            ),
+            [shoot_id],
+            run_row,
+        )
+        .optional()
+    })
+}
+
+/// Writes all proposals or none, and only while the run is `running`
+/// (`NotRunning` otherwise). Validation is the caller's; the schema still
+/// refuses an `unreviewed` outcome.
+pub fn upsert_proposals(pool: &DbPool, run_id: i64, items: &[NewProposal]) -> anyhow::Result<()> {
+    let now = now();
+    pool.with_tx(|tx| {
+        ensure_running(tx, run_id)?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO proposals (photo_id, run_id, outcome, blooper, reason, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(photo_id) DO UPDATE SET run_id = excluded.run_id, \
+                 outcome = excluded.outcome, blooper = excluded.blooper, \
+                 reason = excluded.reason, created_at = excluded.created_at",
+            )?;
+            for p in items {
+                stmt.execute(params![
+                    p.photo_id,
+                    run_id,
+                    p.outcome.as_str(),
+                    p.blooper,
+                    p.reason,
+                    now
+                ])?;
+            }
+        }
+        Ok(())
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum YourCallError {
+    #[error("photos {0} and {1} already form a your-call pair in this run")]
+    Duplicate(i64, i64),
+    #[error(transparent)]
+    NotRunning(NotRunning),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+/// Stores the pair with the lower id first, so `(b, a)` collides with `(a, b)`.
+/// A pair from an earlier run is taken over by this one; the same run naming
+/// it twice is refused. Only a `running` run may add one.
+pub fn add_your_call(
+    pool: &DbPool,
+    run_id: i64,
+    a: i64,
+    b: i64,
+    tradeoff: &str,
+) -> Result<i64, YourCallError> {
+    let (lo, hi) = (a.min(b), a.max(b));
+    let stored = pool.with_tx(|tx| {
+        ensure_running(tx, run_id)?;
+        let shoot: i64 = tx.query_row(
+            "SELECT shoot_id FROM helper_runs WHERE id = ?1",
+            [run_id],
+            |r| r.get(0),
+        )?;
+        let existing: Option<(i64, i64)> = tx
+            .query_row(
+                "SELECT id, run_id FROM your_call_pairs WHERE photo_a = ?1 AND photo_b = ?2",
+                [lo, hi],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let id = match existing {
+            Some((_, run)) if run == run_id => return Ok(None),
+            Some((id, _)) => {
+                tx.execute(
+                    "UPDATE your_call_pairs SET run_id = ?2, shoot_id = ?3, tradeoff = ?4                      WHERE id = ?1",
+                    params![id, run_id, shoot, tradeoff],
+                )?;
+                id
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO your_call_pairs (run_id, shoot_id, photo_a, photo_b, tradeoff)                      VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![run_id, shoot, lo, hi, tradeoff],
+                )?;
+                tx.last_insert_rowid()
+            }
+        };
+        Ok(Some(id))
+    });
+    match stored {
+        Ok(Some(id)) => Ok(id),
+        Ok(None) => Err(YourCallError::Duplicate(lo, hi)),
+        Err(e) => Err(match e.downcast::<NotRunning>() {
+            Ok(nr) => YourCallError::NotRunning(nr),
+            Err(e) => YourCallError::Other(e),
+        }),
+    }
+}
+
+/// Empty until one has been written.
+pub fn get_taste(pool: &DbPool) -> anyhow::Result<String> {
+    Ok(get_taste_row(pool)?.text)
+}
+
+/// Who wrote the taste profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TasteAuthor {
+    User,
+    Helper,
+}
+
+impl TasteAuthor {
+    fn as_str(self) -> &'static str {
+        match self {
+            TasteAuthor::User => "user",
+            TasteAuthor::Helper => "helper",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TasteRow {
+    pub text: String,
+    /// Empty until a profile has been written.
+    pub updated_at: String,
+    pub updated_by: String,
+}
+
+pub fn get_taste_row(pool: &DbPool) -> anyhow::Result<TasteRow> {
+    Ok(pool
+        .with(|c| {
+            c.query_row(
+                "SELECT text, updated_at, updated_by FROM taste WHERE id = 1",
+                [],
+                |r| {
+                    Ok(TasteRow {
+                        text: r.get(0)?,
+                        updated_at: r.get(1)?,
+                        updated_by: r.get(2)?,
+                    })
+                },
+            )
+            .optional()
+        })?
+        .unwrap_or(TasteRow {
+            text: String::new(),
+            updated_at: String::new(),
+            updated_by: "user".into(),
+        }))
+}
+
+pub fn set_taste(pool: &DbPool, text: &str, by: TasteAuthor) -> anyhow::Result<()> {
+    let len = text.chars().count();
+    if len > TASTE_MAX {
+        bail!("the taste profile is {len} characters; the limit is {TASTE_MAX}");
+    }
+    let now = now();
+    pool.with(|c| {
+        c.execute(
+            "INSERT INTO taste (id, text, updated_at, updated_by) VALUES (1, ?1, ?2, ?3)              ON CONFLICT(id) DO UPDATE SET text = excluded.text,              updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            params![text, now, by.as_str()],
+        )
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DecisionRow {
+    pub photo_id: i64,
+    pub shoot_id: i64,
+    pub proposed: String,
+    pub proposed_reason: String,
+    pub chosen: String,
+    pub criterion: Option<String>,
+    pub note: Option<String>,
+    pub decided_at: String,
+}
+
+/// The newest overrides (the user chose something other than the suggestion),
+/// newest first.
+pub fn recent_overrides(pool: &DbPool, limit: usize) -> anyhow::Result<Vec<DecisionRow>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT d.photo_id, p.shoot_id, d.proposed, d.proposed_reason, d.chosen,              d.criterion, d.note, d.decided_at              FROM decisions d JOIN photos p ON p.id = d.photo_id              WHERE d.chosen != d.proposed              ORDER BY d.decided_at DESC, d.rowid DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], |r| {
+            Ok(DecisionRow {
+                photo_id: r.get(0)?,
+                shoot_id: r.get(1)?,
+                proposed: r.get(2)?,
+                proposed_reason: r.get(3)?,
+                chosen: r.get(4)?,
+                criterion: r.get(5)?,
+                note: r.get(6)?,
+                decided_at: r.get(7)?,
+            })
+        })?;
+        rows.collect()
+    })
+}
+
+/// Proposals for the shoot's photos (trashed ones included), keyed by photo.
+pub fn shoot_proposals(pool: &DbPool, shoot_id: i64) -> anyhow::Result<HashMap<i64, ProposalRow>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT pr.photo_id, pr.run_id, pr.outcome, pr.blooper, pr.reason, d.criterion \
+             FROM proposals pr JOIN photos p ON p.id = pr.photo_id \
+             LEFT JOIN decisions d ON d.photo_id = pr.photo_id AND d.run_id = pr.run_id \
+             WHERE p.shoot_id = ?1",
+        )?;
+        let rows = stmt.query_map([shoot_id], |r| {
+            Ok(ProposalRow {
+                photo_id: r.get(0)?,
+                run_id: r.get(1)?,
+                outcome: outcome_col(r, 2)?,
+                blooper: r.get::<_, i64>(3)? != 0,
+                reason: r.get(4)?,
+                criterion: r.get(5)?,
+            })
+        })?;
+        rows.map(|r| r.map(|p| (p.photo_id, p))).collect()
+    })
+}
+
+/// Drops every proposal and your-call pair of a shoot. Only the eval harness
+/// calls this: its runs must be independent, and the read tools show the
+/// helper earlier proposals, which it would otherwise anchor on.
+pub fn clear_shoot_proposals(pool: &DbPool, shoot_id: i64) -> anyhow::Result<()> {
+    pool.with(|c| {
+        c.execute(
+            "DELETE FROM proposals WHERE photo_id IN (SELECT id FROM photos WHERE shoot_id = ?1)",
+            [shoot_id],
+        )?;
+        c.execute(
+            "DELETE FROM your_call_pairs WHERE shoot_id = ?1",
+            [shoot_id],
+        )?;
+        Ok(())
+    })
+}
+
+/// The shoot's pairs whose photos are both still live, oldest first.
+pub fn your_calls(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<YourCallRow>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT y.id, y.photo_a, y.photo_b, y.tradeoff FROM your_call_pairs y \
+             JOIN photos a ON a.id = y.photo_a AND a.trashed_at IS NULL \
+             JOIN photos b ON b.id = y.photo_b AND b.trashed_at IS NULL \
+             WHERE y.shoot_id = ?1 ORDER BY y.id",
+        )?;
+        let rows = stmt.query_map([shoot_id], |r| {
+            Ok(YourCallRow {
+                id: r.get(0)?,
+                a: r.get(1)?,
+                b: r.get(2)?,
+                tradeoff: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    })
+}
+
+/// Records the claude session a run uses, before it starts, so the next chat
+/// turn can resume it.
+pub fn set_run_session(pool: &DbPool, run_id: i64, session_id: &str) -> anyhow::Result<()> {
+    pool.with(|c| {
+        c.execute(
+            "UPDATE helper_runs SET session_id = ?2 WHERE id = ?1",
+            params![run_id, session_id],
+        )
+    })?;
+    Ok(())
+}
+
+/// The session of the shoot's latest chat turn that finished. A turn that
+/// failed may never have created its session, so it is not resumed.
+pub fn chat_session(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Option<String>> {
+    pool.with(|c| {
+        c.query_row(
+            "SELECT session_id FROM helper_runs WHERE shoot_id = ?1 AND kind = 'chat'              AND status = 'done' AND session_id IS NOT NULL AND session_id != ''              ORDER BY id DESC LIMIT 1",
+            [shoot_id],
+            |r| r.get(0),
+        )
+        .optional()
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessageRow {
+    pub id: i64,
+    pub role: String,
+    pub text: String,
+    pub at: String,
+}
+
+/// `role`: `user` or `helper`.
+pub fn add_chat_message(
+    pool: &DbPool,
+    shoot_id: i64,
+    role: &str,
+    text: &str,
+) -> anyhow::Result<ChatMessageRow> {
+    let at = now();
+    let id = pool.with(|c| {
+        c.execute(
+            "INSERT INTO chat_messages (shoot_id, role, text, at) VALUES (?1, ?2, ?3, ?4)",
+            params![shoot_id, role, text, at],
+        )?;
+        Ok(c.last_insert_rowid())
+    })?;
+    Ok(ChatMessageRow {
+        id,
+        role: role.into(),
+        text: text.into(),
+        at,
+    })
+}
+
+/// The shoot's conversation, oldest first.
+pub fn chat_messages(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<ChatMessageRow>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, role, text, at FROM chat_messages WHERE shoot_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map([shoot_id], |r| {
+            Ok(ChatMessageRow {
+                id: r.get(0)?,
+                role: r.get(1)?,
+                text: r.get(2)?,
+                at: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    })
+}

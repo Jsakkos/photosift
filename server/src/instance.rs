@@ -178,6 +178,34 @@ pub fn rotate_detached_log(data_root: &Path) {
     let _ = data_root;
 }
 
+/// A modal error box, for a GUI-subsystem process that has no console to
+/// print to. Blocks until the user closes it.
+pub fn show_error_dialog(title: &str, message: &str) {
+    #[cfg(windows)]
+    {
+        type Hwnd = *mut core::ffi::c_void;
+        const MB_ICONERROR: u32 = 0x10;
+        const MB_SETFOREGROUND: u32 = 0x1_0000;
+        #[link(name = "user32")]
+        extern "system" {
+            fn MessageBoxW(hwnd: Hwnd, text: *const u16, caption: *const u16, kind: u32) -> i32;
+        }
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (text, caption) = (wide(message), wide(title));
+        // SAFETY: both buffers are NUL-terminated and outlive the call.
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_ICONERROR | MB_SETFOREGROUND,
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (title, message);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

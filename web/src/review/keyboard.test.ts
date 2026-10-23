@@ -10,6 +10,14 @@ describe("resolveKey", () => {
     expect(resolveKey({ key: "ArrowDown" })).toEqual({ kind: "moment", delta: 1 });
     expect(resolveKey({ key: "3" })).toEqual({ kind: "filter", outcome: "unreviewed" });
     expect(resolveKey({ key: "?" })).toEqual({ kind: "help" });
+    expect(resolveKey({ key: "h" })).toEqual({ kind: "helper" });
+    expect(resolveKey({ key: "H" })).toEqual({ kind: "helper" });
+  });
+
+  it("tells y from Y and nothing else by case", () => {
+    expect(resolveKey({ key: "y" })).toEqual({ kind: "accept", scope: "one" });
+    expect(resolveKey({ key: "Y" })).toEqual({ kind: "accept", scope: "moment" });
+    expect(resolveKey({ key: "L" })).toEqual({ kind: "outcome", outcome: "library" });
   });
 
   it("leaves browser shortcuts and unknown keys alone", () => {

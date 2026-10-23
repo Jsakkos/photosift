@@ -97,7 +97,12 @@ export function ShootsPage() {
 
   return (
     <section>
-      <h1>Shoots</h1>
+      <div className="page-head">
+        <h1>Shoots</h1>
+        <Link to="/taste" className="page-head-link">
+          Taste
+        </Link>
+      </div>
       {error && (
         <p className="error" role="alert">
           Could not load shoots: {error}

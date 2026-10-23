@@ -3,10 +3,13 @@ pub mod config;
 pub mod db;
 pub mod drives;
 pub mod enrich;
+pub mod eval;
 pub mod events;
+pub mod helper;
 pub mod ingest;
 pub mod instance;
 pub mod logging;
+pub mod mcp;
 pub mod media;
 pub mod outcome;
 #[doc(hidden)]
@@ -18,20 +21,65 @@ use std::{path::Path, path::PathBuf, sync::Arc};
 
 use api::AppState;
 use events::EventHub;
+use helper::transport::{ClaudeCli, CliAuth, Off, Transport};
+
+/// What tests and the eval harness set per server instead of process env.
+#[derive(Debug, Clone, Default)]
+pub struct Overrides {
+    /// Replaces `config::claude_bin()` (`PHOTOSIFT_CLAUDE_BIN`, then `PATH`).
+    pub claude_bin: Option<PathBuf>,
+    /// Extra environment for every `claude` child.
+    pub claude_env: Vec<(String, String)>,
+    /// Sets `Settings::read_only` (the eval harness).
+    pub read_only: bool,
+    /// Tests: a face stage that finds nothing but stamps photos as if models
+    /// were loaded, so the re-detect paths run without the ONNX files.
+    #[doc(hidden)]
+    pub fake_faces: bool,
+}
 
 /// Opens the database, starts the enrich worker and assembles shared state.
 /// Split from `build_app` so the binary can hand the same state (db, settings,
 /// scan cache, event hub) to the card watcher.
 pub fn build_state(data_root: &Path, port: u16) -> anyhow::Result<AppState> {
-    let settings = config::load(data_root)?;
+    build_state_with(data_root, port, Overrides::default())
+}
+
+pub fn build_state_with(
+    data_root: &Path,
+    port: u16,
+    overrides: Overrides,
+) -> anyhow::Result<AppState> {
+    let mut settings = config::load(data_root)?;
+    settings.read_only = overrides.read_only;
+    let fake_faces = overrides.fake_faces;
+    let settings = Arc::new(settings);
     let db = db::open(&data_root.join("photosift.db"))?;
     // Card thumbnails belong to scans, which live only in memory.
     let _ = std::fs::remove_dir_all(data_root.join("cache").join("scan"));
     let events = EventHub::new();
-    let enrich =
-        enrich::job::EnrichWorker::start(db.clone(), events.clone(), data_root, settings.clone());
+    let helper = helper::HelperService::start(
+        db.clone(),
+        events.clone(),
+        data_root,
+        settings.clone(),
+        helper_transport(&settings, port, overrides),
+    );
+    let after_enriched = {
+        let helper = helper.clone();
+        move |shoot_id| helper.enqueue(shoot_id)
+    };
+    let enrich = enrich::job::EnrichWorker::start(
+        db.clone(),
+        events.clone(),
+        data_root,
+        (*settings).clone(),
+        Box::new(after_enriched),
+        fake_faces,
+    );
     Ok(AppState {
-        settings: Arc::new(settings),
+        settings,
+        helper,
         db,
         port,
         data_root: data_root.to_path_buf(),
@@ -41,6 +89,22 @@ pub fn build_state(data_root: &Path, port: u16) -> anyhow::Result<AppState> {
         cards: Default::default(),
         import_busy: Default::default(),
     })
+}
+
+/// The transport `helper_transport` names; `port` is where `/mcp` listens.
+fn helper_transport(settings: &config::Settings, port: u16, o: Overrides) -> Arc<dyn Transport> {
+    let cli = |auth| {
+        let bin = o.claude_bin.clone().or_else(config::claude_bin);
+        Arc::new(ClaudeCli::new(bin, auth, port, o.claude_env.clone())) as Arc<dyn Transport>
+    };
+    match settings.helper_transport.as_str() {
+        "cli" => cli(CliAuth::Subscription),
+        "cli-api-key" => cli(CliAuth::ApiKey),
+        "off" => Arc::new(Off::new()),
+        other => Arc::new(Off::because(format!(
+            "unknown helper_transport {other:?} in settings (use cli, cli-api-key or off)"
+        ))),
+    }
 }
 
 /// Builds the full app (API + optional static web) rooted at `data_root`.
@@ -53,5 +117,17 @@ pub fn build_app(
     web_dist: Option<PathBuf>,
     port: u16,
 ) -> anyhow::Result<axum::Router> {
-    Ok(api::router(build_state(data_root, port)?, web_dist))
+    build_app_with(data_root, web_dist, port, Overrides::default())
+}
+
+pub fn build_app_with(
+    data_root: &Path,
+    web_dist: Option<PathBuf>,
+    port: u16,
+    overrides: Overrides,
+) -> anyhow::Result<axum::Router> {
+    Ok(api::router(
+        build_state_with(data_root, port, overrides)?,
+        web_dist,
+    ))
 }

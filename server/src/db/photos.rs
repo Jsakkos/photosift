@@ -545,6 +545,48 @@ pub fn shoots_needing_enrichment(pool: &DbPool) -> anyhow::Result<Vec<i64>> {
     })
 }
 
+/// Appended to a face-model stamp when the photo had no usable preview, so
+/// the detector could not look at it.
+const NO_PREVIEW_SUFFIX: &str = ":no-preview";
+
+/// The stamp for a photo `stamp`'s models could not look at (no preview):
+/// it is not stale under `stamp`, only under a later model.
+pub fn no_preview_stamp(stamp: &str) -> String {
+    format!("{stamp}{NO_PREVIEW_SUFFIX}")
+}
+
+/// Shoots with a live photo that was enriched with a different face-model
+/// stamp than `stamp` (NULL: enriched before a detector was available). A
+/// photo `stamp`'s models already found unreadable is not stale.
+pub fn shoots_needing_faces(pool: &DbPool, stamp: &str) -> anyhow::Result<Vec<i64>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT DISTINCT shoot_id FROM photos WHERE trashed_at IS NULL              AND enriched_at IS NOT NULL AND (faces_model IS NULL              OR (faces_model != ?1 AND faces_model != ?1 || ?2)) ORDER BY shoot_id",
+        )?;
+        let ids = stmt
+            .query_map(params![stamp, NO_PREVIEW_SUFFIX], |r| r.get(0))?
+            .collect();
+        ids
+    })
+}
+
+/// The shoot's live photos whose faces predate `stamp`; see `shoots_needing_faces`.
+pub fn stale_faces_photo_ids(
+    pool: &DbPool,
+    shoot_id: i64,
+    stamp: &str,
+) -> anyhow::Result<Vec<i64>> {
+    pool.with(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id FROM photos WHERE shoot_id = ?1 AND trashed_at IS NULL              AND enriched_at IS NOT NULL AND (faces_model IS NULL              OR (faces_model != ?2 AND faces_model != ?2 || ?3)) ORDER BY id",
+        )?;
+        let ids = stmt
+            .query_map(params![shoot_id, stamp, NO_PREVIEW_SUFFIX], |r| r.get(0))?
+            .collect();
+        ids
+    })
+}
+
 pub fn unenriched_photo_ids(pool: &DbPool, shoot_id: i64) -> anyhow::Result<Vec<i64>> {
     pool.with(|c| {
         let mut stmt = c.prepare(
@@ -589,42 +631,20 @@ pub struct QualityColumns {
 
 /// Replaces the photo's faces and quality columns and marks it enriched, in
 /// one transaction, so a crash never leaves faces without the enriched flag
-/// (or the reverse). Re-running for a photo is idempotent.
+/// (or the reverse). Re-running for a photo is idempotent. `faces_model` is
+/// the stamp of the detector that ran, None when there was none.
 pub fn save_enrichment(
     pool: &DbPool,
     photo_id: i64,
     quality: &QualityColumns,
     faces: &[NewFace],
+    faces_model: Option<&str>,
 ) -> anyhow::Result<()> {
     pool.with(|c| {
         let tx = c.unchecked_transaction()?;
-        tx.execute("DELETE FROM faces WHERE photo_id = ?1", [photo_id])?;
-        for f in faces {
-            let landmarks = serde_json::to_string(&f.landmarks.map(|(x, y)| [x, y]))
-                .expect("landmarks serialize");
-            let blob: Option<Vec<u8>> = f
-                .embedding
-                .as_ref()
-                .map(|e| e.iter().flat_map(|v| v.to_le_bytes()).collect());
-            tx.execute(
-                "INSERT INTO faces(photo_id, x, y, w, h, score, landmarks, embedding, sharpness) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    photo_id,
-                    f.bbox.0,
-                    f.bbox.1,
-                    f.bbox.2,
-                    f.bbox.3,
-                    f.score,
-                    landmarks,
-                    blob,
-                    f.sharpness
-                ],
-            )?;
-        }
+        replace_faces(&tx, photo_id, faces)?;
         tx.execute(
-            "UPDATE photos SET sharpness = ?1, face_sharpness = ?2, mean_luma = ?3, \
-             clip_hi = ?4, clip_lo = ?5, enriched_at = ?6 WHERE id = ?7",
+            "UPDATE photos SET sharpness = ?1, face_sharpness = ?2, mean_luma = ?3,              clip_hi = ?4, clip_lo = ?5, enriched_at = ?6, faces_model = ?7 WHERE id = ?8",
             params![
                 quality.sharpness,
                 quality.face_sharpness,
@@ -632,11 +652,60 @@ pub fn save_enrichment(
                 quality.clip_hi,
                 quality.clip_lo,
                 fmt_datetime(Some(chrono::Local::now().naive_local())),
+                faces_model,
                 photo_id
             ],
         )?;
         tx.commit()
     })
+}
+
+/// Re-detection of an already-enriched photo: replaces its faces, recomputes
+/// `face_sharpness` from them, and stamps `faces_model`. Every other quality
+/// column and `enriched_at` stay as they were.
+pub fn save_faces_only(
+    pool: &DbPool,
+    photo_id: i64,
+    faces: &[NewFace],
+    stamp: &str,
+) -> anyhow::Result<()> {
+    let face_sharpness = faces.iter().filter_map(|f| f.sharpness).reduce(f64::max);
+    pool.with(|c| {
+        let tx = c.unchecked_transaction()?;
+        replace_faces(&tx, photo_id, faces)?;
+        tx.execute(
+            "UPDATE photos SET face_sharpness = ?1, faces_model = ?2 WHERE id = ?3",
+            params![face_sharpness, stamp, photo_id],
+        )?;
+        tx.commit()
+    })
+}
+
+fn replace_faces(tx: &Connection, photo_id: i64, faces: &[NewFace]) -> rusqlite::Result<()> {
+    tx.execute("DELETE FROM faces WHERE photo_id = ?1", [photo_id])?;
+    for f in faces {
+        let landmarks =
+            serde_json::to_string(&f.landmarks.map(|(x, y)| [x, y])).expect("landmarks serialize");
+        let blob: Option<Vec<u8>> = f
+            .embedding
+            .as_ref()
+            .map(|e| e.iter().flat_map(|v| v.to_le_bytes()).collect());
+        tx.execute(
+            "INSERT INTO faces(photo_id, x, y, w, h, score, landmarks, embedding, sharpness)              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                photo_id,
+                f.bbox.0,
+                f.bbox.1,
+                f.bbox.2,
+                f.bbox.3,
+                f.score,
+                landmarks,
+                blob,
+                f.sharpness
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn list_faces(pool: &DbPool, photo_id: i64) -> anyhow::Result<Vec<FaceRow>> {
@@ -652,8 +721,10 @@ pub fn list_faces(pool: &DbPool, photo_id: i64) -> anyhow::Result<Vec<FaceRow>> 
                 .map(|l| l.map(|[x, y]| (x, y)));
             let embedding: Option<Vec<u8>> = r.get(8)?;
             let embedding = embedding.map(|b| {
-                b.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                b.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|&c| f32::from_le_bytes(c))
                     .collect()
             });
             Ok(FaceRow {

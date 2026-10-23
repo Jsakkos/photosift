@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
-import { trashDeletes } from "../api/client";
+import { getStatus, trashDeletes } from "../api/client";
 import type { Outcome } from "../api/types";
 import { Compare } from "../review/Compare";
-import { DeleteDialog, HelpOverlay, Toasts } from "../review/Dialogs";
+import { AcceptDialog, DeleteDialog, HelpOverlay, Toasts } from "../review/Dialogs";
+import { HelperPanel } from "../review/HelperPanel";
 import { Highlights } from "../review/Highlights";
 import { isTypingTarget, resolveKey, type Action } from "../review/keyboard";
 import { Loupe } from "../review/Loupe";
 import {
+  acceptable,
   buildView,
   burstOf,
+  momentOf,
+  type Acceptance,
   countOutcomes,
   plural,
   stepMoment,
@@ -60,13 +64,20 @@ export function ReviewPage() {
     setTimeout(() => setNotices((list) => list.filter((n) => n.id !== id)), NOTICE_MS);
   }, []);
 
-  const { review, photos, error, progress, setOutcome, reload } = useReview(shootId, notify);
+  const { review, photos, error, progress, setOutcome, reload, retryHelper, stopHelper, setNote } =
+    useReview(shootId, notify);
   const [filter, setFilter] = useState<Outcome | null>(null);
   const [mode, setMode] = useState<Mode>("grid");
   const [help, setHelp] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [confirm, setConfirm] = useState<"closed" | "open" | "busy">("closed");
   // Exactly the photos the dialog counts; what is sent is what was shown.
   const [approved, setApproved] = useState<number[]>([]);
+  // The batch the accept-all dialog names; `done` is null until it is confirmed.
+  const [accepting, setAccepting] = useState<{ items: Acceptance[]; done: number | null } | null>(
+    null,
+  );
+  const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<number | null>(null);
   const prefetcher = useMemo(() => new Prefetcher(), []);
   const restored = useRef(false);
@@ -75,10 +86,39 @@ export function ReviewPage() {
   const lastIndex = useRef(0);
   const loupeShown = useRef<number | null>(null);
 
+  const yourCalls = review?.helper.your_calls;
   const view = useMemo(
-    () => (review ? buildView(review, photos, filter) : null),
-    [review, photos, filter],
+    () => (review ? buildView(review, photos, filter, yourCalls) : null),
+    [review, photos, filter, yourCalls],
   );
+  const fullView = useMemo(
+    () => (review && filter !== null ? buildView(review, photos, null, yourCalls) : view),
+    [review, photos, filter, yourCalls, view],
+  );
+  const openSuggestions = useMemo(
+    () => (fullView ? acceptable(fullView, photos, "all").length : 0),
+    [fullView, photos],
+  );
+  // Counted here, not taken from the server: it must follow the user's own decisions.
+  const suggested = useMemo(() => {
+    const counts = countOutcomes({});
+    for (const photo of Object.values(photos)) {
+      if (photo.proposal && photo.outcome === "unreviewed") counts[photo.proposal.outcome] += 1;
+    }
+    return counts;
+  }, [photos]);
+  const helperStatus = review?.helper.status;
+  useEffect(() => {
+    if (helperStatus !== "unavailable") return;
+    let live = true;
+    getStatus().then(
+      (s) => live && setUnavailableReason(s.helper.reason),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [helperStatus]);
   const multiDay = useMemo(
     () => new Set(view?.moments.map((m) => m.start?.slice(0, 10))).size > 1,
     [view],
@@ -94,6 +134,8 @@ export function ReviewPage() {
     setFocusId(null);
     setMode("grid");
     setFilter(null);
+    setAccepting(null);
+    setChatOpen(false);
   }, [shootId]);
 
   // Pick the focus once the photos are known: the remembered one, else the
@@ -166,6 +208,24 @@ export function ReviewPage() {
     reload();
   }, [shootId, approved, notify, reload]);
 
+  const openAccept = () => {
+    if (!fullView) return;
+    const items = acceptable(fullView, photos, "all");
+    if (items.length > 0) setAccepting({ items, done: null });
+  };
+
+  const confirmAccept = async () => {
+    if (!accepting) return;
+    const { items } = accepting;
+    for (const [i, item] of items.entries()) {
+      setAccepting({ items, done: i });
+      // A failed save has already said so in a toast; do not pile more on top.
+      if (!(await setOutcome(item.photoId, item.outcome, item.blooper))) break;
+    }
+    setAccepting(null);
+    reload();
+  };
+
   // In the loupe the focus can be ahead of the picture (it waits for its
   // decode), and a rating must never land on a photo the user has not seen.
   const onScreen = (id: number) => mode !== "loupe" || loupeShown.current === id;
@@ -176,8 +236,17 @@ export function ReviewPage() {
       if (action.kind === "back" || action.kind === "help") setHelp(false);
       return;
     }
+    if (accepting) {
+      if (action.kind === "back" && accepting.done === null) setAccepting(null);
+      return;
+    }
     if (confirm !== "closed") {
       if (action.kind === "back" && confirm === "open") setConfirm("closed");
+      return;
+    }
+    // The drawer is the top layer: Esc closes it before anything under it.
+    if (action.kind === "back" && chatOpen) {
+      setChatOpen(false);
       return;
     }
     const frames = mode === "compare" ? burstOf(view, focusId) : view.order;
@@ -189,12 +258,37 @@ export function ReviewPage() {
         if (mode !== "compare") setFocusId(stepMoment(view, focusId, action.delta));
         break;
       case "outcome":
-        if (focusId !== null && !repeat && onScreen(focusId)) setOutcome(focusId, action.outcome);
+        if (focusId !== null && !repeat && onScreen(focusId)) {
+          void setOutcome(focusId, action.outcome);
+          // The cheap swap: picking one of a your-call pair as album sends the
+          // other to archive, unless the user has already decided it.
+          if (action.outcome === "album") {
+            const pair = view.moments
+              .flatMap((m) => m.pairs)
+              .find((p) => p.a === focusId || p.b === focusId);
+            const other = pair && (pair.a === focusId ? pair.b : pair.a);
+            if (other !== undefined && photos[String(other)]?.outcome === "unreviewed") {
+              void setOutcome(other, "archive");
+            }
+          }
+        }
         break;
+      case "accept": {
+        if (repeat || focusId === null || !onScreen(focusId)) break;
+        const moment = momentOf(view, focusId);
+        const items =
+          action.scope === "one"
+            ? acceptable(view, photos, { photoId: focusId })
+            : moment
+              ? acceptable(view, photos, { momentIdx: moment.idx })
+              : [];
+        for (const item of items) void setOutcome(item.photoId, item.outcome, item.blooper);
+        break;
+      }
       case "blooper": {
         const photo = focusId === null ? undefined : photos[String(focusId)];
         if (photo && !repeat && onScreen(photo.id)) {
-          setOutcome(photo.id, photo.outcome, !photo.blooper);
+          void setOutcome(photo.id, photo.outcome, !photo.blooper);
         }
         break;
       }
@@ -206,6 +300,9 @@ export function ReviewPage() {
         break;
       case "filter":
         if (!repeat) setFilter((f) => (f === action.outcome ? null : action.outcome));
+        break;
+      case "helper":
+        if (!repeat) setChatOpen((o) => !o);
         break;
       case "help":
         if (!repeat) setHelp(true);
@@ -251,7 +348,7 @@ export function ReviewPage() {
 
   const focused = focusId === null ? undefined : photos[String(focusId)];
   return (
-    <div className="review">
+    <div className={chatOpen ? "review with-helper" : "review"}>
       <Summary
         shoot={review.shoot}
         counts={counts}
@@ -259,8 +356,16 @@ export function ReviewPage() {
         cameras={cameras}
         filter={filter}
         progress={progress}
+        helper={{ ...review.helper, suggested }}
+        unavailableReason={unavailableReason}
+        openSuggestions={openSuggestions}
+        onRetry={retryHelper}
+        onStop={stopHelper}
+        onAcceptAll={openAccept}
         onFilter={(o) => setFilter((f) => (f === o ? null : o))}
         onHelp={() => setHelp(true)}
+        onChat={() => setChatOpen((o) => !o)}
+        chatOpen={chatOpen}
       />
       {counts.total === 0 && <p className="muted">This shoot has no photos left.</p>}
       {counts.total > 0 && view.order.length === 0 && (
@@ -272,6 +377,7 @@ export function ReviewPage() {
         focusId={focusId}
         onSelect={select}
         onOpen={open}
+        onNote={setNote}
       />
       <div className="moments">
         {view.moments.map((moment) => (
@@ -284,6 +390,7 @@ export function ReviewPage() {
             withDay={multiDay}
             onSelect={select}
             onOpen={open}
+            onNote={setNote}
           />
         ))}
       </div>
@@ -313,6 +420,7 @@ export function ReviewPage() {
       {mode === "compare" && (
         <Compare ids={burstOf(view, focusId)} photos={photos} focusId={focusId} onSelect={select} />
       )}
+      <HelperPanel shootId={shootId} open={chatOpen} onClose={() => setChatOpen(false)} />
       {help && <HelpOverlay onClose={() => setHelp(false)} />}
       {confirm !== "closed" && (
         <DeleteDialog
@@ -320,6 +428,14 @@ export function ReviewPage() {
           busy={confirm === "busy"}
           onCancel={() => setConfirm("closed")}
           onConfirm={() => void confirmTrash()}
+        />
+      )}
+      {accepting && (
+        <AcceptDialog
+          items={accepting.items}
+          done={accepting.done}
+          onCancel={() => setAccepting(null)}
+          onConfirm={() => void confirmAccept()}
         />
       )}
       <Toasts

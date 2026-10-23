@@ -127,7 +127,7 @@ pub fn resize_with(src: &Rgb, w: u32, h: u32, filter: FilterType) -> Result<Rgb,
     })
 }
 
-fn target_size(src: &Rgb, edge: u32) -> Option<(u32, u32)> {
+pub(crate) fn target_size(src: &Rgb, edge: u32) -> Option<(u32, u32)> {
     let long = src.w.max(src.h);
     if long <= edge {
         return None;
@@ -196,7 +196,7 @@ fn orient(src: Rgb, orientation: u16) -> Rgb {
     }
 }
 
-fn encode_jpeg(img: &Rgb, quality: u8) -> Result<Vec<u8>, MediaError> {
+pub(crate) fn encode_jpeg(img: &Rgb, quality: u8) -> Result<Vec<u8>, MediaError> {
     let too_big = || MediaError::Encode(format!("{}x{} exceeds JPEG limits", img.w, img.h));
     let (w, h) = (
         u16::try_from(img.w).map_err(|_| too_big())?,
