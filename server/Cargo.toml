@@ -53,7 +53,7 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 futures-util = "0.3"
 tokio-tungstenite = "0.26"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
 
 # Dev-profile codegen for JPEG decode/encode and resizing is 5-10x slower than
