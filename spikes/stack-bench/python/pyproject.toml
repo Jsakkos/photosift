@@ -1,7 +1,7 @@
 [project]
 name = "stack-bench-py"
 version = "0.0.0"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.15,<3.16"
 dependencies = [
   "fastapi",
   "uvicorn[standard]",
