@@ -74,6 +74,12 @@ export interface ImportStarted {
   job_id: string;
 }
 
+/** `POST /api/import/in-place`: the folder's shoot when it is one already, else
+ * the job indexing it (its `import_done` names the shoot). */
+export type InPlaceReply =
+  | { status: "existing"; shoot_id: number }
+  | { status: "indexing"; job_id: string; photos: number };
+
 /** `GET /api/import/{job_id}`: where a job stands, for a page that missed events. */
 export type JobStateReply =
   | { state: "running"; done: number; total: number }

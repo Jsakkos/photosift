@@ -41,7 +41,7 @@ When the design doc and the code disagree, the code wins — flag the divergence
 - `instance.rs` — single-instance handshake, log redirect when detached (GUI subsystem), browser opening
 - `api/` — axum router + handlers (`scan`, `import`, `shoots`, `photos`, `media`, `trash`, `ws`) and `guard.rs` (Host/Origin check)
 - `db/` — `schema.sql` (authoritative tables), `photos.rs` CRUD, `review.rs` review-screen queries
-- `ingest/` — `scan` (card/folder → CardScan), `events` (split into events, pure), `naming` (slug + folder path, pure), `copy` (copy + verify), `job` (import orchestration + progress)
+- `ingest/` — `scan` (card/folder → CardScan), `events` (split into events, pure), `naming` (slug + folder path, pure), `copy` (copy + verify), `job` (import orchestration + progress; `ImportMode::Copy` or `IndexInPlace`), `in_place` (open a library folder as a shoot without copying: library-root check, `Export\` excluded, photos only; shared with the eval harness)
 - `media/` — `embedded` (largest embedded JPEG), `exif`, `render` (orient → preview/thumb JPEGs), `phash`
 - `enrich/` — `faces` (YuNet with tiling), `identity` (SFace), `quality` (sharpness, exposure), `moments` (moments + bursts + signal score, pure), `job` (background worker)
 - `outcome.rs` — `Outcome` enum + XMP field mapping; `xmp.rs` merge-write sidecar; `trash.rs` approved delete
@@ -77,6 +77,7 @@ Routes in `server/src/api/mod.rs`. JSON bodies, errors are `{"error": "..."}`. M
 | `GET /api/cards`, `/api/settings` | inserted cards the watcher announced; read-only settings (library root) |
 | `POST /api/scan`, `GET /api/scan/{id}`, `POST /api/scan/{id}/events`, `POST /api/slug` | scan a card/folder, re-group into events, slugify a name |
 | `POST /api/import`, `GET /api/import/current`, `GET /api/import/{job}` | start / observe the single import job |
+| `POST /api/import/in-place` | open a folder strictly inside `library_root` (e.g. a shoot Lightroom imported) as one shoot, nothing copied: body `{folder}`; `{status:"existing", shoot_id}` when it is a shoot already (opened before or imported into), else `{status:"indexing", job_id, photos}` as an import job (409 while one runs); 400 outside the library, for the root itself, or with no photos |
 | `GET /api/shoots`, `GET /api/shoots/{id}/review`, `POST /api/shoots/{id}/trash` | shoot list, review data, approved delete (body `{photo_ids}`: only those pending deletes are trashed) |
 | `POST /api/shoots/{id}/helper/run` | start a helper run for a shoot (202 `{run_id}`; 409 while one is open; 503 when unavailable) |
 | `POST /api/shoots/{id}/helper/cancel` | stop the shoot's helper run: kills the child's process tree and fails the run "stopped by you", or drops a waiting run (204; 404 when there is none) |
@@ -99,6 +100,7 @@ Anything else under `/` serves `web/dist` with an SPA fallback to `index.html`.
 - XMP mapping (`outcome.rs`): album ★4, library ★3, archive ★2, delete ★1 + `xmp:Label="Red"`, unreviewed writes nothing. Blooper adds the hierarchical keyword `PhotoSift|Blooper`. An existing ★5 is never lowered. Only these fields are written; everything else in an existing sidecar (including Lightroom `crs:*`) is preserved.
 - **Files are never moved or renamed after ingest.** Original EXIF is never rewritten. The card is never written to.
 - Every copied file is SHA-256-verified against the source before an import reports success. Global dedupe by content hash.
+- In-place shoots (`POST /api/import/in-place`): rows point at the files where they are, the shoot's folder is the opened folder (any name), and sidecars are written beside those files like any shoot's. Only folders inside `library_root` qualify.
 - Library folders: named event `{root}\{YYYY}\{YYYY-MM-DD}_{Slug}\`, everyday `{root}\{YYYY}\{YYYY-MM}_Everyday\`. Slug is ASCII, words joined by `-`, no spaces/apostrophes ("Baby's First Meal" → `Babys-First-Meal`).
 - Delete = Recycle Bin via the `trash` crate, only after explicit batch approval. Never permanent.
 - Previews: 2560 px long edge JPEG q85; thumbnails 400 px q80; EXIF orientation applied; source is the largest embedded JPEG (RAF/NEF) or the JPEG itself.

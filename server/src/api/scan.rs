@@ -103,7 +103,7 @@ pub async fn slug(Json(body): Json<SlugBody>) -> Json<SlugReply> {
 /// (`\/h\s`, `\??\UNC\h\s`, `\\.\pipe\x`), and reading any network path makes
 /// the machine authenticate to that host, leaking an NTLM hash to whoever a
 /// hostile page named. Only `C:\...` and `\\?\C:\...` pass.
-fn is_local_drive_path(path: &Path) -> bool {
+pub(super) fn is_local_drive_path(path: &Path) -> bool {
     let mut parts = path.components();
     matches!(
         parts.next(),
