@@ -125,6 +125,7 @@ pub fn router(state: AppState, web_dist: Option<PathBuf>) -> Router {
         .route("/settings", get(settings))
         .route("/import", post(import::start))
         .route("/import/current", get(import::current))
+        .route("/import/in-place", post(import::in_place))
         .route("/import/{job_id}", get(import::job_state))
         .route("/shoots", get(shoots::list))
         .route("/shoots/{id}/review", get(shoots::review))

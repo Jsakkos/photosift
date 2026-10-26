@@ -8,6 +8,7 @@ import type {
   HelperRunStarted,
   ImportRequest,
   ImportStarted,
+  InPlaceReply,
   JobStateReply,
   Outcome,
   OutcomeResponse,
@@ -101,6 +102,10 @@ export const getSettings = () => request<ClientSettings>("GET", "/api/settings")
 
 export const startImport = (req: ImportRequest) =>
   request<ImportStarted>("POST", "/api/import", req);
+
+/** Opens a folder inside the library as a shoot without copying it; 400 outside the library. */
+export const openInPlace = (folder: string) =>
+  request<InPlaceReply>("POST", "/api/import/in-place", { folder });
 
 /** The server's record of an import job; a 404 means it was forgotten. */
 export const getJob = (jobId: string) =>

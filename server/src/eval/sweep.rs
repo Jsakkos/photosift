@@ -8,10 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use chrono::NaiveDateTime;
 
-use super::{
-    find_export_dirs, match_all_exports, normalize, photo_keys, shoot_by_folder, shoot_hash,
-    Skipped,
-};
+use super::{find_export_dirs, match_all_exports, normalize, photo_keys, shoot_hash, Skipped};
 use crate::config::Settings;
 use crate::db::{self, DbPool};
 use crate::enrich::moments::{split, MomentInput, SplitParams};
@@ -180,8 +177,7 @@ pub fn load_inputs(
 
 fn shoot_inputs(pool: &DbPool, folder: &Path) -> anyhow::Result<ShootInputs> {
     let export_dirs = find_export_dirs(folder)?;
-    let folder_str = normalize(folder).to_string_lossy().into_owned();
-    let shoot_id = shoot_by_folder(pool, &folder_str)?
+    let shoot_id = crate::ingest::in_place::shoot_for_folder(pool, &normalize(folder))?
         .context("not indexed; run `photosift-eval run` first")?;
     type Frame = (i64, Option<String>, Option<i64>);
     let rows: Vec<Frame> = pool.with(|c| {

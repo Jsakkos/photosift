@@ -2,6 +2,7 @@
 
 pub mod copy;
 pub mod events;
+pub mod in_place;
 pub mod job;
 pub mod naming;
 pub mod scan;

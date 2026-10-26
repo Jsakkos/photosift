@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 
-import { scan, listShoots } from "../api/client";
-import type { ServerEvent, ShootSummary } from "../api/types";
+import { getJob, listShoots, openInPlace, scan } from "../api/client";
+import type { JobStateReply, ServerEvent, ShootSummary } from "../api/types";
 import { useServerEvents } from "../api/ws";
 
 function plural(n: number, one: string, many: string): string {
@@ -20,25 +20,105 @@ function shootDates(shoot: ShootSummary): string {
   return end && end !== start ? `${start} to ${end}` : start;
 }
 
-/** Manual import for when no card was announced (or the watcher could not read it). */
+function messageOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Follows the job indexing an opened folder until it names the shoot. */
+function FollowIndexing({
+  jobId,
+  photos,
+  onShoot,
+  onError,
+}: {
+  jobId: string;
+  photos: number;
+  onShoot: (shootId: number) => void;
+  onError: (message: string) => void;
+}) {
+  const [done, setDone] = useState(0);
+
+  const apply = (reply: JobStateReply) => {
+    if (reply.state === "running") {
+      setDone(reply.done);
+    } else if (reply.state === "failed") {
+      onError(reply.error);
+    } else if (reply.shoot_ids[0] === undefined) {
+      onError("every photo in this folder is already in another shoot");
+    } else {
+      onShoot(reply.shoot_ids[0]);
+    }
+  };
+
+  // Also on (re)connect: the job may have finished before the socket opened.
+  const resync = () => {
+    getJob(jobId).then(apply, (e: unknown) => onError(messageOf(e)));
+  };
+
+  useServerEvents((event: ServerEvent) => {
+    if (event.type === "import_progress" && event.job_id === jobId) {
+      apply({ state: "running", done: event.done, total: event.total });
+    } else if (event.type === "import_done" && event.job_id === jobId) {
+      apply({
+        state: "done",
+        shoot_ids: event.shoot_ids,
+        copied: event.copied,
+        skipped_duplicates: event.skipped_duplicates,
+      });
+    } else if (event.type === "import_failed" && event.job_id === jobId) {
+      apply({ state: "failed", error: event.error });
+    }
+  }, resync);
+
+  return (
+    <p className="hint muted" role="status">
+      Indexing {done} of {plural(photos, "photo", "photos")}...
+    </p>
+  );
+}
+
+type FolderAction = "scan" | "open";
+
+/** Manual import for when no card was announced (or the watcher could not
+ * read it), and opening a library folder in place, e.g. a shoot Lightroom
+ * imported: culled where it is, nothing copied. */
 function ImportFromFolder() {
   const navigate = useNavigate();
   const [source, setSource] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<FolderAction | null>(null);
+  const [indexing, setIndexing] = useState<{ jobId: string; photos: number } | null>(null);
+  const [error, setError] = useState<{ action: FolderAction; message: string } | null>(null);
+
+  const path = source.trim();
+  const disabled = busy !== null || path === "";
+
+  const fail = (action: FolderAction) => (message: string) => {
+    setError({ action, message });
+    setIndexing(null);
+    setBusy(null);
+  };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const path = source.trim();
-    if (!path || busy) return;
-    setBusy(true);
+    if (disabled) return;
+    setBusy("scan");
     setError(null);
     scan(path).then(
       (result) => void navigate(`/import/${result.scan_id}`),
-      (err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err));
-        setBusy(false);
+      (err: unknown) => fail("scan")(messageOf(err)),
+    );
+  };
+
+  const openHere = () => {
+    if (disabled) return;
+    setBusy("open");
+    setError(null);
+    openInPlace(path).then(
+      (reply) => {
+        if (reply.status === "existing") void navigate(`/review/${reply.shoot_id}`);
+        else setIndexing({ jobId: reply.job_id, photos: reply.photos });
       },
+      (err: unknown) => fail("open")(messageOf(err)),
     );
   };
 
@@ -50,14 +130,29 @@ function ImportFromFolder() {
         placeholder="Folder or card path, e.g. F:\ or D:\Pictures\Trip"
         value={source}
         onChange={(e) => setSource(e.target.value)}
-        disabled={busy}
+        disabled={busy !== null}
       />
-      <button type="submit" disabled={busy || source.trim() === ""}>
-        {busy ? "Scanning..." : "Import from folder…"}
+      <button type="submit" disabled={disabled}>
+        {busy === "scan" ? "Scanning..." : "Import from folder…"}
       </button>
+      <button type="button" disabled={disabled} onClick={openHere}>
+        {busy === "open" ? "Opening..." : "Open in place"}
+      </button>
+      <p className="hint muted">
+        Open in place culls a folder already in your library, such as a shoot Lightroom
+        imported, without copying it.
+      </p>
+      {indexing && (
+        <FollowIndexing
+          jobId={indexing.jobId}
+          photos={indexing.photos}
+          onShoot={(id) => void navigate(`/review/${id}`)}
+          onError={fail("open")}
+        />
+      )}
       {error && (
         <p className="error hint" role="alert">
-          Could not scan: {error}
+          {error.action === "scan" ? "Could not scan" : "Could not open"}: {error.message}
         </p>
       )}
     </form>

@@ -1,20 +1,25 @@
-//! `POST /api/import`: start a background import of a previously scanned card.
+//! `POST /api/import`: start a background import of a previously scanned card;
+//! `POST /api/import/in-place`: open a library folder as a shoot, uncopied.
 
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::scan::is_local_drive_path;
 use super::{ApiError, AppState};
 use crate::events::{JobState, ServerEvent};
-use crate::ingest::job::{self, EventSpec, ImportRequest, JobCtx};
-use crate::ingest::scan::new_id;
+use crate::ingest::in_place;
+use crate::ingest::job::{self, EventSpec, ImportMode, ImportRequest, JobCtx};
+use crate::ingest::scan::{new_id, CardScan};
 
 #[derive(Deserialize)]
 pub struct ImportBody {
@@ -67,17 +72,87 @@ pub async fn start(
         camera_offsets: body.camera_offsets,
     };
     job::validate(&scan, &request).map_err(ApiError::bad_request)?;
+    let guard = claim_import(&state)?;
+    let job_id = spawn_job(&state, guard, scan, request, ImportMode::Copy)?;
+    Ok(Json(json!({ "job_id": job_id })))
+}
 
-    // One import at a time: jobs share destination folders, and each job
-    // sweeps stale .partial files there.
-    if state
+#[derive(Deserialize)]
+pub struct InPlaceBody {
+    pub folder: PathBuf,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum InPlaceReply {
+    /// The folder is a shoot already (opened before, or imported into).
+    Existing { shoot_id: i64 },
+    /// Indexing runs as an import job; its `import_done` names the shoot.
+    Indexing { job_id: String, photos: usize },
+}
+
+/// `POST /api/import/in-place`: opens a folder of the library as one shoot
+/// without copying it (e.g. a shoot Lightroom imported). Outcomes then go to
+/// sidecars beside those files, as for any shoot.
+pub async fn in_place(
+    State(state): State<AppState>,
+    Json(body): Json<InPlaceBody>,
+) -> Result<Json<InPlaceReply>, ApiError> {
+    if !is_local_drive_path(&body.folder) {
+        return Err(ApiError::bad_request(
+            "only absolute paths on a local drive letter can be opened (no network, device or relative paths)",
+        ));
+    }
+    let folder = in_place::resolve_in_library(&body.folder, &state.settings.library_root)
+        .map_err(ApiError::bad_request)?;
+    let existing = |state: &AppState| {
+        in_place::shoot_for_folder(&state.db, &folder)
+            .map_err(|e| ApiError::internal(format!("{e:#}")))
+    };
+    if let Some(shoot_id) = existing(&state)? {
+        return Ok(Json(InPlaceReply::Existing { shoot_id }));
+    }
+    let guard = claim_import(&state)?;
+    // An open of the same folder may have finished while this one waited.
+    if let Some(shoot_id) = existing(&state)? {
+        return Ok(Json(InPlaceReply::Existing { shoot_id }));
+    }
+    let (db, settings) = (state.db.clone(), state.settings.clone());
+    let scan_folder = folder.clone();
+    let (scan, request) =
+        tokio::task::spawn_blocking(move || in_place::plan(&scan_folder, &db, &settings))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::bad_request(format!("{e:#}")))?;
+    let photos = request.events.iter().map(|e| e.item_idxs.len()).sum();
+    let job_id = spawn_job(
+        &state,
+        guard,
+        Arc::new(scan),
+        request,
+        ImportMode::IndexInPlace,
+    )?;
+    Ok(Json(InPlaceReply::Indexing { job_id, photos }))
+}
+
+/// One import at a time: jobs share destination folders and the cache's
+/// scratch dir, and each job sweeps stale files there.
+fn claim_import(state: &AppState) -> Result<BusyGuard, ApiError> {
+    state
         .import_busy
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err(ApiError::conflict("an import is already running"));
-    }
-    let guard = BusyGuard(state.clone());
+        .map(|_| BusyGuard(state.clone()))
+        .map_err(|_| ApiError::conflict("an import is already running"))
+}
+
+/// Runs the job on its own thread, which releases `guard` when it ends.
+fn spawn_job(
+    state: &AppState,
+    guard: BusyGuard,
+    scan: Arc<CardScan>,
+    request: ImportRequest,
+    mode: ImportMode,
+) -> Result<String, ApiError> {
     let job_id = new_id();
     state.events.jobs().begin(&job_id);
     let ctx = JobCtx {
@@ -92,8 +167,9 @@ pub async fn start(
         .name("import".into())
         .spawn(move || {
             let _guard = guard;
+            // The outcome is reported as an event.
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                job::run(&ctx, &thread_job_id, &scan, &request)
+                job::run_with_mode(&ctx, &thread_job_id, &scan, &request, mode)
             }));
             if outcome.is_err() {
                 ctx.events.send(ServerEvent::ImportFailed {
@@ -103,5 +179,5 @@ pub async fn start(
             }
         })
         .map_err(|e| ApiError::internal(format!("starting import thread: {e}")))?;
-    Ok(Json(json!({ "job_id": job_id })))
+    Ok(job_id)
 }

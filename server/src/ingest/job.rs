@@ -1,8 +1,9 @@
 //! The import job: copies the chosen events from a scanned card into the
 //! library, verifies and dedupes every file, renders previews and records the
-//! rows. Blocking; the API runs it on its own thread. The eval harness runs
-//! the same job in `ImportMode::IndexInPlace`, which records files where they
-//! are instead of copying them.
+//! rows. Blocking; the API runs it on its own thread. Opening a library
+//! folder in place (`in_place`, also the eval harness) runs the same job in
+//! `ImportMode::IndexInPlace`, which records files where they are instead of
+//! copying them.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -106,9 +107,10 @@ pub fn validate(scan: &CardScan, req: &ImportRequest) -> Result<(), String> {
 pub enum ImportMode {
     /// Copy into the library folder of each event (the app's import).
     Copy,
-    /// The eval harness only: rows point at the source files, the shoot's
-    /// folder is the scanned folder, previews go to the cache. Nothing is
-    /// copied and no folder is created; the source is only read.
+    /// A folder already in the library (`in_place`): rows point at the
+    /// source files, the shoot's folder is the scanned folder, previews go to
+    /// the cache. Nothing is copied and no folder is created; the import only
+    /// reads the source (sidecars are written later, by outcomes).
     IndexInPlace,
 }
 
@@ -131,16 +133,10 @@ struct Summary {
     attached_shoot_ids: Vec<i64>,
 }
 
-/// Runs the job to completion and reports the outcome as an event. Shoots that
-/// were committed before a failure are still handed to enrichment: their
+/// Runs the job to completion and reports the outcome as an event; also
+/// returns it (the new shoots' ids, or the error the event carried). Shoots
+/// that were committed before a failure are still handed to enrichment: their
 /// photos are real and resumable.
-pub fn run(ctx: &JobCtx, job_id: &str, scan: &CardScan, req: &ImportRequest) {
-    // The outcome is reported as an event.
-    let _ = run_with_mode(ctx, job_id, scan, req, ImportMode::Copy);
-}
-
-/// `run` in either mode; also returns the outcome (the new shoots' ids, or
-/// the error the event carried).
 pub fn run_with_mode(
     ctx: &JobCtx,
     job_id: &str,

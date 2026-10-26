@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context};
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -26,20 +25,15 @@ use crate::api::AppState;
 use crate::config::{self, Settings};
 use crate::db::helper::{self as helper_db, RunKind, RunRow, RunStatus};
 use crate::db::{photos, review, DbPool};
-use crate::ingest::events::EventKind;
-use crate::ingest::job::{self, EventSpec, ImportMode, ImportRequest, JobCtx};
-use crate::ingest::scan::{self, ItemKind, ScanOptions};
+use crate::ingest::in_place;
+use crate::ingest::job::{self, ImportMode, JobCtx};
 use crate::outcome::Outcome;
 use crate::{plog, Overrides};
 use exports::PhotoKey;
 use score::Score;
 
 /// Never indexed as originals: it holds the user's edits, i.e. the answers.
-pub const EXCLUDE_DIRS: &[&str] = &["Export"];
-
-const SCAN_OPTIONS: ScanOptions = ScanOptions {
-    exclude_dirs: EXCLUDE_DIRS,
-};
+pub use crate::ingest::in_place::EXCLUDE_DIRS;
 
 /// Generous: a few hundred RAWs enrich in minutes even on CPU.
 const ENRICH_TIMEOUT: Duration = Duration::from_secs(2 * 3600);
@@ -178,53 +172,25 @@ pub fn eval_state(root: &Path, port: u16, overrides: Overrides) -> anyhow::Resul
     )
 }
 
-fn shoot_by_folder(db: &DbPool, folder: &str) -> anyhow::Result<Option<i64>> {
-    db.with(|c| {
-        c.query_row("SELECT id FROM shoots WHERE folder = ?1", [folder], |r| {
-            r.get(0)
-        })
-        .optional()
-    })
-}
-
 /// Indexes the photos under `folder` (not `Export\`, not videos) in place as
 /// one shoot whose folder is `folder`, and returns its id. A folder indexed
 /// by an earlier invocation is reused as is. Blocking.
 pub fn index_in_place(state: &AppState, folder: &Path) -> anyhow::Result<i64> {
     let folder = normalize(folder);
-    let folder_str = folder.to_string_lossy().into_owned();
     let hash = shoot_hash(&folder);
-    if let Some(id) = shoot_by_folder(&state.db, &folder_str)? {
+    if let Some(id) = in_place::shoot_for_folder(&state.db, &folder)? {
         plog!("eval", "shoot {hash}: already indexed as shoot {id}");
         return Ok(id);
     }
-    let scan = scan::scan_with_options(&folder, &state.db, &state.settings, &SCAN_OPTIONS)?;
+    let (scan, req) = in_place::plan(&folder, &state.db, &state.settings)?;
     for w in &scan.warnings {
         plog!("eval", "shoot {hash}: {w}");
     }
-    let item_idxs: Vec<usize> = scan
-        .items
-        .iter()
-        .filter(|it| it.kind == ItemKind::Photo)
-        .map(|it| it.idx)
-        .collect();
-    if item_idxs.is_empty() {
-        bail!("no photos found");
-    }
-    plog!("eval", "shoot {hash}: indexing {} photos", item_idxs.len());
-    let name = folder
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "eval".into());
-    let req = ImportRequest {
-        events: vec![EventSpec {
-            item_idxs,
-            kind: EventKind::Named,
-            name,
-        }],
-        camera_offsets: HashMap::new(),
-    };
-    job::validate(&scan, &req).map_err(|e| anyhow!(e))?;
+    plog!(
+        "eval",
+        "shoot {hash}: indexing {} photos",
+        req.events[0].item_idxs.len()
+    );
     let ctx = JobCtx {
         db: state.db.clone(),
         events: state.events.clone(),
@@ -234,7 +200,7 @@ pub fn index_in_place(state: &AppState, folder: &Path) -> anyhow::Result<i64> {
     };
     job::run_with_mode(&ctx, &scan.scan_id, &scan, &req, ImportMode::IndexInPlace)
         .map_err(|e| anyhow!("indexing failed: {e}"))?;
-    shoot_by_folder(&state.db, &folder_str)?
+    in_place::shoot_for_folder(&state.db, &folder)?
         .context("indexing recorded no shoot (was every photo a duplicate of another shoot?)")
 }
 
