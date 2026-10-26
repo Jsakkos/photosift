@@ -211,7 +211,8 @@ The user's existing library is an answer key: 34 past shoots have an `Export\` f
 - Every change to prompts, signals, or ranking is re-scored before it ships. Results are tracked over time.
 - The harness never writes into the library (no XMP, no exports); it reads originals and writes to its own scratch space.
 - Target numbers are left to the builder to propose after a first baseline; the bar is "good enough that the user trusts the draft".
-- Status: the baseline (signals only, 3 shoots) has been measured; the helper's quality bar is pending the user.
+- **Bar (agreed 2026-10-22):** with no taste notes or past decisions (a cold start), the helper's album + library picks catch at least 75% of the user's exports, counting an adjacent frame of the same burst, while keeping at most 2.5 times as many photos as the user exported. Model: sonnet, with the Plan 2 prompt.
+- Measured on 8 past shoots (about 690 photos, 122 exports), three runs each: the original prompt caught 78-80% (mean 79%) and kept 2.3-2.6x; signals only caught 33%. Opus was no better and cost about 1.8x. A tighter prompt variant kept 2.3x but caught only 72%, so the original stays. Over-keeping is left to the learning loop (taste profile and recorded overrides), which a cold-start eval cannot measure.
 
 ---
 
