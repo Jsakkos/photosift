@@ -1,7 +1,10 @@
 import type { ShootSummary } from "../../src/api/types";
-import type { CardFile, TestServer } from "./fixtures";
+import { test, type CardFile, type TestServer } from "./fixtures";
 
 const CAMERA = "TestCam One";
+// A 400-photo shoot at 1200 px takes ~3 min to import and enrich on a CI runner.
+const SETUP_MIN_MS = 120_000;
+const SETUP_MS_PER_PHOTO = 1_500;
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -57,15 +60,27 @@ export const FORTY = burstCard([
   [4, 1, 1, 2, 1, 3],
 ]);
 
+/**
+ * Imports and enriches a shoot on its own time budget. On a shared CI runner the import
+ * can take most of a 30 s test timeout while another worker enriches the 400-photo shoot,
+ * so the caller's timeout is extended for the setup and the test keeps its full budget
+ * after it.
+ */
 export async function importShoot(server: TestServer, files: CardFile[]): Promise<number> {
+  const info = test.info();
+  const testBudget = info.timeout;
+  const setupBudget = Math.max(SETUP_MIN_MS, files.length * SETUP_MS_PER_PHOTO);
+  const started = Date.now();
+  info.setTimeout(testBudget + setupBudget);
   const card = await server.makeCard(files);
   await server.importCard(card);
   let shoot: ShootSummary | undefined;
-  for (let i = 0; i < 600 && !shoot?.enriched; i += 1) {
+  while (!shoot?.enriched && Date.now() - started < setupBudget) {
     await new Promise((r) => setTimeout(r, 250));
     const list = (await (await fetch(`${server.baseUrl}/api/shoots`)).json()) as ShootSummary[];
     shoot = list.find((s) => s.counts.total === files.length);
   }
   if (!shoot?.enriched) throw new Error("the shoot never finished importing and enriching");
+  info.setTimeout(testBudget + (Date.now() - started));
   return shoot.id;
 }
