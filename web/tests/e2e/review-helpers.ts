@@ -2,7 +2,9 @@ import type { ShootSummary } from "../../src/api/types";
 import { test, type CardFile, type TestServer } from "./fixtures";
 
 const CAMERA = "TestCam One";
-const SETUP_BUDGET_MS = 180_000;
+// A 400-photo shoot at 1200 px takes ~3 min to import and enrich on a CI runner.
+const SETUP_MIN_MS = 120_000;
+const SETUP_MS_PER_PHOTO = 1_500;
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -67,12 +69,13 @@ export const FORTY = burstCard([
 export async function importShoot(server: TestServer, files: CardFile[]): Promise<number> {
   const info = test.info();
   const testBudget = info.timeout;
+  const setupBudget = Math.max(SETUP_MIN_MS, files.length * SETUP_MS_PER_PHOTO);
   const started = Date.now();
-  info.setTimeout(testBudget + SETUP_BUDGET_MS);
+  info.setTimeout(testBudget + setupBudget);
   const card = await server.makeCard(files);
   await server.importCard(card);
   let shoot: ShootSummary | undefined;
-  while (!shoot?.enriched && Date.now() - started < SETUP_BUDGET_MS) {
+  while (!shoot?.enriched && Date.now() - started < setupBudget) {
     await new Promise((r) => setTimeout(r, 250));
     const list = (await (await fetch(`${server.baseUrl}/api/shoots`)).json()) as ShootSummary[];
     shoot = list.find((s) => s.counts.total === files.length);
